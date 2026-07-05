@@ -24,8 +24,8 @@ def _make_run(tmp_path, *, human_decisions: bool = True, with_gold: bool = True)
         "counts": {"identified": 10, "included": 2},
         "models_used": ["fake:fake-model"],
         "llm_calls": [
-            {"provider": "fake", "model": "fake-model", "prompt_hash": "abc123"},
-            {"provider": "fake", "model": "fake-model", "prompt_hash": "def456"},
+            {"provider": "fake", "model": "fake-model", "prompt_sha256": "abc123"},
+            {"provider": "fake", "model": "fake-model", "prompt_sha256": "def456"},
         ],
     }
     (run / "manifest.yml").write_text(

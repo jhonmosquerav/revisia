@@ -135,7 +135,7 @@ def run_audit(run_dir: str | Path) -> AuditReport:
     # ── 2 · Prompts hash-eados por llamada (trAIce M6) ──────────────────────
     if manifest is not None:
         calls = manifest.get("llm_calls") or []
-        hashed = [c for c in calls if c.get("prompt_hash")]
+        hashed = [c for c in calls if c.get("prompt_sha256")]
         if calls and len(hashed) == len(calls):
             add(
                 AuditCheck(
