@@ -78,6 +78,53 @@ def render_prisma_2020_checklist() -> str:
     return "\n".join(lines)
 
 
+# (número, título corto) · checklist PRISMA 2020 para resúmenes (12 ítems,
+# tabla 2 de la declaración; hereda PRISMA-A 2013 con redacción armonizada).
+_PRISMA_ABSTRACTS_ITEMS: list[tuple[int, str]] = [
+    (1, "Título: identificar como revisión sistemática"),
+    (2, "Objetivos: pregunta(s) que aborda la revisión"),
+    (3, "Criterios de elegibilidad"),
+    (4, "Fuentes de información y fecha de la última búsqueda"),
+    (5, "Riesgo de sesgo: métodos de evaluación"),
+    (6, "Síntesis de resultados: métodos de presentación/síntesis"),
+    (7, "Estudios incluidos: número de estudios y participantes"),
+    (8, "Síntesis de resultados: resultados principales (efecto y precisión)"),
+    (9, "Limitaciones de la evidencia"),
+    (10, "Interpretación: implicaciones principales"),
+    (11, "Financiación de la revisión"),
+    (12, "Registro: nombre del registro y número"),
+]
+
+
+def render_prisma_abstracts_checklist(
+    *,
+    counts=None,
+    databases: list[str] | None = None,
+    search_window: dict[str, str] | None = None,
+    registration: dict[str, str] | None = None,
+) -> str:
+    """Renderiza el checklist PRISMA 2020 para resúmenes (12 ítems).
+
+    Como el checklist principal, se emite de andamiaje: pre-rellena la
+    evidencia que el pipeline conoce (fuentes, ventana, conteos, registro) y
+    deja el juicio editorial al humano.
+    """
+    auto: dict[int, str] = {}
+    if databases:
+        executed = (search_window or {}).get("executed") or "(sin fecha ejecutada)"
+        auto[4] = f"Bases: {', '.join(databases)} · última búsqueda: {executed}."
+    if counts is not None:
+        auto[7] = f"{counts.included} estudios incluidos (ver prisma_flow.md)."
+    if registration and any(registration.values()):
+        auto[12] = ", ".join(f"{k}={v}" for k, v in registration.items() if v) + "."
+    lines = ["# Checklist PRISMA 2020 · resúmenes (12 ítems)", ""]
+    for number, title in _PRISMA_ABSTRACTS_ITEMS:
+        evidence = auto.get(number)
+        suffix = f" — _auto: {evidence}_" if evidence else " — _(completar)_"
+        lines.append(f"- [ ] {number}. {title}{suffix}")
+    return "\n".join(lines)
+
+
 def render_traice_checklist(
     run_metas: Iterable[RunMeta],
     autonomy: dict[str, str],

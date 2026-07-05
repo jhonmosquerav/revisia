@@ -154,6 +154,29 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0 if result.status in {"completed", "paused"} else 1
 
 
+def _cmd_audit(args: argparse.Namespace) -> int:
+    """Audita una corrida terminada contra PRISMA 2020 / PRISMA-S / trAIce."""
+    from prisma_loop.audit import render_audit_md, run_audit
+
+    run_dir = Path(args.run_dir)
+    if not run_dir.exists():
+        print(f"error: la carpeta {args.run_dir!r} no existe.", file=sys.stderr)
+        return 2
+    report = run_audit(run_dir)
+    markdown = render_audit_md(report)
+    out = run_dir / "audit.md"
+    out.write_text(markdown, encoding="utf-8")
+    for check in report.checks:
+        icon = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌"}.get(check.status, "•")
+        print(f"{icon} {check.status:<4} {check.check_id:<13} [{check.item_ref}] {check.detail}")
+    verdict = "APTA para preparar publicación" if report.publishable else "NO publicable tal cual"
+    print(
+        f"\n{'✅' if report.publishable else '❌'} {verdict} · "
+        f"FAIL={report.n_fail} WARN={report.n_warn} · informe: {out}"
+    )
+    return 0 if report.publishable else 1
+
+
 def _cmd_brain(args: argparse.Namespace) -> int:
     """Inspecciona un cerebro de investigador (memoria markdown, solo lectura)."""
     from prisma_loop.memory import ResearchBrain
@@ -225,6 +248,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--out", default=None, help="Ruta de salida (default: <run_dir>/gold_template.yml)."
     )
 
+    p_audit = sub.add_parser(
+        "audit",
+        help="Audita una corrida terminada contra PRISMA 2020 / PRISMA-S / PRISMA-trAIce.",
+    )
+    p_audit.add_argument("run_dir", help="Carpeta de la corrida (runs/<slug>-<fecha>).")
+
     p_brain = sub.add_parser(
         "brain",
         help="Inspecciona un cerebro de investigador (memoria markdown acumulada con --brain).",
@@ -242,6 +271,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "gold-template":
         return _cmd_gold_template(args)
+    if args.command == "audit":
+        return _cmd_audit(args)
     if args.command == "brain":
         return _cmd_brain(args)
     protocol_dir = args.protocol_dir

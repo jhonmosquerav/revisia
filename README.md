@@ -2,7 +2,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-84%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-118%20passing-brightgreen.svg)](tests/)
 [![PRISMA 2020](https://img.shields.io/badge/PRISMA-2020%20%2B%20S%20%2B%20trAIce-8A2BE2.svg)](#fundamento-metodológico)
 
 **Sistema multiagéntico, provider-agnostic y reproducible para generar
@@ -45,10 +45,21 @@ protocolo →[✋]→ búsqueda multi-base → dedup → screening T/A (ensemble
 - `tabla_extraccion.md` · características de los estudios incluidos
 - `risk_of_bias.md` · tabla de riesgo de sesgo
 - `referencias.bib` · bibliografía BibTeX
-- `checklist_2020.md` + `checklist_traice.md` · checklists (27 ítems + uso de IA)
+- `checklist_2020.md` + `checklist_abstracts.md` + `checklist_traice.md` ·
+  checklists (27 ítems + 12 de resúmenes + uso de IA)
+- `interop/` · exports para herramientas del ecosistema: `robvis.csv`,
+  `effects_metafor.csv`, `prisma2020_flow.csv` (ver [`docs/integraciones.md`](docs/integraciones.md))
 
 …todo con un **manifiesto reproducible** (modelo, versión, seed, prompts
 hash-eados, exclusiones humano/IA, acuerdo de extracción, decisiones con timestamp).
+
+Y al terminar, **audita la corrida** antes de usarla:
+
+```bash
+uv run prisma-loop audit runs/mi-revision-<fecha>
+# ✅/⚠️/❌ por verificación (manifest, prompts, HITL, gold, grounding, registro…)
+# → escribe runs/.../audit.md con el veredicto de publicabilidad
+```
 
 ## Principios de diseño
 
@@ -83,17 +94,30 @@ uv run prisma-loop run protocols/mi-revision
 
 ## Estado
 
-**Completo (H0–H5) · cobertura metodológica completa.** Pipeline PRISMA
-end-to-end con HITL en todas las etapas; capa LLM provider-agnostic (Gemini /
+**Completo · cobertura metodológica end-to-end.** Pipeline PRISMA
+con HITL en todas las etapas; capa LLM provider-agnostic (Gemini /
 OpenAI / Anthropic / local / **Claude Code** / `agent` / `fake`); **búsqueda multi-base**
 (OpenAlex / Crossref / Semantic Scholar / **Europe PMC (MEDLINE/PubMed)** + import
 RIS/BibTeX para Scopus/WoS);
 **meta-análisis cuantitativo** (efectos fijos/aleatorios, I²/τ², Egger,
 forest/funnel); doble extracción con kappa; exclusiones humano/IA y generación
-de `metodologia.md`. Métricas defendibles + verificador anti-alucinación.
-**84 tests verdes** offline (sin API key ni CLI: el provider Claude Code se
+de `metodologia.md`; **auditoría post-corrida** (`prisma-loop audit`);
+**memoria de investigador** con living review (`--brain`); checklists 2020 +
+resúmenes + trAIce; exports interoperables (robvis / metafor / PRISMA2020).
+Métricas defendibles + verificador anti-alucinación.
+**118 tests verdes** offline (sin API key ni CLI: el provider Claude Code se
 testea con `subprocess` mockeado). Licencia Apache-2.0, `CITATION.cff` y
 `.zenodo.json` listos para depósito en Zenodo.
+
+## Equipo de agentes, autonomías y auditorías
+
+Cada etapa la ejecuta un **agente mono-tarea** con nivel de autonomía explícito
+(A0–A3, configurable por etapa en `protocol.yml`) y verificación posterior:
+screening/extracción/RoB **nunca superan A1** (la IA propone, el humano decide).
+La defensa en profundidad tiene cinco capas: verificador por etapa → checkpoints
+HITL → gold standard con κ → **auditor post-corrida** → manifiesto reproducible.
+El equipo completo, con tipos, autonomías y verificaciones, está declarado en
+[`AGENTS.md`](AGENTS.md).
 
 ## Usar Claude Code (driver headless)
 
@@ -230,22 +254,33 @@ prisma_loop/          # EL MOTOR (paquete instalable · provider-agnostic)
   rag/                # grounding / verificación anti-alucinación
   agents/             # un agente mono-tarea por etapa PRISMA
   schemas/            # structured output (Pydantic) por etapa
-  exports/            # diagrama PRISMA, checklists 2020/trAIce, bibliografía
+  exports/            # diagrama PRISMA, checklists 2020/abstracts/trAIce, interop OSS
   provenance/         # RunMeta + ledger append-only de decisiones
   orchestration/      # flujo Prefect + checkpoints HITL
+  memory/             # cerebro de investigador (markdown + JSONL, living review)
+  audit.py            # auditor post-corrida (PRISMA 2020 / -S / trAIce)
   prompts/            # prompts versionados y hash-eados
 protocols/_TEMPLATE/  # LA CONFIG (una carpeta por revisión · default: gemini)
+  protocolo-prisma-p.md  #   plantilla de preregistro (17 ítems PRISMA-P)
 runs/                 # OUTPUTS reproducibles (una carpeta por ejecución)
+docs/                 # metodología (KB de fuentes primarias), integraciones, memoria
 examples/             # tracer bullet: revisión mini end-to-end (offline · fake)
 tests/                # golden tests por etapa
+AGENTS.md             # el equipo: agentes, autonomías A0-A3, auditorías
 ```
 
 ## Fundamento metodológico
 
 `prisma-loop` automatiza un flujo de revisión sistemática canónico:
-PICO/PEO/SPIDER · búsqueda PRISMA-S · screening doble · extracción ·
-RoB2/ROBINS-I/GRADE · síntesis SWiM · checklist 27 ítems · PRISMA-trAIce.
-Cada etapa del pipeline espeja un paso de ese método.
+PICO/PEO/SPIDER · protocolo PRISMA-P · búsqueda PRISMA-S · screening doble ·
+extracción · RoB2/ROBINS-I/GRADE · síntesis SWiM · checklist 27 ítems +
+resúmenes · PRISMA-trAIce. Cada etapa del pipeline espeja un paso de ese método.
+
+La **base de conocimiento** con las fuentes primarias (declaración PRISMA 2020,
+checklists oficiales, las 4 plantillas del flow diagram, el catálogo de 20
+extensiones y la extensión PRISMA-trAIce para reporte de IA) vive en
+[`docs/metodologia/`](docs/metodologia/), extraída con licencias y atribución
+declaradas — el sistema trabaja contra la norma, no contra recuerdos de la norma.
 
 ## Cómo citar
 

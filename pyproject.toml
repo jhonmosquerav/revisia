@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "prisma-loop"
-version = "0.1.0"
+version = "0.2.0"
 description = "Sistema multiagéntico provider-agnostic para generar borradores de revisiones sistemáticas reproducibles bajo PRISMA 2020 + PRISMA-S + PRISMA-trAIce."
 readme = "README.md"
 requires-python = ">=3.13"

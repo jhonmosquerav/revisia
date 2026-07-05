@@ -35,8 +35,12 @@ from prisma_loop.exports import (
     render_forest_markdown,
     render_forest_png,
     render_funnel_png,
+    render_metafor_csv,
     render_methods,
+    render_prisma2020_flow_csv,
     render_prisma_2020_checklist,
+    render_prisma_abstracts_checklist,
+    render_robvis_csv,
     render_traice_checklist,
 )
 from prisma_loop.extraction_agreement import (
@@ -468,6 +472,15 @@ def run_pipeline(
         render_forest_png(meta_result, assets / "forest.png")
         render_funnel_png(meta_result, assets / "funnel.png")
     (deliverable / "checklist_2020.md").write_text(render_prisma_2020_checklist(), encoding="utf-8")
+    (deliverable / "checklist_abstracts.md").write_text(
+        render_prisma_abstracts_checklist(
+            counts=counts,
+            databases=list(protocol.databases),
+            search_window=protocol.search_window,
+            registration=protocol.registration,
+        ),
+        encoding="utf-8",
+    )
     (deliverable / "checklist_traice.md").write_text(
         render_traice_checklist(
             run_ctx.metas,
@@ -478,6 +491,19 @@ def run_pipeline(
         ),
         encoding="utf-8",
     )
+
+    # ── Interop con herramientas OSS del ecosistema (docs/integraciones.md) ─
+    interop_dir = deliverable / "interop"
+    interop_dir.mkdir(parents=True, exist_ok=True)
+    if assessments:
+        (interop_dir / "robvis.csv").write_text(render_robvis_csv(assessments), encoding="utf-8")
+    (interop_dir / "prisma2020_flow.csv").write_text(
+        render_prisma2020_flow_csv(counts), encoding="utf-8"
+    )
+    if meta_result is not None:
+        (interop_dir / "effects_metafor.csv").write_text(
+            render_metafor_csv(meta_result), encoding="utf-8"
+        )
 
     # ── 11. Checkpoint final del reporte (A1) ───────────────────────────
     final_gate = review_gate(

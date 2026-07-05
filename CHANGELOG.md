@@ -4,7 +4,64 @@ Todos los cambios notables de `prisma-loop` se documentan aquí.
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/)
 y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
-## [Unreleased]
+## [0.2.0] · 2026-07-05
+
+Primera versión como **repositorio independiente** (hasta ahora el desarrollo
+vivía en el mono-repo privado del autor; el historial anterior se resume en
+[0.1.0]).
+
+### Added
+
+- **Auditor post-corrida** — nuevo módulo `prisma_loop/audit.py` y comando
+  `prisma-loop audit <run_dir>`: verifica con evidencia en disco los ítems
+  automatizables de PRISMA 2020, PRISMA-S y PRISMA-trAIce (manifiesto y modelos,
+  prompts hash-eados, supervisión humana en etapas de juicio, entregables
+  completos, exclusiones humano/IA separadas, gold/κ, grounding, ventana de
+  búsqueda, registro). Emite `audit.md` con PASS/WARN/FAIL y veredicto de
+  publicabilidad; exit code 1 si hay FAIL.
+- **Memoria con recall y living review** — `ResearchBrain.recall(slug)` y
+  `summary()`: la memoria ahora se **lee**, no solo se escribe. Si un slug ya
+  tiene corridas, la nueva se registra como actualización con delta de
+  incluidos (`included_new`/`included_dropped`) en evento y episodio. Nuevo
+  subcomando `prisma-loop brain <dir> [slug]`; aviso de memoria previa al
+  arrancar `run --brain`; frontmatter YAML en las páginas wiki (patrón
+  [cerebro](https://github.com/jhonmosquerav/cerebro), declarado en `NOTICE` y
+  `docs/memoria-cerebro.md`). Regla anti-sesgo documentada: la memoria nunca
+  alimenta el juicio de screening/extracción/RoB.
+- **Checklist PRISMA 2020 de resúmenes** (12 ítems) —
+  `render_prisma_abstracts_checklist()` emite `deliverable/checklist_abstracts.md`
+  pre-rellenando fuentes/ventana, conteo de incluidos y registro.
+- **Exports de interoperabilidad OSS** — nuevo `prisma_loop/exports/interop.py`
+  y carpeta `deliverable/interop/`: `robvis.csv` (figuras de riesgo de sesgo),
+  `effects_metafor.csv` (replicar el meta-análisis en R con `metafor::rma`),
+  `prisma2020_flow.csv` (conteos para la plantilla oficial del flow diagram).
+  Ecosistema declarado en `docs/integraciones.md` (integradas / interoperables /
+  complementarias, con licencias).
+- **Plantilla de preregistro PRISMA-P** —
+  `protocols/_TEMPLATE/protocolo-prisma-p.md` con los 17 ítems (PRISMA-P 2015)
+  mapeados a los archivos ejecutables del protocolo, incluida la declaración
+  anticipada de uso de IA.
+- **`AGENTS.md`** — el equipo declarado: un agente mono-tarea por etapa, tipos
+  (determinista/LLM/humano), autonomías A0–A3 por defecto y las cinco capas de
+  auditoría del sistema.
+- **Base de conocimiento metodológica** (`docs/metodologia/`) — fuentes
+  primarias extraídas a markdown con licencias y atribución: declaración PRISMA
+  2020 (BMJ n71 + traducción oficial, parafraseada por CC BY-NC-ND), checklists
+  y las 4 plantillas del flow diagram del sitio oficial (CC BY 4.0), catálogo de
+  20 extensiones publicadas + 11 en desarrollo, y la extensión **PRISMA-trAIce**
+  (17 ítems, extracción doble-independiente convergente) que fundamenta el
+  `checklist_traice.md` del sistema.
+
+### Changed
+
+- `README.md`: quickstart con URL real del repo, secciones nuevas (equipo de
+  agentes, auditoría, KB metodológica), salida ampliada.
+- `RELEASING.md` reescrito: este repositorio es la fuente canónica (ya no un
+  espejo); flujo de release + DOI Zenodo.
+- `.env.example`: eliminadas variables muertas de embeddings; `.gitignore`
+  ignora `cerebro/` (la memoria del investigador es personal, no del repo).
+
+## [0.1.0] · 2026-07-05 (histórico consolidado)
 
 ### Added
 
