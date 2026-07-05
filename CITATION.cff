@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+message: "Si usas prisma-loop en tu investigación, cítalo así."
+title: "prisma-loop: sistema multiagéntico reproducible para revisiones sistemáticas PRISMA"
+abstract: >-
+  Sistema multiagéntico provider-agnostic que genera borradores de
+  revisiones sistemáticas reproducibles bajo PRISMA 2020, PRISMA-S y
+  PRISMA-trAIce, con verificación anti-alucinación y revisión humana
+  obligatoria en cada etapa.
+type: software
+authors:
+  - given-names: Jhon Alexander
+    family-names: Mosquera Vanegas
+keywords:
+  - systematic review
+  - meta-analysis
+  - PRISMA
+  - large language models
+  - multi-agent
+  - open science
+  - reproducibility
+license: Apache-2.0
+version: "0.1.0"
+date-released: "2026-06-26"
+repository-code: "https://github.com/jhonmosquerav/prisma-loop"
+url: "https://github.com/jhonmosquerav/prisma-loop"
+# Tras el primer release con depósito en Zenodo, descomenta y rellena el DOI:
+# identifiers:
+#   - type: doi
+#     value: "10.5281/zenodo.XXXXXXX"
+#     description: "DOI concept (todas las versiones)"

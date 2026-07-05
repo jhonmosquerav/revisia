@@ -1,0 +1,13 @@
+fields:
+  - key: cita_completa
+    descripcion: "Referencia del estudio."
+    tipo: texto
+  - key: diseno
+    descripcion: "Tipo de estudio (benchmark, validación, etc.)."
+    tipo: texto
+  - key: metrica_recall
+    descripcion: "Recall / sensibilidad del cribado reportado."
+    tipo: texto
+  - key: reduccion_carga
+    descripcion: "Reducción de carga de trabajo (WSS u otra)."
+    tipo: texto

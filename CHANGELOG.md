@@ -1,0 +1,133 @@
+# Changelog
+
+Todos los cambios notables de `prisma-loop` se documentan aquí.
+El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/)
+y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
+
+## [Unreleased]
+
+### Added
+
+- **Backend Europe PMC** (`prisma_loop/agents/search_backends.py`) — base abierta sin
+  API key que espeja **MEDLINE/PubMed + PubMed Central + preprints**. Registrada con
+  alias `europepmc`/`pubmed`/`medline`. Sube la cobertura por defecto a **4 bases
+  libres** (OpenAlex + Crossref + Semantic Scholar + Europe PMC) sin tocar la
+  suscripción de ninguna universidad. Scopus/WoS siguen por import RIS/BibTeX.
+- **Plantilla `_TEMPLATE` endurecida** — defaults de buenas prácticas para que toda
+  RS nazca robusta: 4 bases, `search_window` (PRISMA-S), campo `grounding`
+  documentado, cadenas de búsqueda de ejemplo EN/ES/PT y un `gold.yml` plantilla.
+- **Guardrails en `validate`** — advertencias accionables cuando una corrida
+  arrancaría débil: <3 bases, `screening_ta` sin ensemble, sin `gold.yml`, o
+  `grounding=embedder` (recordando que no cruza idiomas). Default de `--max` subido
+  de 25 a 50 por base.
+- **Comando `prisma-loop gold-template <run_dir>`** — genera un `gold.yml` con los
+  ids cribados (comentados) para etiquetado humano; al rellenarlo se activan
+  kappa/recall/lost-evidence. Acerca el doble cribado/gold a un paso.
+- **Grounding por agente (sin vectores)** — modo `grounding: agent` en `protocol.yml`:
+  el verificador anti-alucinación le pide a un proveedor LLM que **juzgue** si la
+  fuente respalda cada afirmación citada (con cita textual de soporte), en vez de
+  medir similitud por embeddings. Cruza idiomas (síntesis en español vs. fuentes en
+  inglés) y es de **costo cero** con `provider: agent` (sin API key ni descarga de
+  modelos). Modos disponibles: `embedder` (default, coseno portátil), `agent`,
+  `existence`. Nuevo módulo `prisma_loop/rag/grounding.py`.
+- **Cerebro de investigador (memoria persistente en markdown + JSONL)** — nuevo
+  `prisma_loop.memory.ResearchBrain` y bandera `--brain <carpeta>` en `run`:
+  sedimenta cada revisión en archivos portátiles (`genome/events.jsonl`,
+  `wiki/semantic/`, `wiki/episodic/`, `raw/`, `index.md`), inspirado en el patrón
+  `cerebro`. Sin vectores ni servidores; el conocimiento se acumula entre corridas
+  y cualquier agente lo recupera leyendo archivos. `record_from_run()` sedimenta
+  también corridas pasadas desde sus artefactos.
+- **Embedder local `FastEmbedEmbedder` (opt-in, apagado)** — enganche para
+  embeddings semánticos locales vía `fastembed` (ONNX/CPU, multilingüe, offline tras
+  descarga única, sin API). No se usa por defecto; habilita el futuro índice
+  vectorial local del cerebro sin servicios de pago.
+- **Proveedor `agent`** — razonamiento delegado al agente que conduce prisma-loop
+  **en proceso** (p. ej. una sesión de Claude Code). El agente *es* el modelo vía
+  un callback inyectado (`set_agent_callback`/`use_agent_callback`); sin API key y
+  sin `claude -p` headless. Pensado para cuando la auth Max no es delegable a un
+  subproceso (token gestionado en memoria por el host). Entrypoint de conveniencia
+  `prisma_loop.agent_driver.run_review_with_agent`.
+- **Auth Max headless en `claude_code`** — el proveedor pasa el entorno explícito
+  al subproceso, propagando `CLAUDE_CODE_OAUTH_TOKEN` (token de larga duración de
+  `claude setup-token`) para operar con la suscripción Max/Pro sin API key.
+  Flag `PRISMA_LOOP_CLAUDE_CODE_CLEAN_ENV` (o `clean_env=True`) para limpiar
+  overrides de endpoint heredados (`ANTHROPIC_BASE_URL`/`USE_STAGING_OAUTH`) que,
+  con un token propio, podrían provocar un 401. Documentado en `.env.example` y
+  README.
+
+### Fixed
+
+- **`claude_code` en Windows**: el CLI `claude` es un shim `.cmd` que
+  `CreateProcess` no resuelve por nombre pelado (`FileNotFoundError`); ahora se
+  resuelve con `shutil.which` (ruta con extensión), válido también en POSIX.
+- **`claude_code` error 401 accionable**: un fallo de autenticación headless ya
+  no se reporta con el mensaje genérico de código de salida; se explica que la
+  sesión Max no es delegable a un subproceso y se proponen remedios
+  (`claude setup-token`, otro proveedor, o el proveedor `agent`).
+
+### Added (continuación)
+
+- **Driver Claude Code (H5)** — nuevo proveedor `claude_code` de primera clase
+  (opción destacada; el default de la plantilla sigue siendo Gemini, arrancable
+  por cualquiera). Razona con Claude Code en modo headless
+  (`claude -p --output-format json`, prompt por stdin, sin herramientas),
+  consumiendo la suscripción Max sin API key. `structured` se resuelve inyectando
+  el JSON Schema y validando con Pydantic con reintentos (el CLI no fuerza
+  *tool-use*). Sin dependencias nuevas (usa `subprocess`); reproducibilidad a
+  nivel decisión (`deterministic=False`).
+- **Proveedor Anthropic** (API directa): `complete` vía Messages API y
+  `structured` vía *tool use* forzado. Completa la promesa provider-agnostic
+  (Gemini / OpenAI / Anthropic / local / `fake`).
+- **Bibliografía BibTeX** (`referencias.bib`) de los estudios incluidos como
+  entregable.
+- **Tabla de características de los estudios incluidos** (`tabla_extraccion.md`)
+  como entregable, con marca de los campos `needs_review`.
+- **Búsqueda multi-base**: backends Crossref y Semantic Scholar (sin API key)
+  además de OpenAlex, con despacho por nombre de base; importación manual
+  RIS/BibTeX (`protocols/<slug>/imported/`) para Scopus/WoS/EMBASE.
+- **Meta-análisis cuantitativo** (§8.1): efectos fijos (inverse-variance) y
+  aleatorios (DerSimonian-Laird), heterogeneidad Q/I²/τ², test de Egger y forest
+  plot Markdown; gráficos PNG forest/funnel y p-valores exactos con el extra
+  `meta` (matplotlib + scipy). Entrada vía `effects.yml` (logOR/MD/SMD o yi/vi).
+- **`metodologia.md`**: generador determinista de la sección de métodos PRISMA +
+  PRISMA-trAIce desde el manifiesto.
+- **Doble extracción** (≥20%, §6): segundo extractor independiente + acuerdo de
+  valor y Cohen's kappa de presencia (`extraction_agreement`).
+- **Exclusiones humano vs IA** y **ventana temporal de búsqueda**: desglose
+  automático en el checklist PRISMA-trAIce y en `metodologia.md`.
+
+## [0.1.0] — 2026-06-26
+
+Primera versión pública. Sistema multiagéntico provider-agnostic para generar
+borradores de revisiones sistemáticas bajo PRISMA 2020 + PRISMA-S + PRISMA-trAIce.
+
+### Added
+
+- **Pipeline PRISMA end-to-end** (H0–H1): búsqueda (OpenAlex) → deduplicación →
+  screening título/abstract → full-text → extracción → riesgo de sesgo → síntesis
+  narrativa → verificador, con **checkpoint humano (HITL)** en cada etapa.
+- **Capa LLM provider-agnostic** (H2): proveedores Gemini, OpenAI, local
+  (endpoint OpenAI-compatible: Ollama/vLLM/LM Studio) y `fake` determinista para
+  correr y testear offline sin credenciales.
+- **Screening defendible** (H2): ensemble multi-modelo con voto sesgado a recall
+  y métricas correctas (Recall/Lost-Evidence, MCC, WMCC, Cohen's kappa — nunca
+  "accuracy").
+- **Rigor PRISMA completo** (H3): cribado a texto completo (full-text OA vía
+  Unpaywall), riesgo de sesgo configurable (RoB2/ROBINS-I/GRADE…), gates HITL en
+  todas las etapas y verificador anti-alucinación con grounding semántico.
+- **Reproducibilidad**: `manifest.yml` con modelo, seed, temperatura y *hash* del
+  prompt por llamada; ledger append-only de decisiones humanas con timestamp;
+  checklists PRISMA 2020 (27 ítems) y PRISMA-trAIce.
+- **Apertura** (H4): licencia Apache-2.0, `CITATION.cff`, `.zenodo.json`,
+  archivos de comunidad (CONTRIBUTING / CODE_OF_CONDUCT / SECURITY), CI y
+  plantillas de GitHub.
+
+### Notes
+
+- v1 cubre **revisión sistemática narrativa**. El meta-análisis cuantitativo
+  (PyMARE / R `metafor`) está reservado para v1.1.
+- El driver de referencia de Claude Code (subagentes `.md`) llega en una versión
+  posterior; el núcleo no lo requiere.
+
+[Unreleased]: https://github.com/jhonmosquerav/prisma-loop/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/jhonmosquerav/prisma-loop/releases/tag/v0.1.0

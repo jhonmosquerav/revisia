@@ -1,0 +1,16 @@
+criteria:
+  poblacion:
+    inclusion: "Estudios sobre revisiones sistemáticas o síntesis de evidencia"
+    exclusion: "Estudios ajenos a la metodología de revisión"
+  intervencion_exposicion:
+    inclusion: "Uso de ML o LLM para cribado de título/abstract"
+    exclusion: "Automatización no relacionada con cribado"
+  outcome:
+    inclusion: "Recall del cribado o reducción de carga del revisor"
+    exclusion: "Sin métricas de desempeño del cribado"
+  idioma:
+    inclusion: ["en", "es", "pt"]
+    exclusion: ["otros"]
+  ventana_temporal:
+    inicio: 2018
+    fin: 2026

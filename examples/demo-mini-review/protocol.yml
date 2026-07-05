@@ -1,0 +1,67 @@
+# Demo · tracer bullet de prisma-loop.
+# Usa el proveedor 'fake' (determinista, sin API key) para que cualquiera vea el
+# recorrido completo offline. La búsqueda SÍ es real (OpenAlex, gratis, sin key);
+# para una corrida 100% sin red, los tests inyectan una búsqueda simulada.
+#
+#   uv run prisma-loop run examples/demo-mini-review --auto-approve --max 8
+
+title: "Demo · Revisión mini (tracer bullet)"
+
+question:
+  text: "machine learning and large language models for systematic review screening"
+  framework: PEO
+  components:
+    Population: "systematic reviews / evidence synthesis"
+    Exposure: "machine learning and LLM-based title/abstract screening"
+    Outcome: "screening recall and reviewer workload reduction"
+
+databases:
+  - OpenAlex
+
+rob_tool: RoB2
+prisma_extension: PRISMA-2020
+
+registration:
+  osf: "OSF-DEMO-XXXX"
+
+# Ventana temporal de la búsqueda (PRISMA-S §3).
+search_window:
+  from: "2015-01-01"
+  to: "2026-06-26"
+  executed: "2026-06-26"
+
+# Todo con el proveedor 'fake': sin credenciales. Cambia a gemini/openai/etc.
+# (y pon la API key en .env) para una corrida real.
+llm:
+  default:
+    provider: fake
+    model: fake-1
+    temperature: 0.0
+    seed: 7
+
+# Ensemble multi-modelo en screening: 2 miembros fake votan por registro
+# (voto sesgado a recall). Cámbialos por modelos reales distintos para
+# aprovechar el ensemble de verdad.
+ensemble:
+  - screening_ta
+ensemble_llm:
+  screening_ta:
+    - provider: fake
+      model: fake-a
+      seed: 1
+    - provider: fake
+      model: fake-b
+      seed: 2
+  # Segundo extractor → activa la doble extracción (≥20%) + kappa de acuerdo.
+  extraccion:
+    - provider: fake
+      model: fake-extractor-2
+      seed: 9
+
+autonomy:
+  screening_ta: A1
+  extraccion: A0
+  reporte: A1
+
+thresholds:
+  recall_target: 0.95

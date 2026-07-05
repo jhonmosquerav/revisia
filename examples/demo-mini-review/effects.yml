@@ -1,0 +1,30 @@
+# Tamaños de efecto para el meta-análisis cuantitativo (§8.1) · OPCIONAL.
+# Si este archivo existe y tiene 'effects', el pipeline corre la síntesis
+# cuantitativa (efectos fijos + aleatorios, I²/τ², Egger) además de la narrativa.
+# Aquí: tablas 2×2 ilustrativas (eventos/total por brazo) → log odds-ratio.
+measure: logOR
+effects:
+  - study_id: estudio-bogota-2019
+    label: "Bogotá 2019"
+    e1: 12
+    n1: 120
+    e0: 20
+    n0: 118
+  - study_id: estudio-lima-2020
+    label: "Lima 2020"
+    e1: 8
+    n1: 90
+    e0: 15
+    n0: 95
+  - study_id: estudio-santiago-2021
+    label: "Santiago 2021"
+    e1: 18
+    n1: 150
+    e0: 25
+    n0: 145
+  - study_id: estudio-medellin-2022
+    label: "Medellín 2022"
+    e1: 5
+    n1: 80
+    e0: 11
+    n0: 78

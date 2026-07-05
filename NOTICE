@@ -1,0 +1,15 @@
+prisma-loop
+Copyright 2026 Jhon Alexander Mosquera Vanegas
+
+This product includes software developed by Jhon Alexander Mosquera Vanegas.
+
+prisma-loop is a provider-agnostic, reproducible multi-agent system for
+generating drafts of systematic reviews under PRISMA 2020 + PRISMA-S +
+PRISMA-trAIce. It automates a canonical systematic-review methodology;
+it does not invent methodology.
+
+Licensed under the Apache License, Version 2.0 (see the LICENSE file).
+
+The principle "AI is an accelerator, not a replacement"
+(Cochrane/JBI 2025) is wired into the system: human review (HITL) is
+mandatory at every critical stage, and the final decision is always human.

@@ -1,0 +1,41 @@
+# Formulario de extracción de datos · espeja la §6 del documento canónico.
+# Define los CAMPOS que el agente de extracción debe llenar para cada estudio.
+# El sistema produce, por cada campo, un ExtractionField con: value,
+# source_quote (cita textual de origen), source_locator, confidence y status.
+# Sin cita verificable, el campo queda en needs_review y va al checkpoint humano.
+
+fields:
+  - key: cita_completa
+    descripcion: "Referencia APA 7 completa del estudio."
+    tipo: texto
+  - key: doi_o_url
+    descripcion: "DOI o URL estable."
+    tipo: texto
+  - key: diseno
+    descripcion: "Diseño del estudio."
+    tipo: enum
+    valores: ["RCT", "cuasi-experimental", "observacional", "cualitativo", "mixto"]
+  - key: muestra_n
+    descripcion: "Tamaño de muestra."
+    tipo: numero
+  - key: poblacion
+    descripcion: "Descripción de la población y contexto."
+    tipo: texto
+  - key: intervencion_o_exposicion
+    descripcion: "Intervención o exposición estudiada."
+    tipo: texto
+  - key: comparador
+    descripcion: "Grupo/condición de comparación."
+    tipo: texto
+  - key: outcomes_primarios
+    descripcion: "Resultados primarios y sus métricas."
+    tipo: texto
+  - key: resultados_cuantitativos
+    descripcion: "Efectos con IC95% cuando existan (insumo de meta-análisis v1.1)."
+    tipo: texto
+  - key: limitaciones_declaradas
+    descripcion: "Limitaciones que el propio estudio reconoce."
+    tipo: texto
+  - key: financiamiento_conflicto
+    descripcion: "Fuente de financiación y conflictos de interés."
+    tipo: texto

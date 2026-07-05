@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "prisma-loop"
+version = "0.1.0"
+description = "Sistema multiagéntico provider-agnostic para generar borradores de revisiones sistemáticas reproducibles bajo PRISMA 2020 + PRISMA-S + PRISMA-trAIce."
+readme = "README.md"
+requires-python = ">=3.13"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Jhon Alexander Mosquera Vanegas" }]
+keywords = ["systematic-review", "meta-analysis", "prisma", "llm", "multi-agent", "open-science"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+]
+
+# Núcleo deliberadamente ligero: el motor corre sin ningún proveedor LLM
+# concreto ni orquestador. Cada capa pesada es un extra opcional.
+dependencies = [
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+gemini = ["google-genai>=1.0"]
+openai = ["openai>=1.40"]
+anthropic = ["anthropic>=0.40"]
+local = ["openai>=1.40"]  # endpoint OpenAI-compatible (Ollama/vLLM/LM Studio)
+rag = ["qdrant-client>=1.10"]
+orchestration = ["prefect>=3.0"]
+search = ["httpx>=0.27"]
+# Meta-análisis cuantitativo: gráficos (forest/funnel) y p-valores exactos.
+# El núcleo calcula el meta-análisis sin esto; solo mejora plots y p-valores.
+meta = ["matplotlib>=3.8", "scipy>=1.11"]
+# Conveniencia: todo lo necesario para correr el tracer bullet con Gemini.
+demo = ["google-genai>=1.0", "httpx>=0.27", "prefect>=3.0"]
+dev = ["pytest>=8.0", "ruff>=0.6", "black>=24.0"]
+
+[project.scripts]
+prisma-loop = "prisma_loop.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["prisma_loop"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.black]
+line-length = 100
+target-version = ["py313"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

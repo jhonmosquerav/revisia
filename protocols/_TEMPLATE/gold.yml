@@ -1,0 +1,16 @@
+# gold.yml · estándar de oro humano para métricas de cribado (opcional pero recomendado).
+#
+# Etiqueta a mano una MUESTRA de registros (incluir=true / excluir=false) y el
+# motor calculará automáticamente, frente a este gold: recall, lost-evidence,
+# MCC, WMCC y el kappa humano–IA. Sin gold, esas métricas no se reportan.
+#
+# El id (clave) es el record_id que verás en runs/<slug>-<fecha>/03_screening/decisions.json
+# (idealmente el DOI). Atajo: `prisma-loop gold-template runs/<slug>-<fecha>` genera
+# este archivo con los ids ya listados para que solo pongas true/false.
+#
+# Recomendación PRISMA: que un SEGUNDO revisor humano etiquete de forma
+# independiente; así el kappa mide acuerdo interrevisor real, no solo IA vs ti.
+
+gold: {}
+  # "10.1234/ejemplo-incluido": true
+  # "10.5678/ejemplo-excluido": false

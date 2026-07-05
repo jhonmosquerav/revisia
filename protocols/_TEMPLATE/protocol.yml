@@ -1,0 +1,125 @@
+# ─────────────────────────────────────────────────────────────────────
+# protocol.yml · plantilla de revisión sistemática para prisma-loop
+#
+# Copia toda la carpeta _TEMPLATE a protocols/<tu-slug>/ y edita estos valores.
+# El motor (prisma_loop) no contiene nada de tu revisión: vive aquí.
+# Valida con:  uv run prisma-loop validate protocols/<tu-slug>
+# ─────────────────────────────────────────────────────────────────────
+
+title: "Plantilla · Revisión Sistemática PRISMA 2020"
+
+# Pregunta estructurada. framework: PICO | PICo | PEO | SPICE | SPIDER
+question:
+  text: "¿[escribe aquí tu pregunta de investigación]?"
+  framework: PICO
+  components:
+    Population: "..."
+    Intervention: "..."
+    Comparator: "..."
+    Outcome: "..."
+
+# Bases de datos / fuentes a consultar (la búsqueda usa search_strings/<base>.txt).
+# 4 bases abiertas por defecto (sin API key). Europe PMC espeja MEDLINE/PubMed.
+# Scopus/Web of Science no tienen API abierta: expórtalos a RIS/BibTeX y déjalos
+# en imported/ (se fusionan en la deduplicación).
+databases:
+  - OpenAlex
+  - Crossref
+  - Semantic Scholar
+  - Europe PMC
+
+# Herramienta de riesgo de sesgo acorde al diseño esperado de los estudios:
+# RoB2 (ensayos) | ROBINS-I (no aleatorizados) | NewcastleOttawa | AMSTAR2 |
+# QUADAS-2 (diagnóstico) | GRADE (certeza agregada).
+rob_tool: RoB2
+
+prisma_extension: PRISMA-2020
+
+# Registro del protocolo (reproducibilidad). Rellena al preregistrar.
+registration:
+  prospero: ""   # ej. CRD42026XXXXXX
+  osf: ""        # ej. DOI OSF
+
+# ── Proveedor LLM por etapa ──────────────────────────────────────────
+# 'default' es el fallback de todas las etapas. El núcleo es provider-agnostic:
+# arranca con cualquier proveedor. El default es 'gemini' (API con tier gratis,
+# pones tu key en .env y corres) para que cualquiera empiece sin fricción.
+# Proveedores: gemini | openai | anthropic | local_openai | claude_code.
+llm:
+  default:
+    provider: gemini
+    model: gemini-2.0-flash
+    temperature: 0.0
+    seed: 42
+  sintesis:
+    provider: gemini
+    model: gemini-2.0-flash
+    temperature: 0.2
+    seed: 42
+
+# ── Opción destacada: Claude Code (driver del autor) ─────────────────
+# Si usas Claude Code, razona en modo headless (`claude -p`) con tu suscripción
+# Max: cero costo por token, sin API key. Requiere Claude Code instalado y con
+# sesión iniciada. Para usarlo, reemplaza el bloque 'llm' de arriba por:
+#
+# llm:
+#   default:
+#     provider: claude_code
+#     model: sonnet          # screening masivo: rápido/barato; sube a 'opus' para más juicio
+#     temperature: 0.0
+#   sintesis:
+#     provider: claude_code
+#     model: opus            # la síntesis narrativa agradece el modelo más fuerte
+#     temperature: 0.2
+
+# Etapas que corren en modo ensemble multi-modelo (voto sesgado a recall:
+# un registro pasa si CUALQUIER modelo lo incluye).
+ensemble:
+  - screening_ta
+
+# Modelos del ensemble por etapa. Idealmente proveedores/modelos DISTINTOS
+# para que el voto aporte diversidad. Si una etapa marcada como ensemble no
+# aparece aquí, usa el proveedor único de 'llm'. Descomenta y ajusta:
+# ensemble_llm:
+#   screening_ta:
+#     - provider: gemini
+#       model: gemini-2.0-flash
+#       seed: 42
+#     - provider: openai
+#       model: gpt-4o-mini
+#       seed: 42
+
+# ── Autonomía por etapa (A0..A3) ─────────────────────────────────────
+# Regla NO negociable: screening / extraccion / rob nunca superan A1; la
+# decisión final es siempre humana (Cochrane/JBI 2025).
+autonomy:
+  protocolo: A0      # preregistro: el humano firma
+  busqueda: A2       # determinista, reversible, notifica
+  dedup: A2
+  screening_ta: A1   # IA propone, humano decide
+  screening_ft: A0
+  extraccion: A0     # revisión humana campo a campo
+  rob: A0            # juicio del experto humano
+  sintesis: A1
+  reporte: A1
+
+# Umbrales de control de calidad.
+thresholds:
+  kappa_min: 0.60       # acuerdo mínimo humano-IA en screening
+  recall_target: 0.95   # objetivo de recall (minimizar lost-evidence)
+
+# ── Ventana temporal de la búsqueda (PRISMA-S §3) ────────────────────
+# Declárala ANTES de buscar. Formato ISO. Rellena 'executed' al ejecutar.
+search_window:
+  from: "2015-01-01"
+  to: "2026-12-31"
+  executed: ""
+
+# ── Grounding del verificador anti-alucinación ───────────────────────
+# embedder = similitud coseno portátil (léxico; NO cruza idiomas).
+# agent    = un modelo juzga si la fuente respalda la cita; CRUZA idiomas
+#            (síntesis en español vs. fuentes en inglés) y es gratis con
+#            provider: agent. Recomendado si revisas en un idioma distinto
+#            al de las fuentes.
+# existence = solo verifica que el id citado exista en el corpus.
+grounding: embedder

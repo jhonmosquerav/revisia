@@ -1,0 +1,33 @@
+# Entornos y caché
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Secretos
+.env
+
+# Outputs de ejecuciones: se ignoran salvo el manifest y los entregables,
+# que son los artefactos reproducibles que SÍ se versionan/comparten.
+runs/*/
+!runs/*/manifest.yml
+!runs/*/deliverable/
+
+# Datos crudos descargados (paywalls, PDFs) nunca al repo
+**/fulltext_cache/
+**/*.pdf
+
+# Revisiones reales (con tus datos) conviene mantenerlas APARTE del motor,
+# en cualquier carpeta tuya, y correrlas pasando su ruta al CLI
+# (`prisma-loop run <ruta>`). Solo la plantilla se versiona; cualquier
+# protocolo concreto creado por error DENTRO del motor queda fuera de git.
+protocols/*/
+!protocols/_TEMPLATE/
+
+# Cerebro de investigador (memoria personal acumulada con --brain): es TUYA,
+# no del repositorio. Ver docs/memoria-cerebro.md.
+cerebro/

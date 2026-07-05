@@ -1,0 +1,3 @@
+# Coloca aquí una cadena de búsqueda por base, con el nombre <base>.txt
+# (ej. openalex.txt, semantic-scholar.txt). Documenta la sintaxis EXACTA usada
+# en cada base — es un requisito de reproducibilidad de PRISMA-S.

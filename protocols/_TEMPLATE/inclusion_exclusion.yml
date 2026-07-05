@@ -1,0 +1,32 @@
+# Criterios de inclusión y exclusión · declarar ANTES de ver resultados.
+# Espeja la §4 del documento metodológico canónico. El agente de screening
+# evalúa cada registro contra estos criterios y reporta el criterio incumplido.
+
+criteria:
+  poblacion:
+    inclusion: "..."
+    exclusion: "..."
+  intervencion_exposicion:
+    inclusion: "..."
+    exclusion: "..."
+  comparador:
+    inclusion: "..."
+    exclusion: "..."
+  outcome:
+    inclusion: "..."
+    exclusion: "..."
+  diseno_estudio:
+    inclusion: ["RCT", "cuasi-experimental", "observacional", "cualitativo", "mixto"]
+    exclusion: ["editorial", "comentario", "nota periodística"]
+  idioma:
+    inclusion: ["es", "en", "pt"]
+    exclusion: ["otros"]
+  tipo_publicacion:
+    inclusion: ["peer-reviewed", "tesis doctoral", "informe institucional con revisión"]
+    exclusion: ["ponencia sin actas"]
+  ventana_temporal:
+    inicio: 2000
+    fin: 2026
+  contexto_geografico:
+    inclusion: "..."
+    exclusion: "..."
