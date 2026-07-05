@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from prisma_loop.llm import LLMProvider, ProviderConfig, build_provider
+from revisia.llm import LLMProvider, ProviderConfig, build_provider
 
 
 def test_build_provider_desconocido_falla() -> None:

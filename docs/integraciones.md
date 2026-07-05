@@ -1,6 +1,6 @@
 # Integraciones con herramientas probadas (declaradas)
 
-`prisma-loop` integra y declara el ecosistema existente en vez de reinventarlo.
+`revisia` integra y declara el ecosistema existente en vez de reinventarlo.
 Tres niveles: **integrado** (el motor lo usa nativamente), **interoperable**
 (el motor emite/lee su formato) y **complementario** (recomendado para un paso
 concreto, fuera del motor).

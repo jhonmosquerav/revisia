@@ -10,10 +10,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from prisma_loop.config import load_protocol
-from prisma_loop.orchestration.pipeline import run_pipeline
-from prisma_loop.orchestration.run_context import RunContext
-from prisma_loop.schemas.records import SearchRecord
+from revisia.config import load_protocol
+from revisia.orchestration.pipeline import run_pipeline
+from revisia.orchestration.run_context import RunContext
+from revisia.schemas.records import SearchRecord
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "demo-mini-review"
 

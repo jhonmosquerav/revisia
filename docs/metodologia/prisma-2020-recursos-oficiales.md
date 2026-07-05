@@ -12,13 +12,13 @@ nota_traduccion: >
   se indica, con TRADUCCIÓN AL ESPAÑOL hecha por el agente (marcada como "[ES · trad. agente]").
   La traducción es fiel pero NO es la traducción oficial al español publicada por PRISMA
   (que existe para statement/checklist/flow diagram — ver sección de traducciones).
-proposito: Base de conocimiento para el sistema agéntico open-source "prisma-loop" (revisiones sistemáticas y metaanálisis end-to-end bajo PRISMA)
+proposito: Base de conocimiento para el sistema agéntico open-source "revisia" (revisiones sistemáticas y metaanálisis end-to-end bajo PRISMA)
 ---
 
 # Base de conocimiento · PRISMA (prisma-statement.org)
 
 > Extracción metodológica exhaustiva del sitio oficial PRISMA y sus documentos
-> descargables, para alimentar la KB de **prisma-loop**. Todos los ítems del
+> descargables, para alimentar la KB de **revisia**. Todos los ítems del
 > checklist provienen del PDF/DOCX oficial (CC BY 4.0). Las citas y DOIs se
 > transcriben tal cual aparecen en el sitio y/o en los papers primarios.
 
@@ -764,7 +764,7 @@ la EQUATOR Network); sin cita ni checklist públicos todavía:
 10. **Actualización de PRISMA-Protocols**
 11. **Partial PRISMA 2020 update for AI tools** (actualización parcial de PRISMA
     2020 para **herramientas de IA usadas en el proceso de la revisión**) — sin
-    enlace separado. *Relevante para prisma-loop: es la vía oficial para reportar
+    enlace separado. *Relevante para revisia: es la vía oficial para reportar
     uso de IA como herramienta dentro de la RS.*
 
 ---
@@ -786,7 +786,7 @@ la EQUATOR Network); sin cita ni checklist públicos todavía:
 | **Endorsement** | Lista de revistas/organizaciones que respaldan PRISMA | `/endorsement` |
 | **Translations policy** | Política para crear traducciones oficiales | `/translations-policy` |
 
-Notas de herramientas útiles para prisma-loop:
+Notas de herramientas útiles para revisia:
 - El **paquete R `PRISMA2020`** (ESHackathon / M. Haddaway et al.) genera el
   diagrama de flujo interactivo/estático desde una plantilla de conteos — candidato
   natural para automatizar el ítem 16a / diagrama en un pipeline.
@@ -820,7 +820,7 @@ El sitio mantiene traducciones oficiales (bajo `/translations`, con política en
 | Turco | Checklist, abstracts |
 | Vietnamita | Checklist, abstracts, 4 flow diagrams |
 
-> **Relevante para prisma-loop (LATAM):** hay traducción oficial al español del
+> **Relevante para revisia (LATAM):** hay traducción oficial al español del
 > statement, del checklist y del flow diagram. **NO** consta traducción oficial al
 > español del *expanded checklist* ni del *checklist de abstracts* (a fecha de
 > consulta). Para esos, la traducción del agente en las secciones 4-5 es la
@@ -852,14 +852,14 @@ Qué reconoce el **sitio oficial** y los documentos PRISMA 2020 sobre IA/automat
 3. Entre las **extensiones en desarrollo** hay dos relativas a IA (sección 8):
    - "PRISMA extension for **AI interventions**" (IA como *objeto* de la revisión).
    - "**Partial PRISMA 2020 update for AI tools**" (IA como *herramienta* dentro
-     del proceso de revisión) — la más pertinente para prisma-loop.
+     del proceso de revisión) — la más pertinente para revisia.
 
 > **Nota de alcance / no-oficial:** existen extensiones/propuestas de terceros para
 > reportar uso de **GenAI/LLMs** en RS que **NO** están alojadas ni avaladas en
 > prisma-statement.org (aparecen vía búsqueda web, no en el sitio oficial):
 > **PRISMA-trAIce** (JMIR AI 2025;1:e80247), **L-PRISMA** (preprint arXiv
 > 2603.19236) y la iniciativa **PRISMA-AI** (registro clínico NCT05382455, enfocada
-> en IA como intervención). Se registran solo como contexto; para prisma-loop, la
+> en IA como intervención). Se registran solo como contexto; para revisia, la
 > guía **normativa** de IA sigue siendo la del propio PRISMA 2020 (ítems 7-9,11,14,15
 > + nota del flow diagram) y, cuando se publique, la "Partial PRISMA 2020 update for
 > AI tools".
@@ -899,6 +899,6 @@ Qué reconoce el **sitio oficial** y los documentos PRISMA 2020 sobre IA/automat
 - Checklist PDF (real, tras redirect Squarespace): https://static1.squarespace.com/static/65b880e13b6ca75573dfe217/t/67ad313f1c80aa5235fce0d0/1739403584136/PRISMA_2020_checklist.pdf
 - Abstract checklist PDF (real): https://static1.squarespace.com/static/65b880e13b6ca75573dfe217/t/67cf8716b80e8a5ce07e63e9/1741653783026/PRISMA_2020_abstract_checklist.pdf
 
-<!-- Fin KB. Generada 2026-07-05 para prisma-loop. Ítems del checklist verbatim
+<!-- Fin KB. Generada 2026-07-05 para revisia. Ítems del checklist verbatim
 del PDF oficial CC BY 4.0; traducciones al español marcadas [ES · trad. agente]
 salvo statement/checklist/flow diagram, para los que existe traducción oficial. -->

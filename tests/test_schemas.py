@@ -5,14 +5,14 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from prisma_loop.schemas import (
+from revisia.schemas import (
     ExtractionField,
     QuestionFramework,
     ResearchQuestion,
     ScreeningVote,
     VerificationReport,
 )
-from prisma_loop.schemas.verification import CitationCheck
+from revisia.schemas.verification import CitationCheck
 
 
 def test_research_question_framework_enum() -> None:

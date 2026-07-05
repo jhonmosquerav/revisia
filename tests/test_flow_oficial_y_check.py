@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from prisma_loop.check import AdherenceReport, ItemAdherence, render_adherence_md
-from prisma_loop.exports import (
+from revisia.check import AdherenceReport, ItemAdherence, render_adherence_md
+from revisia.exports import (
     PrismaCounts,
     render_flow_diagram,
     render_flow_markdown,
@@ -95,7 +95,7 @@ def test_render_adherencia_completa_27_filas() -> None:
 def test_cli_new_scaffold(tmp_path, capsys, monkeypatch) -> None:
     import shutil
 
-    from prisma_loop.cli import main
+    from revisia.cli import main
 
     # plantilla mínima
     template = tmp_path / "protocols" / "_TEMPLATE"
@@ -118,7 +118,7 @@ def test_cli_new_scaffold(tmp_path, capsys, monkeypatch) -> None:
 
 
 def test_cli_check_con_fake(tmp_path, capsys) -> None:
-    from prisma_loop.cli import main
+    from revisia.cli import main
 
     manuscript = tmp_path / "manuscrito.md"
     manuscript.write_text(

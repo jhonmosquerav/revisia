@@ -1,6 +1,6 @@
-# El equipo de agentes de prisma-loop
+# El equipo de agentes de RevisIA
 
-`prisma-loop` es un sistema **multiagéntico mono-tarea**: cada etapa del
+`RevisIA` es un sistema **multiagéntico mono-tarea**: cada etapa del
 pipeline PRISMA la ejecuta un agente con una sola responsabilidad, un nivel de
 autonomía explícito y una verificación posterior. Ningún agente decide solo en
 etapas de juicio; la decisión final es siempre humana (Cochrane/JBI 2025).
@@ -33,7 +33,7 @@ regla no negociable cableada en el diseño: `screening`, `extraccion` y `rob`
 | `sintesis` | Síntesis narrativa (SWiM) | 🤖 LLM | A1 | **Verificador anti-alucinación** antes del gate humano |
 | `verificador` | Grounding de citas contra el corpus | 🤖/⚙️ (embedder, agente o existencia) | A2 | Marca citas sin respaldo; bloquea la aprobación silenciosa |
 | `reporte` | Entregable + checklists + flow diagram | ⚙️ determinista | A1 | Checkpoint final humano |
-| `auditor` | Auditoría post-corrida (`prisma-loop audit`) | ⚙️ determinista | A2 | Verifica evidencia PRISMA 2020/-S/trAIce en disco; PASS/WARN/FAIL |
+| `auditor` | Auditoría post-corrida (`revisia audit`) | ⚙️ determinista | A2 | Verifica evidencia PRISMA 2020/-S/trAIce en disco; PASS/WARN/FAIL |
 | `memoria` | Cerebro de investigador (`--brain`) | ⚙️ determinista | A2 | Solo informa (living review); **nunca** alimenta el juicio |
 
 Tipos: ⚙️ determinista (sin LLM, reproducible bit a bit) · 🤖 LLM
@@ -48,7 +48,7 @@ Tipos: ⚙️ determinista (sin LLM, reproducible bit a bit) · 🤖 LLM
 3. **Gold standard escalonado** — modelos ligeros criban → un modelo fuerte
    recomienda en zona gris → el humano valida → κ/recall del sistema contra ese
    gold (nunca "accuracy").
-4. **Auditor post-corrida** — `prisma-loop audit runs/<slug>-<fecha>` verifica
+4. **Auditor post-corrida** — `revisia audit runs/<slug>-<fecha>` verifica
    manifest, prompts hash-eados, supervisión humana, exclusiones IA/humano
    separadas (trAIce R1), gold, grounding, ventana de búsqueda y registro;
    emite `audit.md` con veredicto de publicabilidad.

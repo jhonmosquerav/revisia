@@ -1,6 +1,6 @@
 # Base de conocimiento metodológica
 
-Fuentes primarias que fundamentan el diseño de `prisma-loop`, extraídas a
+Fuentes primarias que fundamentan el diseño de `revisia`, extraídas a
 markdown para que el sistema (y quien lo audite) trabaje **contra la norma, no
 contra recuerdos de la norma**. Cada archivo lleva frontmatter con fuente,
 licencia y fecha de consulta.
@@ -16,7 +16,7 @@ licencia y fecha de consulta.
 ## Cómo se usa esta base
 
 - El **checklist trAIce** que emite cada corrida (`deliverable/checklist_traice.md`)
-  responde a los ítems de `prisma-traice.md`; la auditoría (`prisma-loop audit`)
+  responde a los ítems de `prisma-traice.md`; la auditoría (`revisia audit`)
   verifica la evidencia de los ítems automatizables.
 - Los **checklists 2020 y de resúmenes** que emite el pipeline siguen la
   numeración de `prisma-2020-declaracion.md`.

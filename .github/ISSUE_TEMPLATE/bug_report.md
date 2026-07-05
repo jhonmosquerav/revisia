@@ -18,12 +18,12 @@ Pasos para reproducir (idealmente con el proveedor `fake`, sin API key):
 3.
 
 ```bash
-uv run prisma-loop run protocols/<slug> --auto-approve
+uv run revisia run protocols/<slug> --auto-approve
 ```
 
 ## Entorno
 
-- prisma-loop versión:
+- revisia versión:
 - Python (`python --version`):
 - SO:
 - Proveedor(es) configurado(s) en `protocol.yml`:

@@ -6,7 +6,7 @@ import json
 
 import yaml
 
-from prisma_loop.audit import render_audit_md, run_audit
+from revisia.audit import render_audit_md, run_audit
 
 
 def _make_run(tmp_path, *, human_decisions: bool = True, with_gold: bool = True):
@@ -112,7 +112,7 @@ def test_audit_corrida_vacia_falla(tmp_path) -> None:
 
 
 def test_cli_audit_escribe_informe(tmp_path, capsys) -> None:
-    from prisma_loop.cli import main
+    from revisia.cli import main
 
     run = _make_run(tmp_path)
     assert main(["audit", str(run)]) == 0

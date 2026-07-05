@@ -1,9 +1,9 @@
 # ─────────────────────────────────────────────────────────────────────
-# protocol.yml · plantilla de revisión sistemática para prisma-loop
+# protocol.yml · plantilla de revisión sistemática para revisia
 #
 # Copia toda la carpeta _TEMPLATE a protocols/<tu-slug>/ y edita estos valores.
-# El motor (prisma_loop) no contiene nada de tu revisión: vive aquí.
-# Valida con:  uv run prisma-loop validate protocols/<tu-slug>
+# El motor (revisia) no contiene nada de tu revisión: vive aquí.
+# Valida con:  uv run revisia validate protocols/<tu-slug>
 # ─────────────────────────────────────────────────────────────────────
 
 title: "Plantilla · Revisión Sistemática PRISMA 2020"

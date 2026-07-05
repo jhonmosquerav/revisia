@@ -1,18 +1,18 @@
 # Memoria de investigador · patrón "cerebro"
 
-`prisma-loop` incluye una memoria persistente **en archivos** (markdown + JSONL)
+`revisia` incluye una memoria persistente **en archivos** (markdown + JSONL)
 que acumula conocimiento entre revisiones: el **cerebro de investigador**
-(`prisma_loop.memory.ResearchBrain`, bandera `--brain`).
+(`revisia.memory.ResearchBrain`, bandera `--brain`).
 
 ## Patrón declarado (upstream)
 
 La estructura sigue el patrón de memoria del proyecto
 [**cerebro**](https://github.com/jhonmosquerav/cerebro) (licencia MIT):
 documentación agéntica como "cerebro vivo" en markdown, **sin RAG, sin
-vectores y sin servidores**. `prisma-loop` implementa el subconjunto que una
+vectores y sin servidores**. `revisia` implementa el subconjunto que una
 revisión sistemática necesita:
 
-| Capa cerebro (upstream) | En prisma-loop | Contenido |
+| Capa cerebro (upstream) | En revisia | Contenido |
 |---|---|---|
 | `genome/events.jsonl` | ✅ igual | log append-only: un evento por corrida (conteos, incluidos, modelos, delta) |
 | `wiki/semantic/` | ✅ igual | síntesis **vigente** por revisión (se sobrescribe en cada corrida) |
@@ -28,9 +28,9 @@ Obsidian/Dataview), como exige el patrón upstream.
 
 | Operación | Comando | Qué hace |
 |---|---|---|
-| Sedimentar (INGEST) | `prisma-loop run <protocolo> --brain <carpeta>` | al terminar la corrida, escribe evento + semantic + episodic + raw + index |
-| Consultar (QUERY) | `prisma-loop brain <carpeta>` | lista las revisiones conocidas y sus corridas |
-| Consultar un tema | `prisma-loop brain <carpeta> <slug>` | memoria vigente del slug: corridas, conteos, síntesis |
+| Sedimentar (INGEST) | `revisia run <protocolo> --brain <carpeta>` | al terminar la corrida, escribe evento + semantic + episodic + raw + index |
+| Consultar (QUERY) | `revisia brain <carpeta>` | lista las revisiones conocidas y sus corridas |
+| Consultar un tema | `revisia brain <carpeta> <slug>` | memoria vigente del slug: corridas, conteos, síntesis |
 | Recall programático | `ResearchBrain(root).recall(slug)` | `BrainRecall` con síntesis previa, incluidos y última corrida |
 
 ## Living review (actualización de revisiones)

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from prisma_loop.agents.dedup import deduplicate
-from prisma_loop.schemas.records import SearchRecord
+from revisia.agents.dedup import deduplicate
+from revisia.schemas.records import SearchRecord
 
 
 def test_dedup_por_doi_normalizado() -> None:

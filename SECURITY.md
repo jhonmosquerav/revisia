@@ -2,7 +2,7 @@
 
 ## Versiones soportadas
 
-`prisma-loop` está en desarrollo temprano (`0.x`). Solo la última versión
+`revisia` está en desarrollo temprano (`0.x`). Solo la última versión
 publicada recibe correcciones de seguridad.
 
 | Versión | Soportada |
@@ -25,7 +25,7 @@ Te responderemos lo antes posible y coordinaremos una divulgación responsable.
 
 ## Manejo de credenciales y datos
 
-`prisma-loop` habla con proveedores de IA externos y APIs académicas. Ten en
+`revisia` habla con proveedores de IA externos y APIs académicas. Ten en
 cuenta:
 
 - **Nunca commitees** `.env`, API keys ni credenciales. El `.gitignore` ya

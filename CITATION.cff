@@ -1,6 +1,6 @@
 cff-version: 1.2.0
-message: "Si usas prisma-loop en tu investigación, cítalo así."
-title: "prisma-loop: sistema multiagéntico reproducible para revisiones sistemáticas PRISMA"
+message: "Si usas RevisIA en tu investigación, cítalo así."
+title: "RevisIA: sistema multiagéntico reproducible para revisiones sistemáticas PRISMA"
 abstract: >-
   Sistema multiagéntico provider-agnostic que genera borradores de
   revisiones sistemáticas reproducibles bajo PRISMA 2020, PRISMA-S y
@@ -19,10 +19,10 @@ keywords:
   - open science
   - reproducibility
 license: Apache-2.0
-version: "0.3.0"
+version: "0.4.0"
 date-released: "2026-07-05"
-repository-code: "https://github.com/jhonmosquerav/prisma-loop"
-url: "https://github.com/jhonmosquerav/prisma-loop"
+repository-code: "https://github.com/jhonmosquerav/revisia"
+url: "https://github.com/jhonmosquerav/revisia"
 # Tras el primer release con depósito en Zenodo, descomenta y rellena el DOI:
 # identifiers:
 #   - type: doi

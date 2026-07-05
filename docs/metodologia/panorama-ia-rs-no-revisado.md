@@ -7,7 +7,7 @@ url: https://proofreaderpro.ai/es/blog/ai-prisma-systematic-review
 url_version_inglesa: https://proofreaderpro.ai/blog/ai-prisma-systematic-review
 fecha_consulta: 2026-07-05
 tipo: blog-comercial-no-revisado
-proyecto: prisma-loop
+proyecto: revisia
 etiquetas: [PRISMA, IA, revision-sistematica, cribado, transparencia, PRISMA-trAIce]
 ---
 
@@ -106,7 +106,7 @@ Verificación independiente (2026-07-05): **existe y es peer-reviewed**:
 - Distinción clave (coincide blog y paper): **PRISMA-AI** aplica cuando la IA es el *objeto* de la revisión; **PRISMA-trAIce** cuando la IA es *herramienta metodológica* de la revisión.
 - Discrepancia menor: el blog dice "publicada en 2024, actualizada en 2025"; la publicación en JMIR AI es de 2025 (posible confusión con el preprint).
 
-**Para prisma-loop: el paper de JMIR AI es la fuente primaria a incorporar; el blog es solo divulgación derivada.**
+**Para revisia: el paper de JMIR AI es la fuente primaria a incorporar; el blog es solo divulgación derivada.**
 
 ## Buenas prácticas y requisitos de divulgación (según el blog)
 
@@ -171,12 +171,12 @@ La versión en español es traducción automática visiblemente tosca.
 **Lo que sí vale.** (1) El marco decisional "dónde sí / dónde no" y el flujo de 10 pasos
 son ortodoxos y coinciden con la práctica Cochrane (doble revisor, IA como priorización
 y no votación, RoB 100 % humano); son directamente reutilizables como diseño de
-salvaguardas en prisma-loop. (2) El hallazgo mayor de esta extracción: **PRISMA-trAIce
+salvaguardas en revisia. (2) El hallazgo mayor de esta extracción: **PRISMA-trAIce
 existe y es peer-reviewed (JMIR AI 2025;1:e80247)** — verificado por búsqueda
-independiente; prisma-loop debería ingerir ese paper como fuente primaria y mapear sus
+independiente; revisia debería ingerir ese paper como fuente primaria y mapear sus
 12 ítems contra los reportes que genera el motor. (3) Las plantillas de divulgación de
 métodos son esqueletos útiles y fáciles de adaptar. (4) El ejercicio de calibración con
-umbral κ ≥ 0,7 / 80 % es operacionalizable en prisma-loop como gate automático.
+umbral κ ≥ 0,7 / 80 % es operacionalizable en revisia como gate automático.
 
 **Lo que hay que contrastar con fuentes revisadas antes de usar:** el umbral κ 0,7/80 %
 sobre 100–200 resúmenes (¿de dónde sale? contrastar con literatura de ASReview,

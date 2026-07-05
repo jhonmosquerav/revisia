@@ -1527,76 +1527,6 @@ wheels = [
 ]
 
 [[package]]
-name = "prisma-loop"
-version = "0.3.0"
-source = { editable = "." }
-dependencies = [
-    { name = "pydantic" },
-    { name = "python-dotenv" },
-    { name = "pyyaml" },
-]
-
-[package.optional-dependencies]
-anthropic = [
-    { name = "anthropic" },
-]
-demo = [
-    { name = "google-genai" },
-    { name = "httpx" },
-    { name = "prefect" },
-]
-dev = [
-    { name = "black" },
-    { name = "pytest" },
-    { name = "ruff" },
-]
-gemini = [
-    { name = "google-genai" },
-]
-local = [
-    { name = "openai" },
-]
-meta = [
-    { name = "matplotlib" },
-    { name = "scipy" },
-]
-openai = [
-    { name = "openai" },
-]
-orchestration = [
-    { name = "prefect" },
-]
-rag = [
-    { name = "qdrant-client" },
-]
-search = [
-    { name = "httpx" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.40" },
-    { name = "black", marker = "extra == 'dev'", specifier = ">=24.0" },
-    { name = "google-genai", marker = "extra == 'demo'", specifier = ">=1.0" },
-    { name = "google-genai", marker = "extra == 'gemini'", specifier = ">=1.0" },
-    { name = "httpx", marker = "extra == 'demo'", specifier = ">=0.27" },
-    { name = "httpx", marker = "extra == 'search'", specifier = ">=0.27" },
-    { name = "matplotlib", marker = "extra == 'meta'", specifier = ">=3.8" },
-    { name = "openai", marker = "extra == 'local'", specifier = ">=1.40" },
-    { name = "openai", marker = "extra == 'openai'", specifier = ">=1.40" },
-    { name = "prefect", marker = "extra == 'demo'", specifier = ">=3.0" },
-    { name = "prefect", marker = "extra == 'orchestration'", specifier = ">=3.0" },
-    { name = "pydantic", specifier = ">=2.7" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "python-dotenv", specifier = ">=1.0" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "qdrant-client", marker = "extra == 'rag'", specifier = ">=1.10" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
-    { name = "scipy", marker = "extra == 'meta'", specifier = ">=1.11" },
-]
-provides-extras = ["gemini", "openai", "anthropic", "local", "rag", "orchestration", "search", "meta", "demo", "dev"]
-
-[[package]]
 name = "prometheus-client"
 version = "0.25.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2102,6 +2032,76 @@ sdist = { url = "https://files.pythonhosted.org/packages/42/f2/05f29bc3913aea15e
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3b/5d/63d4ae3b9daea098d5d6f5da83984853c1bbacd5dc826764b249fe119d24/requests_oauthlib-2.0.0-py2.py3-none-any.whl", hash = "sha256:7dd8a5c40426b779b0868c404bdef9768deccf22749cde15852df527e6269b36", size = 24179, upload-time = "2024-03-22T20:32:28.055Z" },
 ]
+
+[[package]]
+name = "revisia"
+version = "0.4.0"
+source = { editable = "." }
+dependencies = [
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "pyyaml" },
+]
+
+[package.optional-dependencies]
+anthropic = [
+    { name = "anthropic" },
+]
+demo = [
+    { name = "google-genai" },
+    { name = "httpx" },
+    { name = "prefect" },
+]
+dev = [
+    { name = "black" },
+    { name = "pytest" },
+    { name = "ruff" },
+]
+gemini = [
+    { name = "google-genai" },
+]
+local = [
+    { name = "openai" },
+]
+meta = [
+    { name = "matplotlib" },
+    { name = "scipy" },
+]
+openai = [
+    { name = "openai" },
+]
+orchestration = [
+    { name = "prefect" },
+]
+rag = [
+    { name = "qdrant-client" },
+]
+search = [
+    { name = "httpx" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.40" },
+    { name = "black", marker = "extra == 'dev'", specifier = ">=24.0" },
+    { name = "google-genai", marker = "extra == 'demo'", specifier = ">=1.0" },
+    { name = "google-genai", marker = "extra == 'gemini'", specifier = ">=1.0" },
+    { name = "httpx", marker = "extra == 'demo'", specifier = ">=0.27" },
+    { name = "httpx", marker = "extra == 'search'", specifier = ">=0.27" },
+    { name = "matplotlib", marker = "extra == 'meta'", specifier = ">=3.8" },
+    { name = "openai", marker = "extra == 'local'", specifier = ">=1.40" },
+    { name = "openai", marker = "extra == 'openai'", specifier = ">=1.40" },
+    { name = "prefect", marker = "extra == 'demo'", specifier = ">=3.0" },
+    { name = "prefect", marker = "extra == 'orchestration'", specifier = ">=3.0" },
+    { name = "pydantic", specifier = ">=2.7" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "qdrant-client", marker = "extra == 'rag'", specifier = ">=1.10" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
+    { name = "scipy", marker = "extra == 'meta'", specifier = ">=1.11" },
+]
+provides-extras = ["gemini", "openai", "anthropic", "local", "rag", "orchestration", "search", "meta", "demo", "dev"]
 
 [[package]]
 name = "rfc3339-validator"

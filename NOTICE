@@ -1,9 +1,9 @@
-prisma-loop
+RevisIA (formerly prisma-loop)
 Copyright 2026 Jhon Alexander Mosquera Vanegas
 
 This product includes software developed by Jhon Alexander Mosquera Vanegas.
 
-prisma-loop is a provider-agnostic, reproducible multi-agent system for
+RevisIA is a provider-agnostic, reproducible multi-agent system for
 generating drafts of systematic reviews under PRISMA 2020 + PRISMA-S +
 PRISMA-trAIce. It automates a canonical systematic-review methodology;
 it does not invent methodology.
@@ -18,3 +18,9 @@ The researcher-memory layer ("research brain") follows the file-based
 memory pattern of the "cerebro" project
 (https://github.com/jhonmosquerav/cerebro, MIT License): markdown + JSONL
 layers, no vectors, no servers.
+
+The bundled PRISMA 2020 flow-diagram data template
+(revisia/exports/data/prisma2020_template.csv) comes from the PRISMA2020
+R package by Neal Haddaway et al. (https://github.com/nealhaddaway/PRISMA2020,
+MIT License). The PRISMA 2020 checklists and flow-diagram structure follow
+Page MJ, et al. BMJ 2021;372:n71 (CC BY 4.0).

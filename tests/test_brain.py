@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from prisma_loop.memory import ResearchBrain
+from revisia.memory import ResearchBrain
 
 
 def test_record_review_escribe_las_capas(tmp_path) -> None:
@@ -166,7 +166,7 @@ def test_summary_agrupa_por_slug(tmp_path) -> None:
 
 
 def test_cli_brain_list_y_show(tmp_path, capsys) -> None:
-    from prisma_loop.cli import main
+    from revisia.cli import main
 
     brain_dir = tmp_path / "cerebro"
     ResearchBrain(brain_dir).record_review(

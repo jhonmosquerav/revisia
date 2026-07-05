@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from prisma_loop.agents.busqueda import reconstruct_abstract, work_to_record
+from revisia.agents.busqueda import reconstruct_abstract, work_to_record
 
 
 def test_reconstruct_abstract_ordena_por_posicion() -> None:

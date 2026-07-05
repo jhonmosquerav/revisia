@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from prisma_loop.agents.rob import TOOL_DOMAINS, assess_rob
-from prisma_loop.llm.providers.fake import FakeProvider
-from prisma_loop.schemas.records import SearchRecord
+from revisia.agents.rob import TOOL_DOMAINS, assess_rob
+from revisia.llm.providers.fake import FakeProvider
+from revisia.schemas.records import SearchRecord
 
 
 def test_cada_herramienta_tiene_dominios() -> None:

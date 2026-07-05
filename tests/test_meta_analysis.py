@@ -6,8 +6,8 @@ import math
 
 import pytest
 
-from prisma_loop.meta_analysis import meta_analyze
-from prisma_loop.schemas.effects import EffectInput
+from revisia.meta_analysis import meta_analyze
+from revisia.schemas.effects import EffectInput
 
 
 def test_fixed_effect_pooled_estimate() -> None:

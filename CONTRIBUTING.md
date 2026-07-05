@@ -1,6 +1,6 @@
-# Contribuir a prisma-loop
+# Contribuir a revisia
 
-Gracias por tu interés. `prisma-loop` es un sistema multiagéntico
+Gracias por tu interés. `revisia` es un sistema multiagéntico
 **provider-agnostic** y reproducible para generar borradores de revisiones
 sistemáticas bajo PRISMA 2020 + PRISMA-S + PRISMA-trAIce. Estas son las reglas
 para contribuir.
@@ -8,7 +8,7 @@ para contribuir.
 ## Principio rector (no negociable)
 
 > **La IA es un acelerador, no un reemplazo.** Siguiendo la posición de la
-> comunidad de síntesis de evidencia (Cochrane/JBI 2025), `prisma-loop` mantiene
+> comunidad de síntesis de evidencia (Cochrane/JBI 2025), `revisia` mantiene
 > **revisión humana obligatoria (HITL)** en cada etapa crítica. La decisión final
 > es siempre humana.
 
@@ -18,7 +18,7 @@ de A1, será rechazada. El sistema acelera y documenta; no decide solo.
 
 ## Arquitectura: motor ↔ config
 
-- `prisma_loop/` es **el motor**: nunca contiene nada de una revisión concreta.
+- `revisia/` es **el motor**: nunca contiene nada de una revisión concreta.
 - Cada revisión vive en `protocols/<slug>/` y produce `runs/<slug>-<fecha>/`.
 
 No mezcles datos de una revisión con el código del motor en un PR.
@@ -28,7 +28,7 @@ No mezcles datos de una revisión con el código del motor en un PR.
 Requiere **Python 3.13+** y [`uv`](https://docs.astral.sh/uv/).
 
 ```bash
-git clone <tu-fork> prisma-loop && cd prisma-loop
+git clone <tu-fork> revisia && cd revisia
 uv sync --extra dev          # instala el motor + herramientas de desarrollo
 uv run pytest -q             # 49 tests, offline, sin API key
 ```
@@ -49,12 +49,12 @@ uv run pytest -q             # todos los tests verdes
 Pautas:
 
 - **Tipos estrictos** y docstrings (estilo Google) en código nuevo.
-- **Structured output** vía esquemas Pydantic en `prisma_loop/schemas/`. No
+- **Structured output** vía esquemas Pydantic en `revisia/schemas/`. No
   parsees texto libre del LLM a mano; define/extiende un esquema.
-- **Prompts versionados**: viven en `prisma_loop/prompts/<etapa>/vN.md` y se
+- **Prompts versionados**: viven en `revisia/prompts/<etapa>/vN.md` y se
   hashean en el manifiesto. Si cambias un prompt, sube la versión.
 - **Proveedores**: para añadir uno nuevo, implementa el contrato
-  `prisma_loop/llm/base.py:LLMProvider`, regístralo en `llm/registry.py` y deja
+  `revisia/llm/base.py:LLMProvider`, regístralo en `llm/registry.py` y deja
   su SDK como *extra opcional* en `pyproject.toml` (import perezoso). El núcleo
   debe seguir importándose sin ese SDK.
 - **Métricas**: nunca uses "accuracy" en datos desbalanceados; usa

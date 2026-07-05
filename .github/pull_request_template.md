@@ -12,5 +12,5 @@
       saltándose el checkpoint humano ni sube la autonomía por encima de A1.
 - [ ] Se respeta **motor ↔ config**: no se mezclan datos de una revisión con el motor.
 - [ ] Si añade/modifica un proveedor LLM, el núcleo sigue importándose sin su SDK.
-- [ ] Si cambia un prompt, se subió la versión en `prisma_loop/prompts/<etapa>/vN.md`.
+- [ ] Si cambia un prompt, se subió la versión en `revisia/prompts/<etapa>/vN.md`.
 - [ ] No se incluyen `.env`, API keys, PDFs con copyright ni datos de terceros.

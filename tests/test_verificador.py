@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from prisma_loop.agents.verificador import extract_citations, verify_narrative
+from revisia.agents.verificador import extract_citations, verify_narrative
 
 
 def test_extrae_citas_sin_duplicar() -> None:

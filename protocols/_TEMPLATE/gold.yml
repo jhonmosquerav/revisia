@@ -5,7 +5,7 @@
 # MCC, WMCC y el kappa humano–IA. Sin gold, esas métricas no se reportan.
 #
 # El id (clave) es el record_id que verás en runs/<slug>-<fecha>/03_screening/decisions.json
-# (idealmente el DOI). Atajo: `prisma-loop gold-template runs/<slug>-<fecha>` genera
+# (idealmente el DOI). Atajo: `revisia gold-template runs/<slug>-<fecha>` genera
 # este archivo con los ids ya listados para que solo pongas true/false.
 #
 # Recomendación PRISMA: que un SEGUNDO revisor humano etiquete de forma

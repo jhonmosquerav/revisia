@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from prisma_loop.agents.verificador import verify_narrative
-from prisma_loop.rag.embed import HashEmbedder
-from prisma_loop.rag.store import cosine, semantic_similarity
+from revisia.agents.verificador import verify_narrative
+from revisia.rag.embed import HashEmbedder
+from revisia.rag.store import cosine, semantic_similarity
 
 
 def test_hash_embedder_determinista() -> None:

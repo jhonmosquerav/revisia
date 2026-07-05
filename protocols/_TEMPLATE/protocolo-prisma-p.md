@@ -17,7 +17,7 @@
 - **3b · Contribuciones:** _(quién diseña, criba, extrae, arbitra, redacta;
   declara qué etapas asiste la IA y quién supervisa cada una — trAIce M8)_
 - **4 · Enmiendas:** _(plan para documentar enmiendas al protocolo; el ledger
-  de prisma-loop registra desviaciones operativas con timestamp)_
+  de revisia registra desviaciones operativas con timestamp)_
 - **5a · Fuentes de apoyo:** _(financiación)_
 - **5b · Patrocinador:** _(si aplica)_
 - **5c · Rol del patrocinador/financiador:** _(en el diseño y la publicación)_
@@ -35,13 +35,13 @@
   con autores)_ → `protocol.yml: databases` (+ import RIS/BibTeX)
 - **10 · Estrategia de búsqueda:** _(cadena completa de al menos una base, tal
   que sea repetible — PRISMA-S)_ → `search_strings/<base>.txt`
-- **11a · Gestión de registros:** _(software y flujo de datos; prisma-loop
+- **11a · Gestión de registros:** _(software y flujo de datos; revisia
   produce `runs/<slug>-<fecha>/` con manifiesto reproducible)_
 - **11b · Proceso de selección:** _(cuántos revisores, independencia, cómo se
   resuelven desacuerdos; declara el papel del cribado IA: propone, no decide —
   autonomía A1 máx. y gold humano con κ)_
 - **11c · Proceso de extracción:** _(formularios piloto, doble extracción —
-  prisma-loop hace doble extracción del 20% con κ de presencia)_ → `extraction_form.yml`
+  revisia hace doble extracción del 20% con κ de presencia)_ → `extraction_form.yml`
 - **12 · Ítems de datos:** _(variables a extraer, supuestos y simplificaciones)_ → `extraction_form.yml`
 - **13 · Desenlaces y priorización:** _(desenlaces principales/adicionales con
   justificación)_
@@ -64,4 +64,4 @@
 > etapas asistirá la IA, con qué modelos/proveedores, con qué supervisión
 > humana y contra qué gold standard se evaluará el cribado. La corrida emitirá
 > la declaración verificable en `deliverable/checklist_traice.md` y la
-> auditoría (`prisma-loop audit`) comprobará la evidencia.
+> auditoría (`revisia audit`) comprobará la evidencia.

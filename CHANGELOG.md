@@ -1,8 +1,29 @@
 # Changelog
 
-Todos los cambios notables de `prisma-loop` se documentan aquí.
+Todos los cambios notables de `RevisIA` (antes `prisma-loop`) se documentan aquí.
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/)
 y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
+
+## [0.4.0] · 2026-07-05
+
+### Changed
+
+- **Rebrand: `prisma-loop` → `RevisIA`** (paquete `revisia`, CLI `revisia`,
+  repo `github.com/jhonmosquerav/revisia`). Verificado sin colisiones en
+  software/GitHub/PyPI. El nombre no incorpora "PRISMA" para no sugerir aval
+  del PRISMA Group: la relación es de cumplimiento, no de marca. GitHub
+  redirige las URLs del nombre anterior. Las entradas históricas de este
+  changelog conservan el nombre antiguo.
+- **Repositorio público** (antes privado durante la incubación).
+
+### Added
+
+- **`interop/prisma2020_flow.csv` en formato NATIVO del paquete R
+  `PRISMA2020`** (ESHackathon/Haddaway, MIT): la plantilla oficial del paquete
+  (vendorizada en `revisia/exports/data/`) se rellena con los conteos reales —
+  desglose por base, razones de exclusión (`"Razón, n; Razón, n"`) y
+  meta-análisis (box17). El archivo se importa tal cual en la Shiny app oficial
+  o con `PRISMA2020::PRISMA_data(read.csv(...))`.
 
 ## [0.3.0] · 2026-07-05
 

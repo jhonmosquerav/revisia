@@ -9,10 +9,10 @@ Una revisión sistemática end-to-end pasa por **tres planos**: el flujo PRISMA
 ```mermaid
 flowchart TB
     subgraph PREP["📋 Preparación (humano · A0)"]
-        NEW["prisma-loop new &lt;slug&gt;<br/>protocolo + PRISMA-P + preregistro"]
+        NEW["revisia new &lt;slug&gt;<br/>protocolo + PRISMA-P + preregistro"]
     end
 
-    subgraph PIPE["⚙️ Pipeline (prisma-loop run · un agente por etapa)"]
+    subgraph PIPE["⚙️ Pipeline (revisia run · un agente por etapa)"]
         BUS["🔎 busqueda · A2<br/>OpenAlex · Crossref · Semantic Scholar ·<br/>Europe PMC + import RIS/BibTeX"]
         DED["♻️ dedup · A2 (determinista)"]
         SCR["🤖 screening T/A · A1<br/>ensemble multi-modelo · voto pro-recall"]
@@ -28,7 +28,7 @@ flowchart TB
         VER["Verificador anti-alucinación<br/>(grounding por cita)"]
         HITL["Checkpoints humanos ✋<br/>ledger append-only"]
         GOLD["Gold standard escalonado<br/>recall · lost-evidence · MCC · κ"]
-        AUD["prisma-loop audit<br/>PASS/WARN/FAIL vs 2020/-S/trAIce"]
+        AUD["revisia audit<br/>PASS/WARN/FAIL vs 2020/-S/trAIce"]
     end
 
     subgraph OUT["📤 Entregable (runs/&lt;slug&gt;-&lt;fecha&gt;/deliverable)"]
@@ -39,7 +39,7 @@ flowchart TB
         BRAIN["genome/events.jsonl · wiki semantic/episodic · raw<br/>recall → living review (flow actualizado v3)"]
     end
 
-    CHECK["🔍 prisma-loop check &lt;manuscrito&gt;<br/>adherencia 27 ítems (estilo PRISMA-Check)"]
+    CHECK["🔍 revisia check &lt;manuscrito&gt;<br/>adherencia 27 ítems (estilo PRISMA-Check)"]
 
     NEW --> BUS --> DED --> SCR --> FT --> EXT --> ROB --> MA --> SIN --> REP --> DEL
     SCR -.-> VER
@@ -55,7 +55,7 @@ flowchart TB
 
 ## Los tres contratos del sistema
 
-1. **Motor ↔ config**: el código (`prisma_loop/`) no sabe nada de tu revisión;
+1. **Motor ↔ config**: el código (`revisia/`) no sabe nada de tu revisión;
    tu revisión (`protocols/<slug>/`) no contiene código. `protocol.yml` declara
    pregunta, bases, herramienta RoB, **proveedor LLM por etapa** y **autonomía
    por etapa** (A0–A3; el juicio nunca supera A1).

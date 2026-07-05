@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from prisma_loop.agents.fulltext import fetch_fulltext, resolve_oa_url, strip_html
-from prisma_loop.schemas.records import SearchRecord
+from revisia.agents.fulltext import fetch_fulltext, resolve_oa_url, strip_html
+from revisia.schemas.records import SearchRecord
 
 
 def test_strip_html_quita_etiquetas_y_scripts() -> None:

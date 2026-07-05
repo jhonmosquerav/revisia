@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from prisma_loop.config import load_protocol
+from revisia.config import load_protocol
 
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "protocols" / "_TEMPLATE"
 

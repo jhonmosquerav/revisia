@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import math
 
-from prisma_loop.metrics import (
+from revisia.metrics import (
     cohen_kappa,
     compute_screening_metrics,
     confusion,
     mcc,
     wmcc,
 )
-from prisma_loop.schemas.screening import ScreeningDecision
+from revisia.schemas.screening import ScreeningDecision
 
 
 def test_confusion_y_recall() -> None:

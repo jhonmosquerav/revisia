@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from prisma_loop.llm.ensemble import recall_biased_label
+from revisia.llm.ensemble import recall_biased_label
 
 
 def test_incluye_si_cualquiera_incluye() -> None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from prisma_loop.provenance import DecisionEntry, DecisionLedger, RunMeta, sha256_text
+from revisia.provenance import DecisionEntry, DecisionLedger, RunMeta, sha256_text
 
 
 def test_sha256_text_es_determinista() -> None:

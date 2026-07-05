@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from prisma_loop.config import ReviewProtocol
-from prisma_loop.exclusions import compute_exclusion_breakdown
-from prisma_loop.exports import PrismaCounts, render_methods
-from prisma_loop.extraction_agreement import (
+from revisia.config import ReviewProtocol
+from revisia.exclusions import compute_exclusion_breakdown
+from revisia.exports import PrismaCounts, render_methods
+from revisia.extraction_agreement import (
     compute_extraction_agreement,
     select_double_extraction_subset,
 )
-from prisma_loop.schemas.extraction import ExtractionField, ExtractionRecord
-from prisma_loop.schemas.records import SearchRecord
-from prisma_loop.schemas.screening import ScreeningDecision
+from revisia.schemas.extraction import ExtractionField, ExtractionRecord
+from revisia.schemas.records import SearchRecord
+from revisia.schemas.screening import ScreeningDecision
 
 # ── Exclusiones humano vs IA ───────────────────────────────────────────
 

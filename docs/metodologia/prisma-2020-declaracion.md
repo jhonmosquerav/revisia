@@ -170,7 +170,7 @@ Recomendaciones del artículo a autores, revistas y editoriales:
 
 ## Implicaciones para automatización
 
-> **Análisis propio** (no proviene del artículo): traducción de las exigencias de PRISMA 2020 a requisitos de diseño para un sistema que genere o asista revisiones sistemáticas con IA (tipo prisma-loop). El hilo conductor: PRISMA 2020 ya contempla la automatización —los ítems 8, 9 y 11 piden explícitamente los detalles de "herramientas de automatización utilizadas en el proceso"— así que un pipeline agéntico no solo es compatible con PRISMA: está obligado a **autodescribirse**.
+> **Análisis propio** (no proviene del artículo): traducción de las exigencias de PRISMA 2020 a requisitos de diseño para un sistema que genere o asista revisiones sistemáticas con IA (tipo revisia). El hilo conductor: PRISMA 2020 ya contempla la automatización —los ítems 8, 9 y 11 piden explícitamente los detalles de "herramientas de automatización utilizadas en el proceso"— así que un pipeline agéntico no solo es compatible con PRISMA: está obligado a **autodescribirse**.
 
 | Exigencia PRISMA | Requisito del sistema automatizado |
 |------------------|-------------------------------------|

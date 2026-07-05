@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from prisma_loop.agents import verificador
-from prisma_loop.llm import ProviderConfig, build_provider
-from prisma_loop.rag.grounding import GroundingVerdict, make_provider_judge
+from revisia.agents import verificador
+from revisia.llm import ProviderConfig, build_provider
+from revisia.rag.grounding import GroundingVerdict, make_provider_judge
 
 
 def test_make_provider_judge_con_fake_devuelve_veredicto() -> None:
@@ -41,7 +41,7 @@ def test_verify_narrative_usa_el_juez_y_marca_no_grounded() -> None:
 
 def test_juez_tiene_prioridad_sobre_embedder() -> None:
     # Con juez Y embedder, manda el juez.
-    from prisma_loop.rag.embed import HashEmbedder
+    from revisia.rag.embed import HashEmbedder
 
     def judge(claim: str, source: str) -> GroundingVerdict:
         return GroundingVerdict(grounded=True, support_quote="ok")

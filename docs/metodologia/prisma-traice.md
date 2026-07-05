@@ -25,7 +25,7 @@ nota_traduccion: "Todo el contenido en español de este documento es traducción
 documentos_origen:
   - "kb-jmir-ai-e80247.md (ruta JMIR/GitHub)"
   - "kb-pmc12694947.md (ruta PMC/GitHub)"
-relevancia_prisma_loop: "MUY ALTA — checklist de reporte para la IA como HERRAMIENTA metodológica dentro de una revisión sistemática; mapea 1:1 con lo que prisma-loop debe auto-documentar en cada corrida"
+relevancia_revisia: "MUY ALTA — checklist de reporte para la IA como HERRAMIENTA metodológica dentro de una revisión sistemática; mapea 1:1 con lo que revisia debe auto-documentar en cada corrida"
 ---
 
 # PRISMA-trAIce: checklist para el reporte transparente de IA en revisiones sistemáticas de literatura
@@ -143,7 +143,7 @@ Implicación operativa (R1 + Figura 1) — el reporte debe registrar por etapa:
 
 `[Nota de los extractores]` El repo GitHub publica el diagrama en `.png` y `.webp` reutilizables (licencia MIT); la imagen no se extrajo pero está disponible allí.
 
-## 6. Qué aporta a un sistema agéntico de revisiones sistemáticas (mapeo a prisma-loop)
+## 6. Qué aporta a un sistema agéntico de revisiones sistemáticas (mapeo a revisia)
 
 `[Elaboración propia de los extractores a partir del paper — no es contenido del artículo]`
 
@@ -162,12 +162,12 @@ Implicación operativa (R1 + Figura 1) — el reporte debe registrar por etapa:
 11. **Gobernanza de datos (M10)**: declarar dónde se almacenan entradas/salidas/intermedios, y el cumplimiento de términos de servicio y copyright al enviar textos completos a APIs de terceros en la nube.
 12. **Secciones automáticas de transparencia (T1, A1, I1, D1, D2)**: el redactor del informe final debe insertar por defecto la mención de asistencia de IA en título/resumen, la justificación del uso en la introducción, y las limitaciones e implicaciones del uso de IA en la discusión.
 
-### 6.2 Aplicación directa a prisma-loop
+### 6.2 Aplicación directa a revisia
 
-- **Mapa 1:1 con el reporte de corrida**: prisma-loop puede auto-generar el cumplimiento de los 17 rótulos en cada ejecución — M2 (modelo/versión/proveedor por agente), M6 (prompts completos + temperature/top-p, ya versionados en config), M5 (formatos JSON de salida + post-procesado), M8 (gold HITL: cuántos humanos, proporción verificada, resolución de discrepancias), M9/R2 (métricas contra gold set), R1 (flow diagram con conteos IA vs. humano separados).
-- **El flow diagram extendido es implementable de inmediato**: prisma-loop ya distingue qué exclusiones son del driver y cuáles del humano; basta emitir los campos separados.
+- **Mapa 1:1 con el reporte de corrida**: revisia puede auto-generar el cumplimiento de los 17 rótulos en cada ejecución — M2 (modelo/versión/proveedor por agente), M6 (prompts completos + temperature/top-p, ya versionados en config), M5 (formatos JSON de salida + post-procesado), M8 (gold HITL: cuántos humanos, proporción verificada, resolución de discrepancias), M9/R2 (métricas contra gold set), R1 (flow diagram con conteos IA vs. humano separados).
+- **El flow diagram extendido es implementable de inmediato**: revisia ya distingue qué exclusiones son del driver y cuáles del humano; basta emitir los campos separados.
 - **M1 sugiere plantilla de protocolo**: pre-declarar el uso de agentes en el protocolo PROSPERO/OSF antes de la corrida.
-- **Estándar complementario, no competidor**: trAIce es *reporting*, no *conducta*; convive con PRISMA 2020 y con las métricas internas de prisma-loop.
+- **Estándar complementario, no competidor**: trAIce es *reporting*, no *conducta*; convive con PRISMA 2020 y con las métricas internas de revisia.
 - **Es una guía viva en GitHub con licencia MIT**: se puede vendorear el checklist como asset versionado y rastrear sus releases anuales.
 
 ## 7. Gobernanza del estándar: la "guía viva" (living guideline)

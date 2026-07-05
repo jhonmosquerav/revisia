@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from prisma_loop.exports import (
+from revisia.exports import (
     PrismaCounts,
     render_metafor_csv,
     render_prisma2020_flow_csv,
     render_prisma_abstracts_checklist,
     render_robvis_csv,
 )
-from prisma_loop.meta_analysis import meta_analyze
-from prisma_loop.schemas.effects import EffectInput
-from prisma_loop.schemas.rob import RoBAssessment, RoBDomain
+from revisia.meta_analysis import meta_analyze
+from revisia.schemas.effects import EffectInput
+from revisia.schemas.rob import RoBAssessment, RoBDomain
 
 
 def test_robvis_csv_una_fila_por_estudio() -> None:
@@ -56,21 +56,36 @@ def test_metafor_csv_trae_yi_vi() -> None:
     assert "0.2" in lines[1] and "0.04" in lines[1]
 
 
-def test_prisma2020_flow_csv_conteos() -> None:
+def test_prisma2020_flow_csv_formato_nativo_paquete_r() -> None:
     counts = PrismaCounts(
         identified=100,
+        identified_by_source={"openalex": 60, "crossref": 40},
         duplicates_removed=20,
         screened=80,
         excluded_ta=60,
         fulltext_assessed=20,
         excluded_ft=5,
+        ft_exclusion_reasons={"población incorrecta": 3, "diseño no elegible": 2},
         included=15,
     )
-    csv_text = render_prisma2020_flow_csv(counts)
+    csv_text = render_prisma2020_flow_csv(counts, meta_k=7)
     lines = csv_text.strip().splitlines()
-    assert lines[0] == "phase,box,n"
-    assert "identification,Records identified from databases,100" in lines
-    assert "included,Studies included in review,15" in lines
+    # Cabecera EXACTA de la plantilla oficial del paquete R PRISMA2020
+    assert lines[0] == "data,node,box,description,boxtext,tooltips,url,n"
+    joined = "\n".join(lines)
+    # Identificadores del paquete rellenados con los conteos reales
+    assert "database_results," in joined
+    row = next(line for line in lines if line.startswith("database_results,"))
+    assert row.endswith(",100")
+    row = next(line for line in lines if line.startswith("records_screened,"))
+    assert row.endswith(",80")
+    # Desglose por base y razones en el formato "Etiqueta, n; Etiqueta, n"
+    assert '"crossref, 40; openalex, 60"' in joined
+    assert '"diseño no elegible, 2; población incorrecta, 3"' in joined
+    # Meta-análisis (box17) y estructura completa de la plantilla (35 filas)
+    row = next(line for line in lines if line.startswith("total_studies_ma,"))
+    assert row.endswith(",7")
+    assert len(lines) == 35
 
 
 def test_checklist_abstracts_prerellena_evidencia() -> None:

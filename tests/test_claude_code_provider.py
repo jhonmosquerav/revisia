@@ -14,9 +14,9 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel
 
-from prisma_loop.llm import LLMProvider, ProviderConfig, build_provider
-from prisma_loop.llm.base import LLMRequest
-from prisma_loop.llm.providers import claude_code as cc
+from revisia.llm import LLMProvider, ProviderConfig, build_provider
+from revisia.llm.base import LLMRequest
+from revisia.llm.providers import claude_code as cc
 
 
 class _Decision(BaseModel):

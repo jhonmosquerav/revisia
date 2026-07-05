@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from prisma_loop.exports import render_bibtex, render_extraction_table
-from prisma_loop.schemas.extraction import ExtractionField, ExtractionRecord
-from prisma_loop.schemas.records import SearchRecord
+from revisia.exports import render_bibtex, render_extraction_table
+from revisia.schemas.extraction import ExtractionField, ExtractionRecord
+from revisia.schemas.records import SearchRecord
 
 
 def _record(rid: str = "10.1/abc", **kw) -> SearchRecord:

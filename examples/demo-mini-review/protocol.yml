@@ -1,9 +1,9 @@
-# Demo · tracer bullet de prisma-loop.
+# Demo · tracer bullet de revisia.
 # Usa el proveedor 'fake' (determinista, sin API key) para que cualquiera vea el
 # recorrido completo offline. La búsqueda SÍ es real (OpenAlex, gratis, sin key);
 # para una corrida 100% sin red, los tests inyectan una búsqueda simulada.
 #
-#   uv run prisma-loop run examples/demo-mini-review --auto-approve --max 8
+#   uv run revisia run examples/demo-mini-review --auto-approve --max 8
 
 title: "Demo · Revisión mini (tracer bullet)"
 

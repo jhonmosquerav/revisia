@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from prisma_loop.agents import search_backends
-from prisma_loop.agents.search_backends import available_backends, search_database
-from prisma_loop.ingest import import_directory, parse_bibtex, parse_ris
+from revisia.agents import search_backends
+from revisia.agents.search_backends import available_backends, search_database
+from revisia.ingest import import_directory, parse_bibtex, parse_ris
 
 
 def test_backends_registrados() -> None:

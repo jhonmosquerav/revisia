@@ -11,9 +11,9 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
-from prisma_loop.llm import LLMProvider, ProviderConfig, build_provider
-from prisma_loop.llm.base import LLMRequest
-from prisma_loop.llm.providers import agent
+from revisia.llm import LLMProvider, ProviderConfig, build_provider
+from revisia.llm.base import LLMRequest
+from revisia.llm.providers import agent
 
 
 class _Decision(BaseModel):
