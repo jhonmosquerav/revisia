@@ -106,6 +106,7 @@ def _cmd_gold_template(args: argparse.Namespace) -> int:
 def _cmd_run(args: argparse.Namespace) -> int:
     from prisma_loop.orchestration.flow import run_review
 
+    prior = None
     if args.brain:
         from prisma_loop.memory import ResearchBrain
 
@@ -143,6 +144,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
             ResearchBrain(args.brain).record_from_run(result.run_dir)
             print(f"  Cerebro: revisión sedimentada en {args.brain}/")
+            if prior is not None and result.counts is not None:
+                from prisma_loop.exports import render_flow_updated
+
+                current_ids = {r.record_id for r in result.included}
+                previous_ids = set(prior.last_included_ids)
+                flow_updated = render_flow_updated(
+                    result.counts,
+                    previous_included=len(previous_ids),
+                    new_included=len(current_ids - previous_ids),
+                    dropped_from_previous=len(previous_ids - current_ids),
+                )
+                out = result.run_dir / "deliverable" / "prisma_flow_updated.md"
+                out.write_text(flow_updated, encoding="utf-8")
+                print(f"  Living review: flow diagram de actualización → {out}")
     if result.metrics is not None:
         m = result.metrics
         recall = "n/d" if m.recall is None else f"{m.recall:.2f}"
@@ -152,6 +167,65 @@ def _cmd_run(args: argparse.Namespace) -> int:
             f"· MCC={m.mcc:.2f} · WMCC={m.wmcc:.2f} · kappa={m.cohen_kappa:.2f}"
         )
     return 0 if result.status in {"completed", "paused"} else 1
+
+
+def _cmd_new(args: argparse.Namespace) -> int:
+    """Crea una revisión nueva a partir de la plantilla (`protocols/_TEMPLATE`)."""
+    import shutil
+
+    template = Path(args.template)
+    if not template.exists():
+        print(f"error: la plantilla {args.template!r} no existe.", file=sys.stderr)
+        return 2
+    dest = Path(args.dest) if args.dest else Path("protocols") / args.slug
+    if dest.exists():
+        print(f"error: {dest} ya existe.", file=sys.stderr)
+        return 2
+    shutil.copytree(template, dest)
+    proto_file = dest / "protocol.yml"
+    if proto_file.exists():
+        text = proto_file.read_text(encoding="utf-8")
+        text = text.replace(
+            "Plantilla · Revisión Sistemática PRISMA 2020",
+            f"{args.slug} · Revisión Sistemática PRISMA 2020",
+            1,
+        )
+        proto_file.write_text(text, encoding="utf-8")
+    print(f"✓ Revisión '{args.slug}' creada en {dest}")
+    print("  Siguientes pasos:")
+    print(f"    1. Edita {dest / 'protocol.yml'} (pregunta, bases, autonomía, proveedor)")
+    print(f"    2. Preregistra el protocolo con {dest / 'protocolo-prisma-p.md'} (PRISMA-P)")
+    print(f"    3. Valida:  prisma-loop validate {dest}")
+    print(f"    4. Ejecuta: prisma-loop run {dest} --brain cerebro")
+    print(f"    5. Audita:  prisma-loop audit runs/{args.slug}-<fecha>")
+    return 0
+
+
+def _cmd_check(args: argparse.Namespace) -> int:
+    """Pre-chequeo de adherencia de un manuscrito al checklist PRISMA 2020."""
+    from prisma_loop.check import check_manuscript, render_adherence_md
+    from prisma_loop.llm.registry import ProviderConfig
+
+    source = Path(args.manuscript)
+    if not source.exists():
+        print(f"error: el manuscrito {args.manuscript!r} no existe.", file=sys.stderr)
+        return 2
+    cfg = ProviderConfig(provider=args.provider, model=args.model, temperature=0.0)
+    report, meta = check_manuscript(source.read_text(encoding="utf-8"), cfg)
+    markdown = render_adherence_md(
+        report, source_name=source.name, model=f"{meta.provider}:{meta.model}"
+    )
+    out = Path(args.out) if args.out else source.with_suffix(".prisma-check.md")
+    out.write_text(markdown, encoding="utf-8")
+    judged = {i.item: i.status for i in report.items}
+    covered = sum(1 for s in judged.values() if s == "cubierto")
+    partial = sum(1 for s in judged.values() if s == "parcial")
+    absent = sum(1 for s in judged.values() if s == "ausente")
+    print(f"✓ Pre-chequeo PRISMA 2020 de {source.name} ({meta.provider}:{meta.model})")
+    print(f"  ✅ cubiertos: {covered} · 🟡 parciales: {partial} · ❌ ausentes: {absent}")
+    print(f"  Informe: {out}")
+    print("  (pre-chequeo asistido por IA: no sustituye la revisión editorial humana)")
+    return 0
 
 
 def _cmd_audit(args: argparse.Namespace) -> int:
@@ -248,6 +322,31 @@ def build_parser() -> argparse.ArgumentParser:
         "--out", default=None, help="Ruta de salida (default: <run_dir>/gold_template.yml)."
     )
 
+    p_new = sub.add_parser(
+        "new",
+        help="Crea una revisión nueva desde la plantilla (protocols/_TEMPLATE).",
+    )
+    p_new.add_argument("slug", help="Identificador de la revisión (ej. mi-revision).")
+    p_new.add_argument("--dest", default=None, help="Carpeta destino (default: protocols/<slug>).")
+    p_new.add_argument(
+        "--template",
+        default="protocols/_TEMPLATE",
+        help="Plantilla origen (default: protocols/_TEMPLATE).",
+    )
+
+    p_check = sub.add_parser(
+        "check",
+        help="Pre-chequeo de adherencia de un manuscrito al checklist PRISMA 2020 (27 ítems).",
+    )
+    p_check.add_argument("manuscript", help="Manuscrito a evaluar (.md o texto plano).")
+    p_check.add_argument("--provider", default="gemini", help="Proveedor LLM (default: gemini).")
+    p_check.add_argument(
+        "--model", default="gemini-2.0-flash", help="Modelo (default: gemini-2.0-flash)."
+    )
+    p_check.add_argument(
+        "--out", default=None, help="Informe de salida (default: <manuscrito>.prisma-check.md)."
+    )
+
     p_audit = sub.add_parser(
         "audit",
         help="Audita una corrida terminada contra PRISMA 2020 / PRISMA-S / PRISMA-trAIce.",
@@ -271,6 +370,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "gold-template":
         return _cmd_gold_template(args)
+    if args.command == "new":
+        return _cmd_new(args)
+    if args.command == "check":
+        return _cmd_check(args)
     if args.command == "audit":
         return _cmd_audit(args)
     if args.command == "brain":

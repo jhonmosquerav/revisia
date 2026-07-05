@@ -19,7 +19,7 @@ keywords:
   - open science
   - reproducibility
 license: Apache-2.0
-version: "0.2.0"
+version: "0.3.0"
 date-released: "2026-07-05"
 repository-code: "https://github.com/jhonmosquerav/prisma-loop"
 url: "https://github.com/jhonmosquerav/prisma-loop"

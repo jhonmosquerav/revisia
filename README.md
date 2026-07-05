@@ -2,7 +2,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-118%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-125%20passing-brightgreen.svg)](tests/)
 [![PRISMA 2020](https://img.shields.io/badge/PRISMA-2020%20%2B%20S%20%2B%20trAIce-8A2BE2.svg)](#fundamento-metodológico)
 
 **Sistema multiagéntico, provider-agnostic y reproducible para generar
@@ -41,12 +41,18 @@ protocolo →[✋]→ búsqueda multi-base → dedup → screening T/A (ensemble
 - `documento.md` · borrador de síntesis narrativa (SWiM)
 - `meta_analisis.md` + `assets/forest.png`, `funnel.png` · síntesis cuantitativa
   (efectos fijos/aleatorios, I²/τ², Egger) **si el protocolo aporta `effects.yml`**
-- `prisma_flow.md` · diagrama de flujo PRISMA 2020
+- `prisma_flow.md` · diagrama de flujo con la estructura de la **plantilla
+  oficial** PRISMA 2020: desglose por base, exclusiones **humano vs IA**
+  (nota ** oficial · trAIce R1) y **razones de exclusión** en elegibilidad;
+  con `--brain` y memoria previa se emite además `prisma_flow_updated.md`
+  (plantilla v3 · living review)
 - `tabla_extraccion.md` · características de los estudios incluidos
 - `risk_of_bias.md` · tabla de riesgo de sesgo
 - `referencias.bib` · bibliografía BibTeX
-- `checklist_2020.md` + `checklist_abstracts.md` + `checklist_traice.md` ·
-  checklists (27 ítems + 12 de resúmenes + uso de IA)
+- `checklist_2020.md` + `checklist_s.md` + `checklist_abstracts.md` +
+  `checklist_traice.md` · checklists (27 ítems + PRISMA-S 16 ítems de
+  búsqueda + 12 de resúmenes + uso de IA), pre-rellenados con la evidencia
+  de la corrida
 - `interop/` · exports para herramientas del ecosistema: `robvis.csv`,
   `effects_metafor.csv`, `prisma2020_flow.csv` (ver [`docs/integraciones.md`](docs/integraciones.md))
 
@@ -81,15 +87,21 @@ uv sync --extra demo
 cp .env.example .env   # edita .env y pon tu API key (default: Gemini, tier gratis)
 #    ¿Usas Claude Code? No necesitas API key: ver "Usar Claude Code" más abajo.
 
-# 3. Crear tu revisión a partir de la plantilla
-cp -r protocols/_TEMPLATE protocols/mi-revision
-#     edita protocols/mi-revision/protocol.yml
+# 3. Crear tu revisión (scaffold completo: protocol.yml + PRISMA-P + gold + cadenas)
+uv run prisma-loop new mi-revision
+#     edita protocols/mi-revision/protocol.yml y preregistra (PRISMA-P)
 
 # 4. Ejecutar el pipeline (se pausa en cada checkpoint humano)
-uv run prisma-loop run protocols/mi-revision
+uv run prisma-loop run protocols/mi-revision --brain cerebro
 
-# 5. Revisar y aprobar en cada checkpoint; al final se exporta el
-#    entregable + checklists + diagrama a runs/mi-revision-<fecha>/
+# 5. Auditar la corrida antes de usarla (PASS/WARN/FAIL + publicabilidad)
+uv run prisma-loop audit runs/mi-revision-<fecha>
+```
+
+Y cuando el manuscrito esté escrito, pre-chequea su adherencia al checklist:
+
+```bash
+uv run prisma-loop check manuscrito.md          # 27 ítems: ✅/🟡/❌ + evidencia
 ```
 
 ## Estado

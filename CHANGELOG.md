@@ -4,6 +4,39 @@ Todos los cambios notables de `prisma-loop` se documentan aquí.
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/)
 y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.3.0] · 2026-07-05
+
+Revisión exhaustiva del ecosistema oficial PRISMA (sitio, plantillas,
+herramientas) volcada al motor.
+
+### Added
+
+- **Flow diagram con la estructura de las plantillas oficiales** — `PrismaCounts`
+  ampliado y render fiel a la plantilla v1 (CC BY 4.0): desglose de identificados
+  **por base** (nota *), cajas de eliminados pre-cribado (duplicados /
+  automatización / otros), exclusiones T/A **separadas humano vs IA** (nota **
+  oficial = trAIce R1), informes sin texto completo recuperable (declarado), y
+  **razones de exclusión** en elegibilidad (cajas "Reason 1..n") agregadas de los
+  criterios violados reales del cribado.
+- **Flow diagram de revisiones actualizadas (plantilla v3)** —
+  `render_flow_updated`: con `--brain` y memoria previa, la corrida emite
+  `prisma_flow_updated.md` con estudios de la versión anterior, nuevos incluidos,
+  retirados y total consolidado (**living review** de primera clase).
+- **Checklist PRISMA-S** (16 ítems; Rethlefsen et al. 2021, CC BY) —
+  `deliverable/checklist_s.md` pre-rellenado: bases, cadenas versionadas,
+  ventana/límites, fechas de ejecución, totales por base y método de
+  deduplicación.
+- **`prisma-loop new <slug>`** — scaffold de una revisión completa desde
+  `_TEMPLATE` (protocol.yml renombrado + PRISMA-P + gold + cadenas) con los
+  siguientes pasos impresos.
+- **`prisma-loop check <manuscrito>`** — pre-chequeo de adherencia de un
+  manuscrito a los 27 ítems PRISMA 2020 con cualquier proveedor
+  (`--provider/--model`): estado ✅/🟡/❌ por ítem con evidencia textual, informe
+  `<manuscrito>.prisma-check.md`. En la línea de PRISMA-Check (la herramienta
+  oficial anunciada "en desarrollo"), con `RunMeta` para declararlo bajo trAIce.
+- `docs/arquitectura.md` — esquema de funcionamiento completo (tres planos:
+  pipeline, defensa en profundidad, memoria).
+
 ## [0.2.0] · 2026-07-05
 
 Primera versión como **repositorio independiente** (hasta ahora el desarrollo

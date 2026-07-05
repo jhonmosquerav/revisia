@@ -7,6 +7,7 @@ from prisma_loop.exports.bibliography import render_bibtex
 from prisma_loop.exports.checklist import (
     render_prisma_2020_checklist,
     render_prisma_abstracts_checklist,
+    render_prisma_s_checklist,
     render_traice_checklist,
 )
 from prisma_loop.exports.extraction_table import render_extraction_table
@@ -21,7 +22,12 @@ from prisma_loop.exports.interop import (
     render_robvis_csv,
 )
 from prisma_loop.exports.methods import render_methods
-from prisma_loop.exports.prisma_flow import PrismaCounts, render_flow_diagram, render_flow_markdown
+from prisma_loop.exports.prisma_flow import (
+    PrismaCounts,
+    render_flow_diagram,
+    render_flow_markdown,
+    render_flow_updated,
+)
 
 __all__ = [
     "PrismaCounts",
@@ -29,6 +35,7 @@ __all__ = [
     "render_extraction_table",
     "render_flow_diagram",
     "render_flow_markdown",
+    "render_flow_updated",
     "render_forest_markdown",
     "render_forest_png",
     "render_funnel_png",
@@ -37,6 +44,7 @@ __all__ = [
     "render_prisma2020_flow_csv",
     "render_prisma_2020_checklist",
     "render_prisma_abstracts_checklist",
+    "render_prisma_s_checklist",
     "render_robvis_csv",
     "render_traice_checklist",
 ]

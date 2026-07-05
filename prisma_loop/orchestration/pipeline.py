@@ -40,6 +40,7 @@ from prisma_loop.exports import (
     render_prisma2020_flow_csv,
     render_prisma_2020_checklist,
     render_prisma_abstracts_checklist,
+    render_prisma_s_checklist,
     render_robvis_csv,
     render_traice_checklist,
 )
@@ -246,8 +247,11 @@ def run_pipeline(
     ft_model = f"{ft_cfg.provider}:{ft_cfg.model}"
     fulltexts: dict[str, str] = {}
     ft_decisions = []
+    ft_abstract_only = 0
     for record in passed_ta:
         ft = fetch(record)
+        if not ft.available:
+            ft_abstract_only += 1
         fulltexts[record.record_id] = ft.text or (record.abstract or "")
         decision, meta = screening_ft_agent.screen_fulltext(
             ft_provider,
@@ -288,6 +292,16 @@ def run_pipeline(
     # Desglose de exclusiones humano vs IA (PRISMA-trAIce) sobre ambas fases.
     exclusion_breakdown = compute_exclusion_breakdown(decisions + ft_decisions)
     run_ctx.write_json("03_screening/exclusions.json", exclusion_breakdown.model_dump())
+    # Solo fase T/A: alimenta la nota ** del flow diagram oficial (trAIce R1).
+    ta_breakdown = compute_exclusion_breakdown(decisions)
+
+    # Razones de exclusión en elegibilidad (cajas "Reason 1..n" del flow oficial).
+    ft_exclusion_reasons: dict[str, int] = {}
+    for d in ft_decisions:
+        if d.final_label == "exclude":
+            violated = [c for v in d.votes for c in v.criteria_violated]
+            reason = violated[0] if violated else "criterio no especificado"
+            ft_exclusion_reasons[reason] = ft_exclusion_reasons.get(reason, 0) + 1
 
     # ── 6. Extracción de datos (A0) ─────────────────────────────────────
     extract_cfg = protocol.provider_for("extraccion")
@@ -426,13 +440,21 @@ def run_pipeline(
     run_ctx.write_json("06_synthesis/verification.json", verification.model_dump())
 
     # ── 10. Conteos PRISMA + entregables ────────────────────────────────
+    identified_by_source: dict[str, int] = {}
+    for r in raw_records:
+        identified_by_source[r.source_db] = identified_by_source.get(r.source_db, 0) + 1
     counts = PrismaCounts(
         identified=len(raw_records),
+        identified_by_source=identified_by_source,
         duplicates_removed=discarded,
         screened=len(deduped),
         excluded_ta=excluded_ta,
+        excluded_ta_human=ta_breakdown.excluded_human,
+        excluded_ta_ai=ta_breakdown.excluded_ai,
         fulltext_assessed=len(passed_ta),
+        fulltext_abstract_only=ft_abstract_only,
         excluded_ft=excluded_ft,
+        ft_exclusion_reasons=ft_exclusion_reasons,
         included=len(included),
     )
     deliverable = run_ctx.deliverable_dir()
@@ -472,6 +494,14 @@ def run_pipeline(
         render_forest_png(meta_result, assets / "forest.png")
         render_funnel_png(meta_result, assets / "funnel.png")
     (deliverable / "checklist_2020.md").write_text(render_prisma_2020_checklist(), encoding="utf-8")
+    (deliverable / "checklist_s.md").write_text(
+        render_prisma_s_checklist(
+            databases=list(protocol.databases),
+            search_window=protocol.search_window,
+            counts=counts,
+        ),
+        encoding="utf-8",
+    )
     (deliverable / "checklist_abstracts.md").write_text(
         render_prisma_abstracts_checklist(
             counts=counts,

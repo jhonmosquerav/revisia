@@ -10,6 +10,7 @@ licencia y fecha de consulta.
 | [`prisma-2020-declaracion.md`](prisma-2020-declaracion.md) | Page et al., BMJ 2021;372:n71 (trad. oficial Rev Esp Cardiol, CC BY-NC-ND — contenido parafraseado) | Declaración oficial · peer-reviewed | Los 27 ítems (42 con sub-ítems) + 12 de resúmenes, novedades vs 2009, mapeo ítem→automatización |
 | [`prisma-2020-recursos-oficiales.md`](prisma-2020-recursos-oficiales.md) | prisma-statement.org (CC BY 4.0) | Sitio oficial | Checklists verbatim EN + trad. ES, 4 plantillas del flow diagram con sus cajas/conteos, 20 extensiones publicadas + 11 en desarrollo, herramientas oficiales |
 | [`prisma-traice.md`](prisma-traice.md) | Holst et al., JMIR AI 2025;4:e80247 · PMC12694947 (CC BY) | Extensión · peer-reviewed · **guía viva** ([repo](https://github.com/cqh4046/PRISMA-trAIce), MIT) | Los 17 ítems (T1, A1, I1, M1–M10, R1–R2, D1–D2) para reportar IA como herramienta metodológica; extracción doble-independiente convergente |
+| [`prisma-s-checklist.md`](prisma-s-checklist.md) | Rethlefsen et al., Syst Rev 2021;10:39 (CC BY) | Extensión · peer-reviewed | Los 16 ítems de reporte de búsquedas (verbatim EN + trad. ES) que fundamenta el `checklist_s.md` de cada corrida |
 | [`panorama-ia-rs-no-revisado.md`](panorama-ia-rs-no-revisado.md) | Blog comercial (ProofreaderPro) | **No revisado por pares** — usar con cautela | Flujo de 10 pasos IA+PRISMA, gate de calibración κ≥0,7, plantillas de divulgación; afirmaciones cuantitativas marcadas como no verificadas |
 
 ## Cómo se usa esta base

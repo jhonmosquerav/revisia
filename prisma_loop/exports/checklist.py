@@ -78,6 +78,80 @@ def render_prisma_2020_checklist() -> str:
     return "\n".join(lines)
 
 
+# (número, sección, título corto) · PRISMA-S (16 ítems) — extensión para reportar
+# búsquedas bibliográficas. Rethlefsen ML, et al. Syst Rev 2021;10:39.
+# doi:10.1186/s13643-020-01542-z (CC BY 4.0).
+_PRISMA_S_ITEMS: list[tuple[int, str, str]] = [
+    (1, "Fuentes y métodos", "Nombre de cada base de datos consultada (con plataforma)"),
+    (2, "Fuentes y métodos", "Búsqueda multi-base: si se lanzó en varias a la vez, listarlas"),
+    (3, "Fuentes y métodos", "Registros de estudios consultados (ensayos, protocolos)"),
+    (4, "Fuentes y métodos", "Recursos en línea y navegación (webs, motores, repositorios)"),
+    (5, "Fuentes y métodos", "Búsqueda por citas (hacia atrás/adelante), con herramienta"),
+    (6, "Fuentes y métodos", "Contactos: autores, expertos, fabricantes consultados"),
+    (7, "Fuentes y métodos", "Otros métodos adicionales de identificación"),
+    (8, "Estrategias de búsqueda", "Estrategia COMPLETA de cada base, tal que sea repetible"),
+    (9, "Estrategias de búsqueda", "Límites y restricciones (idioma, fecha, tipo) y justificación"),
+    (10, "Estrategias de búsqueda", "Filtros de búsqueda publicados usados (con cita)"),
+    (11, "Estrategias de búsqueda", "Estrategias adaptadas de trabajos previos (con cita)"),
+    (12, "Estrategias de búsqueda", "Actualizaciones de la búsqueda: métodos y fechas"),
+    (13, "Estrategias de búsqueda", "Fecha de ejecución de cada búsqueda"),
+    (14, "Revisión por pares", "Revisión por pares de la estrategia (PRESS), si se hizo"),
+    (15, "Gestión de registros", "Total de registros identificados (por base y en total)"),
+    (16, "Gestión de registros", "Método y herramienta de deduplicación"),
+]
+
+
+def render_prisma_s_checklist(
+    *,
+    databases: list[str] | None = None,
+    search_window: dict[str, str] | None = None,
+    counts=None,
+) -> str:
+    """Renderiza el checklist PRISMA-S (16 ítems) pre-rellenando lo que el motor sabe.
+
+    La búsqueda es la etapa más automatizada del pipeline, así que la mayor
+    parte de la evidencia sale sola: bases, cadenas versionadas, ventana,
+    fechas, totales por base y método de deduplicación.
+    """
+    auto: dict[int, str] = {}
+    if databases:
+        auto[1] = f"Bases: {', '.join(databases)} (APIs abiertas; ver docs/integraciones.md)."
+        auto[2] = "Cada base se consulta por separado con su propia cadena."
+        auto[7] = "Import RIS/BibTeX en protocols/<slug>/imported/ (Scopus/WoS/gestores)."
+        auto[8] = "Cadenas completas versionadas en protocols/<slug>/search_strings/<base>.txt."
+    if search_window:
+        limits = " · ".join(f"{k}: {v}" for k, v in search_window.items() if v)
+        if limits:
+            auto[9] = f"Ventana temporal declarada en protocol.yml — {limits}."
+        if search_window.get("executed"):
+            auto[13] = f"Búsqueda ejecutada: {search_window['executed']}."
+    if counts is not None:
+        per_db = " · ".join(f"{db}: {n}" for db, n in sorted(counts.identified_by_source.items()))
+        auto[15] = f"Total identificados: {counts.identified}" + (
+            f" ({per_db})." if per_db else "."
+        )
+        auto[16] = (
+            f"Deduplicación determinista del motor (DOI/título normalizado): "
+            f"{counts.duplicates_removed} duplicados eliminados."
+        )
+    lines = [
+        "# Checklist PRISMA-S · reporte de la búsqueda (16 ítems)",
+        "",
+        "> Rethlefsen ML, et al. PRISMA-S. _Syst Rev_ 2021;10:39. "
+        "doi:10.1186/s13643-020-01542-z",
+        "",
+    ]
+    current_section = ""
+    for number, section, title in _PRISMA_S_ITEMS:
+        if section != current_section:
+            lines.append(f"\n## {section}")
+            current_section = section
+        evidence = auto.get(number)
+        suffix = f" — _auto: {evidence}_" if evidence else " — _(completar)_"
+        lines.append(f"- [ ] {number}. {title}{suffix}")
+    return "\n".join(lines)
+
+
 # (número, título corto) · checklist PRISMA 2020 para resúmenes (12 ítems,
 # tabla 2 de la declaración; hereda PRISMA-A 2013 con redacción armonizada).
 _PRISMA_ABSTRACTS_ITEMS: list[tuple[int, str]] = [
