@@ -181,13 +181,24 @@ grounding: agent        # 'embedder' (default, coseno portátil) | 'agent' | 'ex
 ```
 
 **Cerebro de investigador (memoria persistente en markdown).** Con `--brain` cada
-revisión se sedimenta en archivos portátiles (sin vectores ni servidores), de modo
-que el conocimiento se acumula entre corridas:
+revisión se sedimenta en archivos portátiles (sin vectores ni servidores), siguiendo
+el patrón de memoria del proyecto [cerebro](https://github.com/jhonmosquerav/cerebro)
+(MIT), de modo que el conocimiento se **acumula y se consulta** entre corridas:
 
 ```bash
 uv run prisma-loop run protocols/mi-revision --auto-approve --brain cerebro
 # escribe cerebro/{genome/events.jsonl, wiki/semantic, wiki/episodic, raw, index.md}
+
+uv run prisma-loop brain cerebro               # qué revisiones recuerda
+uv run prisma-loop brain cerebro mi-revision   # memoria vigente de un tema
 ```
+
+Si vuelves a correr un protocolo con memoria previa, la corrida se registra como
+**actualización (living review)**: el episodio y el evento llevan el delta de
+estudios incluidos (nuevos / retirados) respecto a la corrida anterior. La
+memoria informa al investigador y al reporte; **nunca** se inyecta en el juicio
+de screening/extracción/RoB (regla anti-sesgo). Ver
+[`docs/memoria-cerebro.md`](docs/memoria-cerebro.md).
 
 > Evolución opcional y gratuita: un índice vectorial **local** del cerebro con
 > `FastEmbedEmbedder` (`uv add fastembed`, ONNX/CPU, multilingüe, offline) para

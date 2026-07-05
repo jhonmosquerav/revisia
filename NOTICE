@@ -13,3 +13,8 @@ Licensed under the Apache License, Version 2.0 (see the LICENSE file).
 The principle "AI is an accelerator, not a replacement"
 (Cochrane/JBI 2025) is wired into the system: human review (HITL) is
 mandatory at every critical stage, and the final decision is always human.
+
+The researcher-memory layer ("research brain") follows the file-based
+memory pattern of the "cerebro" project
+(https://github.com/jhonmosquerav/cerebro, MIT License): markdown + JSONL
+layers, no vectors, no servers.

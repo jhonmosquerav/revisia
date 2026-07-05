@@ -106,6 +106,16 @@ def _cmd_gold_template(args: argparse.Namespace) -> int:
 def _cmd_run(args: argparse.Namespace) -> int:
     from prisma_loop.orchestration.flow import run_review
 
+    if args.brain:
+        from prisma_loop.memory import ResearchBrain
+
+        prior = ResearchBrain(args.brain).recall(load_protocol(args.protocol_dir).slug)
+        if prior:
+            print(
+                f"🧠 Memoria previa: {prior.n_runs} corrida(s), última {prior.last_timestamp}, "
+                f"{len(prior.last_included_ids)} incluidos. Esta corrida se registrará como "
+                "actualización (living review)."
+            )
     timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     result = run_review(
         args.protocol_dir,
@@ -142,6 +152,39 @@ def _cmd_run(args: argparse.Namespace) -> int:
             f"· MCC={m.mcc:.2f} · WMCC={m.wmcc:.2f} · kappa={m.cohen_kappa:.2f}"
         )
     return 0 if result.status in {"completed", "paused"} else 1
+
+
+def _cmd_brain(args: argparse.Namespace) -> int:
+    """Inspecciona un cerebro de investigador (memoria markdown, solo lectura)."""
+    from prisma_loop.memory import ResearchBrain
+
+    brain = ResearchBrain(args.brain_dir)
+    if args.slug:
+        recall = brain.recall(args.slug)
+        if recall is None:
+            print(f"(sin memoria para '{args.slug}' en {args.brain_dir})")
+            return 1
+        print(
+            f"🧠 {recall.slug} · {recall.n_runs} corrida(s) · última {recall.last_timestamp} "
+            f"· {len(recall.last_included_ids)} incluidos"
+        )
+        for key, value in recall.last_counts.items():
+            print(f"  - {key}: {value}")
+        if recall.semantic_summary:
+            print("\n--- síntesis vigente (wiki/semantic) ---\n")
+            print(recall.semantic_summary)
+        return 0
+    recalls = brain.summary()
+    if not recalls:
+        print(f"(cerebro vacío o inexistente en {args.brain_dir})")
+        return 1
+    print(f"🧠 Cerebro en {args.brain_dir} · {len(recalls)} revisión(es):")
+    for recall in recalls:
+        print(
+            f"  - {recall.slug}: {recall.n_runs} corrida(s), última {recall.last_timestamp}, "
+            f"{len(recall.last_included_ids)} incluidos"
+        )
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -182,6 +225,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--out", default=None, help="Ruta de salida (default: <run_dir>/gold_template.yml)."
     )
 
+    p_brain = sub.add_parser(
+        "brain",
+        help="Inspecciona un cerebro de investigador (memoria markdown acumulada con --brain).",
+    )
+    p_brain.add_argument("brain_dir", help="Carpeta del cerebro (la que pasaste a --brain).")
+    p_brain.add_argument(
+        "slug", nargs="?", default=None, help="Slug de una revisión (muestra su memoria)."
+    )
+
     return parser
 
 
@@ -190,6 +242,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "gold-template":
         return _cmd_gold_template(args)
+    if args.command == "brain":
+        return _cmd_brain(args)
     protocol_dir = args.protocol_dir
     if not Path(protocol_dir).exists():
         print(f"error: la carpeta {protocol_dir!r} no existe.", file=sys.stderr)
