@@ -1,13 +1,19 @@
-# RevisIA
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-revisia-dark.png">
+    <img alt="RevisIA" src="assets/logo-revisia-light.png" width="380">
+  </picture>
+</p>
 
-> *Revisiones sistemáticas de inicio a fin: la IA propone, tú decides, la
-> evidencia se audita.*
+<p align="center"><em>Revisiones sistemáticas de inicio a fin: la IA propone, tú decides, la evidencia se audita.</em></p>
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21215148.svg)](https://doi.org/10.5281/zenodo.21215148)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-125%20passing-brightgreen.svg)](tests/)
-[![PRISMA 2020](https://img.shields.io/badge/PRISMA-2020%20%2B%20S%20%2B%20trAIce-8A2BE2.svg)](#fundamento-metodológico)
+<p align="center">
+  <a href="https://doi.org/10.5281/zenodo.21215148"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.21215148.svg" alt="DOI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.13%2B-blue.svg" alt="Python 3.13+"></a>
+  <a href="tests/"><img src="https://img.shields.io/badge/tests-125%20passing-brightgreen.svg" alt="Tests"></a>
+  <a href="#fundamento-metodológico"><img src="https://img.shields.io/badge/PRISMA-2020%20%2B%20S%20%2B%20trAIce-8A2BE2.svg" alt="PRISMA 2020"></a>
+</p>
 
 **Sistema multiagéntico, provider-agnostic y reproducible para generar
 borradores de revisiones sistemáticas y meta-análisis bajo PRISMA 2020 +
