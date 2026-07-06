@@ -3,6 +3,7 @@
 > *Revisiones sistemáticas de inicio a fin: la IA propone, tú decides, la
 > evidencia se audita.*
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21215148.svg)](https://doi.org/10.5281/zenodo.21215148)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/)
 [![Tests](https://img.shields.io/badge/tests-125%20passing-brightgreen.svg)](tests/)
@@ -299,9 +300,15 @@ declaradas — el sistema trabaja contra la norma, no contra recuerdos de la nor
 
 ## Cómo citar
 
-Si usas `revisia` en tu investigación, cítalo con los metadatos de
-[`CITATION.cff`](CITATION.cff). Tras el primer depósito en Zenodo habrá un DOI
-citable (ver [`RELEASING.md`](RELEASING.md)).
+Si usas `RevisIA` en tu investigación, cítalo con el **DOI concept**
+[`10.5281/zenodo.21215148`](https://doi.org/10.5281/zenodo.21215148) (resuelve
+siempre a la última versión) o los metadatos de [`CITATION.cff`](CITATION.cff):
+
+> Mosquera Vanegas, J. A. (2026). *RevisIA: sistema multiagéntico reproducible
+> para revisiones sistemáticas PRISMA* (v0.4.0). Zenodo.
+> https://doi.org/10.5281/zenodo.21215148
+
+Cada versión tiene además su propio DOI (v0.4.0: `10.5281/zenodo.21215149`).
 
 ## Contribuir
 

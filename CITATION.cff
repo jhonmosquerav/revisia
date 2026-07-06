@@ -21,10 +21,13 @@ keywords:
 license: Apache-2.0
 version: "0.4.0"
 date-released: "2026-07-05"
+doi: "10.5281/zenodo.21215148"
 repository-code: "https://github.com/jhonmosquerav/revisia"
 url: "https://github.com/jhonmosquerav/revisia"
-# Tras el primer release con depósito en Zenodo, descomenta y rellena el DOI:
-# identifiers:
-#   - type: doi
-#     value: "10.5281/zenodo.XXXXXXX"
-#     description: "DOI concept (todas las versiones)"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.21215148"
+    description: "DOI concept (resuelve siempre a la última versión)"
+  - type: doi
+    value: "10.5281/zenodo.21215149"
+    description: "DOI de la versión v0.4.0"
