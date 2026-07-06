@@ -397,6 +397,7 @@ def run_pipeline(
     # (efectos fijos + aleatorios, I²/τ², Egger); si no, solo síntesis narrativa.
     meta_result = None
     effects_cfg = _load_yaml(protocol_dir / "effects.yml")
+    meta_display = effects_cfg.get("display", "raw")  # "proportion" → forest en 0–1
     raw_effects = effects_cfg.get("effects", [])
     if raw_effects:
         measure = effects_cfg.get("measure", "precomputed")
@@ -488,10 +489,10 @@ def run_pipeline(
     )
     if meta_result is not None:
         (deliverable / "meta_analisis.md").write_text(
-            render_forest_markdown(meta_result), encoding="utf-8"
+            render_forest_markdown(meta_result, display=meta_display), encoding="utf-8"
         )
         assets = deliverable / "assets"
-        render_forest_png(meta_result, assets / "forest.png")
+        render_forest_png(meta_result, assets / "forest.png", display=meta_display)
         render_funnel_png(meta_result, assets / "funnel.png")
     (deliverable / "checklist_2020.md").write_text(render_prisma_2020_checklist(), encoding="utf-8")
     (deliverable / "checklist_s.md").write_text(

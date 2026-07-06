@@ -6,8 +6,26 @@ import math
 
 import pytest
 
+from revisia.exports.forest import render_forest_markdown
 from revisia.meta_analysis import meta_analyze
 from revisia.schemas.effects import EffectInput
+
+
+def test_forest_markdown_display_proportion() -> None:
+    # logit 0 → proporción 0.5; logit 2.197 → ≈0.900.
+    effects = [
+        EffectInput(study_id="a", yi=0.0, vi=0.1),
+        EffectInput(study_id="b", yi=2.197, vi=0.1),
+    ]
+    res = meta_analyze(effects, "precomputed")
+    md = render_forest_markdown(res, display="proportion")
+    assert "Sensibilidad/Prop." in md
+    assert "0.500" in md  # expit(0)
+    assert "0.900" in md  # expit(2.197)
+    # Modo raw sigue mostrando el logit (efecto), no la proporción.
+    raw = render_forest_markdown(res, display="raw")
+    assert "Efecto" in raw
+    assert "+2.197" in raw
 
 
 def test_fixed_effect_pooled_estimate() -> None:
