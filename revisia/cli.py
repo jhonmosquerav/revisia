@@ -251,6 +251,28 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     return 0 if report.publishable else 1
 
 
+def _cmd_export(args: argparse.Namespace) -> int:
+    """Ensambla el deliverable de una corrida en un documento único (HTML/PDF)."""
+    from revisia.exports.document import export_run
+
+    run_dir = Path(args.run_dir)
+    if not run_dir.exists():
+        print(f"error: la carpeta {args.run_dir!r} no existe.", file=sys.stderr)
+        return 2
+    try:
+        out = export_run(run_dir, fmt=args.format, out=args.out)
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(f"✓ Exportado ({args.format}): {out}")
+    if args.format == "html":
+        print(
+            "  Autocontenido (figuras embebidas, sin JS): muévelo o compártelo tal cual;"
+            " para PDF usa --format pdf o imprime desde el navegador."
+        )
+    return 0
+
+
 def _cmd_brain(args: argparse.Namespace) -> int:
     """Inspecciona un cerebro de investigador (memoria markdown, solo lectura)."""
     from revisia.memory import ResearchBrain
@@ -353,6 +375,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_audit.add_argument("run_dir", help="Carpeta de la corrida (runs/<slug>-<fecha>).")
 
+    p_export = sub.add_parser(
+        "export",
+        help="Ensambla el entregable de una corrida en un documento único "
+        "(HTML autocontenido o PDF).",
+    )
+    p_export.add_argument("run_dir", help="Carpeta de la corrida (runs/<slug>-<fecha>).")
+    p_export.add_argument(
+        "--format",
+        choices=("html", "pdf"),
+        default="html",
+        help="Formato de salida (default: html, autocontenido; pdf requiere el extra 'pdf').",
+    )
+    p_export.add_argument(
+        "--out",
+        default=None,
+        help="Ruta de salida (default: <run_dir>/deliverable/<slug>.<formato>).",
+    )
+
     p_brain = sub.add_parser(
         "brain",
         help="Inspecciona un cerebro de investigador (memoria markdown acumulada con --brain).",
@@ -376,6 +416,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_check(args)
     if args.command == "audit":
         return _cmd_audit(args)
+    if args.command == "export":
+        return _cmd_export(args)
     if args.command == "brain":
         return _cmd_brain(args)
     protocol_dir = args.protocol_dir

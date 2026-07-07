@@ -114,20 +114,45 @@ Y cuando el manuscrito esté escrito, pre-chequea su adherencia al checklist:
 uv run revisia check manuscrito.md          # 27 ítems: ✅/🟡/❌ + evidencia
 ```
 
+## Exportar el artículo (HTML / PDF)
+
+Cada corrida deja su entregable en Markdown (`deliverable/`); `export` lo
+ensambla en **un solo documento** listo para compartir:
+
+```bash
+# HTML autocontenido (default · cero dependencias del sistema, sin JS, sin red):
+# portada + artículo + flujo PRISMA + metaanálisis con figuras + checklists +
+# tabla de extracción + RoB + bibliografía, con CSS académico inline y las
+# figuras EMBEBIDAS (data-URI): muévelo a cualquier carpeta o máquina y abre igual.
+uv run revisia export runs/<slug>-<fecha>
+#   → runs/<slug>-<fecha>/deliverable/<slug>.html
+
+# PDF (opcional · WeasyPrint: multiplataforma, sin Word/LaTeX/pandoc/Chromium)
+uv sync --extra pdf
+uv run revisia export runs/<slug>-<fecha> --format pdf --out articulo.pdf
+```
+
+Los bloques Mermaid del flujo PRISMA se sustituyen por su **tabla estática
+equivalente** (mismos conteos oficiales), así el documento no depende de ningún
+renderizador. ¿Sin el extra `pdf`? Exporta HTML e imprime a PDF desde el
+navegador.
+
 ## Estado
 
 **Completo · cobertura metodológica end-to-end.** Pipeline PRISMA
 con HITL en todas las etapas; capa LLM provider-agnostic (Gemini /
-OpenAI / Anthropic / local / **Claude Code** / `agent` / `fake`); **búsqueda multi-base**
+OpenAI / Anthropic / local / Z.ai (GLM) / OpenRouter / **Claude Code** / `agent` /
+`fake`); **búsqueda multi-base**
 (OpenAlex / Crossref / Semantic Scholar / **Europe PMC (MEDLINE/PubMed)** + import
 RIS/BibTeX para Scopus/WoS);
 **meta-análisis cuantitativo** (efectos fijos/aleatorios, I²/τ², Egger,
 forest/funnel); doble extracción con kappa; exclusiones humano/IA y generación
 de `metodologia.md`; **auditoría post-corrida** (`revisia audit`);
 **memoria de investigador** con living review (`--brain`); checklists 2020 +
-resúmenes + trAIce; exports interoperables (robvis / metafor / PRISMA2020).
+resúmenes + trAIce; exports interoperables (robvis / metafor / PRISMA2020);
+**exportador de documento único** (`revisia export`: HTML autocontenido / PDF).
 Métricas defendibles + verificador anti-alucinación.
-**118 tests verdes** offline (sin API key ni CLI: el provider Claude Code se
+**144 tests verdes** offline (sin API key ni CLI: el provider Claude Code se
 testea con `subprocess` mockeado). Licencia Apache-2.0, `CITATION.cff` y
 `.zenodo.json` listos para depósito en Zenodo.
 
@@ -272,11 +297,11 @@ por export→import RIS/BibTeX desde la biblioteca de tu institución.
 ```
 revisia/          # EL MOTOR (paquete instalable · provider-agnostic)
   llm/                # capa de abstracción LLM + proveedores + ensemble
-    providers/        #   gemini · openai · anthropic · local · claude_code · agent · fake
+    providers/        #   gemini · openai · anthropic · local · zai · openrouter · claude_code · agent · fake
   rag/                # grounding / verificación anti-alucinación
   agents/             # un agente mono-tarea por etapa PRISMA
   schemas/            # structured output (Pydantic) por etapa
-  exports/            # diagrama PRISMA, checklists 2020/abstracts/trAIce, interop OSS
+  exports/            # diagrama PRISMA, checklists, interop OSS, documento único (export)
   provenance/         # RunMeta + ledger append-only de decisiones
   orchestration/      # flujo Prefect + checkpoints HITL
   memory/             # cerebro de investigador (markdown + JSONL, living review)
@@ -311,7 +336,7 @@ Si usas `RevisIA` en tu investigación, cítalo con el **DOI concept**
 siempre a la última versión) o los metadatos de [`CITATION.cff`](CITATION.cff):
 
 > Mosquera Vanegas, J. A. (2026). *RevisIA: sistema multiagéntico reproducible
-> para revisiones sistemáticas PRISMA* (v0.4.0). Zenodo.
+> para revisiones sistemáticas PRISMA* (v0.5.0). Zenodo.
 > https://doi.org/10.5281/zenodo.21215148
 
 Cada versión tiene además su propio DOI (v0.4.0: `10.5281/zenodo.21215149`).

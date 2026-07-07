@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "revisia"
-version = "0.4.0"
+version = "0.5.0"
 description = "Sistema multiagéntico provider-agnostic para generar borradores de revisiones sistemáticas reproducibles bajo PRISMA 2020 + PRISMA-S + PRISMA-trAIce."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -26,6 +26,9 @@ dependencies = [
     "pydantic>=2.7",
     "pyyaml>=6.0",
     "python-dotenv>=1.0",
+    # Markdown→HTML del exportador (`revisia export`): pura-Python, sin deps
+    # transitivas; en el núcleo para que el HTML autocontenido funcione siempre.
+    "markdown>=3.6",
 ]
 
 [project.optional-dependencies]
@@ -33,12 +36,18 @@ gemini = ["google-genai>=1.0"]
 openai = ["openai>=1.40"]
 anthropic = ["anthropic>=0.40"]
 local = ["openai>=1.40"]  # endpoint OpenAI-compatible (Ollama/vLLM/LM Studio)
+zai = ["openai>=1.40"]  # familia GLM vía Z.ai (gateway OpenAI-compatible)
+openrouter = ["openai>=1.40"]  # agregador multi-modelo (GPT/Gemini/… una key)
 rag = ["qdrant-client>=1.10"]
 orchestration = ["prefect>=3.0"]
 search = ["httpx>=0.27"]
 # Meta-análisis cuantitativo: gráficos (forest/funnel) y p-valores exactos.
 # El núcleo calcula el meta-análisis sin esto; solo mejora plots y p-valores.
 meta = ["matplotlib>=3.8", "scipy>=1.11"]
+# Exportación a PDF (`revisia export --format pdf`): WeasyPrint, multiplataforma,
+# sin Word/COM, sin LaTeX, sin pandoc, sin Chromium. El HTML autocontenido
+# (formato por defecto de `export`) NO necesita este extra.
+pdf = ["weasyprint>=63"]
 # Conveniencia: todo lo necesario para correr el tracer bullet con Gemini.
 demo = ["google-genai>=1.0", "httpx>=0.27", "prefect>=3.0"]
 dev = ["pytest>=8.0", "ruff>=0.6", "black>=24.0"]

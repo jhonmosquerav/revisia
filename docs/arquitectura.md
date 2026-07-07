@@ -41,6 +41,8 @@ flowchart TB
 
     CHECK["🔍 revisia check &lt;manuscrito&gt;<br/>adherencia 27 ítems (estilo PRISMA-Check)"]
 
+    EXP["📄 revisia export<br/>documento único: HTML autocontenido / PDF"]
+
     NEW --> BUS --> DED --> SCR --> FT --> EXT --> ROB --> MA --> SIN --> REP --> DEL
     SCR -.-> VER
     SIN -.-> VER
@@ -51,6 +53,7 @@ flowchart TB
     DEL --> BRAIN
     BRAIN -. memoria previa: aviso + flow updated .-> NEW
     DEL --> CHECK
+    DEL --> EXP
 ```
 
 ## Los tres contratos del sistema
@@ -73,6 +76,6 @@ flowchart TB
 | Pipeline | `agents/` · `orchestration/` | `run` |
 | Defensa | `rag/` (grounding) · `provenance/` · `audit.py` · `metrics.py` | `audit` · `gold-template` · `validate` |
 | Memoria | `memory/` (patrón [cerebro](https://github.com/jhonmosquerav/cerebro)) | `brain` · `run --brain` |
-| Reporte | `exports/` (flow oficial, checklists, interop) | `run` (emite todo) |
+| Reporte | `exports/` (flow oficial, checklists, interop, documento único) | `run` (emite todo) · `export` (HTML autocontenido / PDF) |
 | Adherencia | `check.py` | `check` |
 | Config | `protocols/_TEMPLATE/` (protocol.yml · PRISMA-P · gold · effects) | `new` |

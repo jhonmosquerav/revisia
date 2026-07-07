@@ -10,6 +10,7 @@ from revisia.exports.checklist import (
     render_prisma_s_checklist,
     render_traice_checklist,
 )
+from revisia.exports.document import assemble_html, export_run
 from revisia.exports.extraction_table import render_extraction_table
 from revisia.exports.forest import (
     render_forest_markdown,
@@ -31,6 +32,8 @@ from revisia.exports.prisma_flow import (
 
 __all__ = [
     "PrismaCounts",
+    "assemble_html",
+    "export_run",
     "render_bibtex",
     "render_extraction_table",
     "render_flow_diagram",

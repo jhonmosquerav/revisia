@@ -4,6 +4,36 @@ Todos los cambios notables de `RevisIA` (antes `prisma-loop`) se documentan aqu�
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/)
 y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.5.0] · 2026-07-06
+
+### Added
+
+- **`revisia export <run_dir> [--format html|pdf] [--out <ruta>]`** —
+  exportador nativo del entregable a **documento único**:
+  - **HTML autocontenido** (default · cero dependencias del sistema): portada
+    desde el `manifest.yml`, artículo, flujo PRISMA, metaanálisis con figuras,
+    metodología, checklists, tabla de extracción, riesgo de sesgo y BibTeX en
+    un solo `.html` con CSS académico inline. **Figuras embebidas como
+    data-URI** y **bloques Mermaid sustituidos por la tabla estática oficial**
+    (`render_flow_markdown`): sin JavaScript ni recursos externos, se abre
+    igual movido a cualquier carpeta o máquina.
+  - **PDF con WeasyPrint** (extra opcional `pdf`) — multiplataforma; sin
+    Word/COM, sin LaTeX, sin pandoc, sin Chromium. Sin el extra, el error es
+    accionable (cómo instalarlo o imprimir desde el navegador). Jubila el
+    flujo externo Windows-only Markdown→Word COM, que rompía la promesa
+    multiplataforma.
+- **Proveedores `zai` (familia GLM vía Z.ai) y `openrouter`** (gateways
+  OpenAI-compatibles; API key obligatoria con error accionable): paneles
+  multi-modelo sin tocar código del motor. Diseño del **benchmark de
+  sensibilidad del cribado** en `docs/benchmark-cribado.md` y credenciales
+  nuevas en `.env.example` (`ZAI_API_KEY`, `OPENROUTER_API_KEY`).
+
+### Changed
+
+- Nueva dependencia del núcleo: `markdown` (pura-Python, sin dependencias
+  transitivas) para la conversión MD→HTML del exportador; el HTML
+  autocontenido funciona sin instalar ningún extra.
+
 ## [0.4.0] · 2026-07-05
 
 ### Changed

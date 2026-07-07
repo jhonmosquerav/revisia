@@ -24,6 +24,8 @@ _BUILDERS: dict[str, tuple[str, str]] = {
     "openai": ("revisia.llm.providers.openai_api", "OpenAIProvider"),
     "anthropic": ("revisia.llm.providers.anthropic_api", "AnthropicProvider"),
     "local_openai": ("revisia.llm.providers.local_openai", "LocalOpenAIProvider"),
+    "zai": ("revisia.llm.providers.openai_compat", "ZaiProvider"),
+    "openrouter": ("revisia.llm.providers.openai_compat", "OpenRouterProvider"),
     "claude_code": ("revisia.llm.providers.claude_code", "ClaudeCodeProvider"),
     "agent": ("revisia.llm.providers.agent", "AgentProvider"),
     "fake": ("revisia.llm.providers.fake", "FakeProvider"),
