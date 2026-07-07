@@ -11,7 +11,7 @@
   <a href="https://doi.org/10.5281/zenodo.21215148"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.21215148.svg" alt="DOI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.13%2B-blue.svg" alt="Python 3.13+"></a>
-  <a href="tests/"><img src="https://img.shields.io/badge/tests-125%20passing-brightgreen.svg" alt="Tests"></a>
+  <a href="tests/"><img src="https://img.shields.io/badge/tests-144%20passing-brightgreen.svg" alt="Tests"></a>
   <a href="#fundamento-metodológico"><img src="https://img.shields.io/badge/PRISMA-2020%20%2B%20S%20%2B%20trAIce-8A2BE2.svg" alt="PRISMA 2020"></a>
 </p>
 
@@ -239,6 +239,25 @@ A diferencia de `claude_code`, no lanza ningún subproceso (evita el problema de
 auth headless). En una corrida CLI desatendida `provider: agent` falla con un
 error claro: no hay agente a quien delegar.
 
+## Panel multi-modelo (gateways OpenAI-compatibles)
+
+Para armar un **panel de varios modelos** sobre el mismo protocolo —p. ej. un
+benchmark de sensibilidad del cribado— basta cambiar el bloque `llm` por etapa;
+el motor es provider-agnostic, ningún proveedor está privilegiado. Además de
+`gemini`/`openai`/`anthropic`/`local_openai`, hay dos pasarelas remotas
+OpenAI-compatibles:
+
+```yaml
+llm:
+  screening_ta: { provider: zai,        model: glm-5.2,        temperature: 0.0 }  # familia GLM · Z.ai
+  # screening_ta: { provider: openrouter, model: openai/gpt-5,   temperature: 0.0 }  # agregador · una key
+```
+
+Credenciales en `.env` (`ZAI_API_KEY` / `OPENROUTER_API_KEY`; opcional
+`ZAI_BASE_URL` para el *coding plan*). Diseño reproducible del benchmark
+—protocolo fijo, gold humano, una corrida por modelo, métricas vs gold— en
+[`docs/benchmark-cribado.md`](docs/benchmark-cribado.md).
+
 ## Grounding sin vectores + cerebro de investigador (costo cero)
 
 **Grounding por agente.** El verificador anti-alucinación puede juzgar el respaldo
@@ -339,7 +358,9 @@ siempre a la última versión) o los metadatos de [`CITATION.cff`](CITATION.cff)
 > para revisiones sistemáticas PRISMA* (v0.5.0). Zenodo.
 > https://doi.org/10.5281/zenodo.21215148
 
-Cada versión tiene además su propio DOI (v0.4.0: `10.5281/zenodo.21215149`).
+Cada versión tiene además su propio DOI de versión (v0.4.0:
+`10.5281/zenodo.21215149`; el de v0.5.0 lo acuña Zenodo al publicar el release
+en GitHub). El DOI concept de arriba siempre resuelve a la última versión.
 
 ## Contribuir
 
