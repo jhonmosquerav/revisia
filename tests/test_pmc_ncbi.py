@@ -356,6 +356,9 @@ def test_fetch_fulltext_sin_pmcid_ni_mailto_no_toca_red(monkeypatch) -> None:
 def test_fetch_fulltext_bioc_no_oa_cae_a_abstract(monkeypatch) -> None:
     monkeypatch.setattr(fulltext.ncbi, "idconv", lambda ids, *, mailto=None: {"10.1/abc": "PMC999"})
     monkeypatch.setattr(fulltext.ncbi, "bioc_fulltext", lambda pmcid, *, mailto=None: None)  # no OA
+    # Hermetiza el fallback: sin esto, BioC=None cae a resolve_oa_url y, como doi+mailto
+    # son truthy, _unpaywall_url haría un GET real a api.unpaywall.org (violaría offline).
+    monkeypatch.setattr(fulltext, "resolve_oa_url", lambda record, *, mailto=None: None)
     rec = SearchRecord(record_id="10.1/abc", title="T", doi="10.1/abc", abstract="abs")
     ft = fulltext.fetch_fulltext(rec, mailto="x@y.z")
     assert ft.available is False and ft.text == "abs"
