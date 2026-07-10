@@ -15,7 +15,8 @@ def test_backends_registrados() -> None:
     assert "crossref" in backends
     assert "semanticscholar" in backends
     assert "europepmc" in backends
-    assert "pubmed" in backends  # Europe PMC espeja MEDLINE/PubMed
+    # 'pubmed' → NCBI E-utilities (reasignado); Europe PMC vive en 'europepmc'.
+    assert "pubmed" in backends
 
 
 class _FakeResp:

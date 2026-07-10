@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from revisia.agents import busqueda
+from revisia.agents import busqueda, ncbi
 from revisia.schemas.records import SearchRecord
 
 SearchFn = Callable[..., list[SearchRecord]]
@@ -157,6 +157,22 @@ def europepmc_search(
     return records
 
 
+def pubmed_search(
+    query: str, max_results: int = 25, *, mailto: str | None = None
+) -> list[SearchRecord]:
+    """Busca en PubMed (NCBI E-utilities): esearch(db=pubmed) + efetch."""
+    pmids = ncbi.esearch("pubmed", query, max_results, mailto=mailto)
+    return ncbi.efetch_pubmed(pmids, mailto=mailto)
+
+
+def pmc_search(
+    query: str, max_results: int = 25, *, mailto: str | None = None
+) -> list[SearchRecord]:
+    """Busca en PubMed Central (NCBI E-utilities): esearch(db=pmc) + esummary."""
+    uids = ncbi.esearch("pmc", query, max_results, mailto=mailto)
+    return ncbi.esummary_pmc(uids, mailto=mailto)
+
+
 # Despacho por nombre lógico de base (case-insensitive).
 BACKENDS: dict[str, SearchFn] = {
     "openalex": busqueda.search,
@@ -167,8 +183,13 @@ BACKENDS: dict[str, SearchFn] = {
     "europepmc": europepmc_search,
     "europe_pmc": europepmc_search,
     "epmc": europepmc_search,
-    "pubmed": europepmc_search,
-    "medline": europepmc_search,
+    # PubMed/PMC = NCBI directo (E-utilities). 'pubmed'/'medline' apuntan a NCBI
+    # (canónico para PRISMA-S); Europe PMC conserva sus alias 'europepmc'/'epmc'.
+    "pubmed": pubmed_search,
+    "medline": pubmed_search,
+    "ncbi": pubmed_search,
+    "entrez": pubmed_search,
+    "pmc": pmc_search,
 }
 
 # Bases sin API abierta: se ingestan por importación manual (RIS/BibTeX).

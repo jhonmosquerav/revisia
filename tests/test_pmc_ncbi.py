@@ -9,6 +9,8 @@ from __future__ import annotations
 import pytest
 
 from revisia.agents import ncbi
+from revisia.agents.search_backends import available_backends, search_database
+from revisia.schemas.records import SearchRecord
 
 
 class _FakeResp:
@@ -229,3 +231,85 @@ def test_idconv_mapea_a_pmcid(monkeypatch) -> None:
 
 def test_idconv_vacio_no_llama_red() -> None:
     assert ncbi.idconv([]) == {}
+
+
+def test_alias_pubmed_despacha_a_ncbi(monkeypatch) -> None:
+    llamada = {}
+
+    def fake_esearch(db, term, retmax, *, mailto=None):
+        llamada["db"] = db
+        return ["40000001"]
+
+    def fake_efetch(pmids, *, mailto=None):
+        return [SearchRecord(record_id="10.1/abc", title="T", source_db="PubMed")]
+
+    monkeypatch.setattr(ncbi, "esearch", fake_esearch)
+    monkeypatch.setattr(ncbi, "efetch_pubmed", fake_efetch)
+
+    records = search_database("pubmed", "llm", 5, mailto="x@y.z")
+    assert llamada["db"] == "pubmed"  # fue a NCBI, no a Europe PMC
+    assert records[0].source_db == "PubMed"
+
+
+def test_alias_pmc_despacha_a_esummary(monkeypatch) -> None:
+    monkeypatch.setattr(ncbi, "esearch", lambda db, term, retmax, *, mailto=None: ["7654321"])
+    monkeypatch.setattr(
+        ncbi,
+        "esummary_pmc",
+        lambda uids, *, mailto=None: [
+            SearchRecord(record_id="pmc:7654321", title="T", source_db="PMC")
+        ],
+    )
+    records = search_database("pmc", "llm", 5)
+    assert records[0].source_db == "PMC"
+
+
+def test_backends_ncbi_registrados() -> None:
+    backends = available_backends()
+    for name in ("pubmed", "medline", "pmc", "ncbi", "entrez"):
+        assert name in backends
+    # Europe PMC conserva sus alias propios.
+    for name in ("europepmc", "europe_pmc", "epmc"):
+        assert name in backends
+
+
+def test_europepmc_sigue_disponible(monkeypatch) -> None:
+    # La reasignación de 'pubmed' NO debe afectar el backend Europe PMC.
+    from revisia.agents import search_backends as sb
+
+    payload = {
+        "resultList": {
+            "result": [
+                {
+                    "id": "1",
+                    "source": "MED",
+                    "doi": "10.2/xyz",
+                    "title": "EPMC",
+                    "abstractText": "x",
+                    "authorString": "Doe J",
+                    "pubYear": "2024",
+                }
+            ]
+        }
+    }
+
+    class _C:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *e):
+            return False
+
+        def get(self, url, params=None):
+            class _R:
+                def raise_for_status(self_inner):
+                    return None
+
+                def json(self_inner):
+                    return payload
+
+            return _R()
+
+    monkeypatch.setattr(sb, "_client", lambda timeout=60.0: _C())
+    records = search_database("europepmc", "q", 5)
+    assert records[0].source_db == "EuropePMC"
