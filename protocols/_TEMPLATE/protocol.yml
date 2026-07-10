@@ -19,13 +19,16 @@ question:
     Outcome: "..."
 
 # Bases de datos / fuentes a consultar (la búsqueda usa search_strings/<base>.txt).
-# 4 bases abiertas por defecto (sin API key). Europe PMC espeja MEDLINE/PubMed.
+# Bases abiertas por defecto (sin API key). PubMed = NCBI directo (E-utilities),
+# línea citable para PRISMA-S; Europe PMC espeja PubMed/PMC (procedencia distinta,
+# el dedup une el solape). 'pmc' (texto completo NCBI) está disponible como opt-in.
 # Scopus/Web of Science no tienen API abierta: expórtalos a RIS/BibTeX y déjalos
 # en imported/ (se fusionan en la deduplicación).
 databases:
   - OpenAlex
   - Crossref
   - Semantic Scholar
+  - PubMed
   - Europe PMC
 
 # Herramienta de riesgo de sesgo acorde al diseño esperado de los estudios:

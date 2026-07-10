@@ -143,8 +143,9 @@ navegador.
 con HITL en todas las etapas; capa LLM provider-agnostic (Gemini /
 OpenAI / Anthropic / local / Z.ai (GLM) / OpenRouter / **Claude Code** / `agent` /
 `fake`); **búsqueda multi-base**
-(OpenAlex / Crossref / Semantic Scholar / **Europe PMC (MEDLINE/PubMed)** + import
-RIS/BibTeX para Scopus/WoS);
+(OpenAlex / Crossref / Semantic Scholar / **PubMed + PMC (NCBI E-utilities)** /
+Europe PMC + import RIS/BibTeX para Scopus/WoS; **texto completo OA estructurado
+vía BioC-PMC**);
 **meta-análisis cuantitativo** (efectos fijos/aleatorios, I²/τ², Egger,
 forest/funnel); doble extracción con kappa; exclusiones humano/IA y generación
 de `metodologia.md`; **auditoría post-corrida** (`revisia audit`);

@@ -1,0 +1,1 @@
+("artificial intelligence"[tiab] OR "machine learning"[tiab] OR "large language models"[tiab]) AND ("systematic review"[tiab] OR "evidence synthesis"[tiab]) AND (screening[tiab] OR "data extraction"[tiab] OR "risk of bias"[tiab])
