@@ -197,3 +197,65 @@ def esummary_pmc(pmcids: list[str], *, mailto: str | None = None) -> list[Search
             )
         )
     return records
+
+
+def bioc_fulltext(pmcid: str, *, mailto: str | None = None) -> str | None:
+    """Texto completo OA vía BioC-PMC (JSON). ``None`` si no está en el subconjunto OA.
+
+    Concatena el ``text`` de todos los *passages* de todos los documentos. Cualquier
+    fallo (red, 404, artículo no-OA que devuelve texto de error en vez de JSON) se
+    degrada a ``None`` para no romper la corrida.
+    """
+    pmc = pmcid if pmcid.upper().startswith("PMC") else f"PMC{pmcid}"
+    _throttle()
+    try:
+        with _client() as client:
+            resp = client.get(BIOC_URL.format(pmcid=pmc))
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception:  # red caída, 404, cuerpo no-JSON (no-OA) → sin texto
+        return None
+    docs: list[dict] = []
+    if isinstance(data, list):
+        for coll in data:
+            docs.extend(coll.get("documents") or [])
+    elif isinstance(data, dict):
+        docs = data.get("documents") or []
+    passages = [
+        (p.get("text") or "").strip()
+        for doc in docs
+        for p in (doc.get("passages") or [])
+        if (p.get("text") or "").strip()
+    ]
+    text = "\n\n".join(passages).strip()
+    return text or None
+
+
+def idconv(ids: list[str], *, mailto: str | None = None) -> dict[str, str]:
+    """Mapea DOI/PMID → PMCID vía ID Converter (para registros de otras bases).
+
+    Devuelve un dict con claves en minúsculas (el DOI/PMID/PMCID de entrada) → PMCID.
+    Cualquier fallo se degrada a ``{}``.
+    """
+    if not ids:
+        return {}
+    params = _common_params(mailto)
+    params.update({"ids": ",".join(ids), "format": "json"})
+    _throttle()
+    try:
+        with _client() as client:
+            resp = client.get(IDCONV_URL, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception:
+        return {}
+    out: dict[str, str] = {}
+    for rec in data.get("records") or []:
+        pmcid = rec.get("pmcid")
+        if not pmcid:
+            continue
+        for key in ("doi", "pmid", "pmcid"):
+            val = rec.get(key)
+            if val:
+                out[str(val).lower()] = pmcid
+    return out

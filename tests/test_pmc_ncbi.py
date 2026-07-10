@@ -170,3 +170,62 @@ def test_esummary_pmc_parsea_metadata(monkeypatch) -> None:
 def test_esearch_vacio_no_llama_efetch() -> None:
     assert ncbi.efetch_pubmed([]) == []
     assert ncbi.esummary_pmc([]) == []
+
+
+def test_bioc_fulltext_concatena_passages(monkeypatch) -> None:
+    _route(
+        monkeypatch,
+        {
+            "BioC_json": _FakeResp(
+                json_data=[
+                    {
+                        "documents": [
+                            {
+                                "passages": [
+                                    {"text": "Introduccion del articulo."},
+                                    {"text": "Metodos y resultados."},
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            )
+        },
+    )
+    text = ncbi.bioc_fulltext("PMC7654321", mailto="x@y.z")
+    assert text == "Introduccion del articulo.\n\nMetodos y resultados."
+
+
+def test_bioc_fulltext_no_oa_devuelve_none(monkeypatch) -> None:
+    # Artículo fuera del subconjunto OA: la API no da JSON → None (sin romper).
+    _route(monkeypatch, {"BioC_json": _FakeResp(text_data="[Error] : No result can be found.")})
+    assert ncbi.bioc_fulltext("PMC0000000", mailto="x@y.z") is None
+
+
+def test_bioc_fulltext_acepta_pmcid_sin_prefijo(monkeypatch) -> None:
+    client = _route(
+        monkeypatch,
+        {"BioC_json": _FakeResp(json_data=[{"documents": [{"passages": [{"text": "ok"}]}]}])},
+    )
+    ncbi.bioc_fulltext("7654321", mailto="x@y.z")
+    assert "PMC7654321" in client.calls[0]  # se normaliza a PMC7654321
+
+
+def test_idconv_mapea_a_pmcid(monkeypatch) -> None:
+    _route(
+        monkeypatch,
+        {
+            "idconv": _FakeResp(
+                json_data={
+                    "records": [{"pmid": "40000001", "doi": "10.1/ABC", "pmcid": "PMC7654321"}]
+                }
+            )
+        },
+    )
+    mapping = ncbi.idconv(["10.1/abc"], mailto="x@y.z")
+    assert mapping["10.1/abc"] == "PMC7654321"
+    assert mapping["40000001"] == "PMC7654321"
+
+
+def test_idconv_vacio_no_llama_red() -> None:
+    assert ncbi.idconv([]) == {}
