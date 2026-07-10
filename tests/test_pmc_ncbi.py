@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from revisia.agents import ncbi
+from revisia.agents import fulltext, ncbi
 from revisia.agents.search_backends import available_backends, search_database
 from revisia.schemas.records import SearchRecord
 
@@ -313,3 +313,49 @@ def test_europepmc_sigue_disponible(monkeypatch) -> None:
     monkeypatch.setattr(sb, "_client", lambda timeout=60.0: _C())
     records = search_database("europepmc", "q", 5)
     assert records[0].source_db == "EuropePMC"
+
+
+def test_fetch_fulltext_prefiere_bioc(monkeypatch) -> None:
+    monkeypatch.setattr(
+        fulltext.ncbi, "bioc_fulltext", lambda pmcid, *, mailto=None: "TEXTO COMPLETO OA"
+    )
+    rec = SearchRecord(record_id="x", title="T", extra={"pmcid": "PMC7654321"})
+    ft = fulltext.fetch_fulltext(rec, mailto="x@y.z")
+    assert ft.available is True
+    assert ft.text == "TEXTO COMPLETO OA"
+    assert "PMC7654321" in (ft.source_url or "")
+
+
+def test_fetch_fulltext_resuelve_pmcid_por_doi(monkeypatch) -> None:
+    monkeypatch.setattr(fulltext.ncbi, "idconv", lambda ids, *, mailto=None: {"10.1/abc": "PMC999"})
+    llamado = {}
+
+    def fake_bioc(pmcid, *, mailto=None):
+        llamado["pmcid"] = pmcid
+        return "OA por idconv"
+
+    monkeypatch.setattr(fulltext.ncbi, "bioc_fulltext", fake_bioc)
+    rec = SearchRecord(record_id="10.1/abc", title="T", doi="10.1/abc")
+    ft = fulltext.fetch_fulltext(rec, mailto="x@y.z")
+    assert llamado["pmcid"] == "PMC999"
+    assert ft.available is True and ft.text == "OA por idconv"
+
+
+def test_fetch_fulltext_sin_pmcid_ni_mailto_no_toca_red(monkeypatch) -> None:
+    # Sin PMCID y sin mailto: no se llama a idconv (invariante de red) → fallback abstract.
+    def boom(*a, **k):
+        raise AssertionError("no debe llamarse a idconv sin mailto")
+
+    monkeypatch.setattr(fulltext.ncbi, "idconv", boom)
+    rec = SearchRecord(record_id="x", title="T", doi="10.1/abc", abstract="solo abstract")
+    ft = fulltext.fetch_fulltext(rec, mailto=None)
+    assert ft.available is False
+    assert ft.text == "solo abstract"
+
+
+def test_fetch_fulltext_bioc_no_oa_cae_a_abstract(monkeypatch) -> None:
+    monkeypatch.setattr(fulltext.ncbi, "idconv", lambda ids, *, mailto=None: {"10.1/abc": "PMC999"})
+    monkeypatch.setattr(fulltext.ncbi, "bioc_fulltext", lambda pmcid, *, mailto=None: None)  # no OA
+    rec = SearchRecord(record_id="10.1/abc", title="T", doi="10.1/abc", abstract="abs")
+    ft = fulltext.fetch_fulltext(rec, mailto="x@y.z")
+    assert ft.available is False and ft.text == "abs"
