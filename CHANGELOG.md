@@ -13,7 +13,8 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   citable para PRISMA-S.
 - **Texto completo OA estructurado vía BioC-PMC**: `agents/fulltext.py` prioriza
   el texto BioC (JSON, sin parsear PDF) cuando hay PMCID (directo o resuelto por
-  ID Converter), mejorando cribado full-text y extracción.
+  ID Converter), mejorando el cribado full-text, la evaluación de riesgo de sesgo
+  y el grounding de citas (la extracción sigue basada en abstract hasta H3).
 
 ### Changed (breaking menor)
 - Los alias `pubmed` y `medline` ahora apuntan a **NCBI** (antes a Europe PMC).

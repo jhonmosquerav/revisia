@@ -302,7 +302,7 @@ una RS no repita las limitaciones clásicas de una revisión rápida:
 
 | Limitación típica | Default / guardrail que la mitiga |
 |---|---|
-| Pocas bases | **4 bases abiertas** por defecto (+ Europe PMC = MEDLINE/PubMed); `validate` avisa si hay <3. Scopus/WoS por import RIS/BibTeX |
+| Pocas bases | **5 bases abiertas** por defecto (incl. PubMed vía NCBI + Europe PMC); `validate` avisa si hay <3. Scopus/WoS por import RIS/BibTeX |
 | Un solo cribador / sin kappa | `ensemble` en `screening_ta`; `gold.yml` plantilla + `revisia gold-template`; `validate` avisa si falta gold o ensemble |
 | Volumen bajo | `--max` por defecto **50** por base |
 | Sesgo de idioma | cadenas de ejemplo **EN/ES/PT** + `grounding: agent` (verificación cross-lingual) |
