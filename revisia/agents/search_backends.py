@@ -196,6 +196,17 @@ BACKENDS: dict[str, SearchFn] = {
 MANUAL_ONLY = {"scopus", "webofscience", "wos", "embase", "psycinfo"}
 
 
+def db_key(db: str) -> str:
+    """Clave canónica de un nombre de base: minúsculas, sin espacios.
+
+    Fuente única de verdad de la normalización, compartida por el despacho de
+    backend (:func:`search_database`) y por la resolución del fichero de cadena
+    de búsqueda (``search_strings/<db_key>.txt`` en el pipeline), para que ambos
+    usen exactamente el mismo criterio (p. ej. ``"Europe PMC" -> "europepmc"``).
+    """
+    return db.lower().replace(" ", "")
+
+
 def available_backends() -> list[str]:
     """Nombres de base con backend programático."""
     return sorted(BACKENDS)
@@ -210,7 +221,7 @@ def search_database(
         ValueError: si la base no tiene backend programático (puede requerir
             importación manual si está en :data:`MANUAL_ONLY`).
     """
-    key = db.lower().replace(" ", "")
+    key = db_key(db)
     fn = BACKENDS.get(key)
     if fn is None:
         hint = " (requiere importación manual RIS/BibTeX)" if key in MANUAL_ONLY else ""
