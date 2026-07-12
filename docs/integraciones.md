@@ -5,6 +5,10 @@ Tres niveles: **integrado** (el motor lo usa nativamente), **interoperable**
 (el motor emite/lee su formato) y **complementario** (recomendado para un paso
 concreto, fuera del motor).
 
+> **Hoja de ruta:** las fuentes abiertas candidatas a futuros backends —arXiv,
+> CORE, RePEc, RedALyC/SciELO y más, priorizadas por área (economía, negocios,
+> tecnología, LATAM)— están en [`fuentes-candidatas.md`](fuentes-candidatas.md).
+
 ## Integradas (nativas en el motor)
 
 | Herramienta / servicio | Etapa | Licencia / acceso | Cómo se usa |

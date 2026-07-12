@@ -11,7 +11,7 @@
   <a href="https://doi.org/10.5281/zenodo.21215148"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.21215148.svg" alt="DOI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.13%2B-blue.svg" alt="Python 3.13+"></a>
-  <a href="tests/"><img src="https://img.shields.io/badge/tests-162%20passing-brightgreen.svg" alt="Tests"></a>
+  <a href="tests/"><img src="https://img.shields.io/badge/tests-166%20passing-brightgreen.svg" alt="Tests"></a>
   <a href="#fundamento-metodológico"><img src="https://img.shields.io/badge/PRISMA-2020%20%2B%20S%20%2B%20trAIce-8A2BE2.svg" alt="PRISMA 2020"></a>
 </p>
 
@@ -153,7 +153,7 @@ de `metodologia.md`; **auditoría post-corrida** (`revisia audit`);
 resúmenes + trAIce; exports interoperables (robvis / metafor / PRISMA2020);
 **exportador de documento único** (`revisia export`: HTML autocontenido / PDF).
 Métricas defendibles + verificador anti-alucinación.
-**162 tests verdes** offline (sin API key ni CLI: el provider Claude Code se
+**166 tests verdes** offline (sin API key ni CLI: el provider Claude Code se
 testea con `subprocess` mockeado). Licencia Apache-2.0, `CITATION.cff` y
 `.zenodo.json` listos para depósito en Zenodo.
 
@@ -311,6 +311,13 @@ una RS no repita las limitaciones clásicas de una revisión rápida:
 
 Scopus/Web of Science **no** se automatizan (su licencia lo prohíbe): se incorporan
 por export→import RIS/BibTeX desde la biblioteca de tu institución.
+
+> **RevisIA no es solo para biomedicina.** Aunque los ejemplos usan PubMed/PMC, el
+> método PRISMA y las bases multidisciplinares nativas (OpenAlex / Crossref /
+> Semantic Scholar) cubren **economía, administración, negocios, tecnología y
+> ciencias sociales**. La hoja de ruta de fuentes abiertas por integrar
+> —arXiv, CORE, RePEc, RedALyC/SciELO y más, priorizadas por área— vive en
+> [`docs/fuentes-candidatas.md`](docs/fuentes-candidatas.md).
 
 ## Estructura
 

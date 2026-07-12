@@ -6,6 +6,12 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Documentación
+- **Hoja de ruta de fuentes abiertas** (`docs/fuentes-candidatas.md`): candidatas a
+  futuros backends —arXiv, CORE, RePEc, RedALyC/SciELO…— priorizadas por área
+  (economía, negocios, tecnología, LATAM), enlazada desde README e `integraciones.md`.
+- Nota de **encuadre multidisciplinar** en el README y corrección del conteo de tests (→ 166).
+
 ## [0.6.0] · 2026-07-12
 
 ### Added
