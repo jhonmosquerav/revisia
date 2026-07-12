@@ -21,7 +21,9 @@ question:
 # Bases de datos / fuentes a consultar (la búsqueda usa search_strings/<base>.txt).
 # Bases abiertas por defecto (sin API key). PubMed = NCBI directo (E-utilities),
 # línea citable para PRISMA-S; Europe PMC espeja PubMed/PMC (procedencia distinta,
-# el dedup une el solape). 'pmc' (texto completo NCBI) está disponible como opt-in.
+# el dedup une el solape). 'pmc' (búsqueda bibliográfica en PMC, metadata sin
+# abstract) es opt-in; el texto completo BioC-PMC es automático por PMCID y no
+# depende de esta lista.
 # Scopus/Web of Science no tienen API abierta: expórtalos a RIS/BibTeX y déjalos
 # en imported/ (se fusionan en la deduplicación).
 databases:

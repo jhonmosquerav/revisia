@@ -6,7 +6,7 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
-### Añadido
+### Added
 - **Backend NCBI E-utilities** (`revisia/agents/ncbi.py`): búsqueda PubMed
   (`esearch`+`efetch`) y PMC opt-in (`esummary`), con cortesía NCBI y
   `NCBI_API_KEY` opcional. PubMed queda como línea de búsqueda canónica y
@@ -15,7 +15,7 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   el texto BioC (JSON, sin parsear PDF) cuando hay PMCID (directo o resuelto por
   ID Converter), mejorando cribado full-text y extracción.
 
-### Cambiado (breaking menor)
+### Changed (breaking menor)
 - Los alias `pubmed` y `medline` ahora apuntan a **NCBI** (antes a Europe PMC).
   Europe PMC conserva sus alias propios: `europepmc` / `europe_pmc` / `epmc`.
   Protocolos que usaban `pubmed` esperando Europe PMC deben cambiarlo a `europepmc`.
