@@ -3,7 +3,9 @@
 Elimina duplicados antes del screening (prep de la §5). Estrategia idempotente
 y reproducible: clave por DOI normalizado cuando existe; si no, por título
 normalizado (minúsculas, sin puntuación ni espacios redundantes). Conserva el
-primer registro visto y reporta cuántos se descartaron.
+primer registro visto —fusionando en él las claves de ``extra`` que aporten los
+duplicados (p. ej. un PMCID de PubMed cuando el conservado viene de OpenAlex)—
+y reporta cuántos se descartaron.
 """
 
 from __future__ import annotations
@@ -26,20 +28,34 @@ def dedup_key(record: SearchRecord) -> str:
     return f"title:{_title_key(record.title)}"
 
 
+def _merge_extra(kept: SearchRecord, duplicate: SearchRecord) -> None:
+    """Rellena en el registro conservado las claves de ``extra`` que aporta el
+    duplicado y que faltan (o están vacías). No sobreescribe valores presentes."""
+    for key, value in duplicate.extra.items():
+        if value and not kept.extra.get(key):
+            kept.extra[key] = value
+
+
 def deduplicate(records: list[SearchRecord]) -> tuple[list[SearchRecord], int]:
     """Deduplica una lista de registros.
+
+    Conserva el primer registro de cada clave y le fusiona las claves de
+    ``extra`` que aporten los duplicados posteriores (sin pisar las suyas), para
+    no perder identificadores útiles —como el PMCID— por el orden de las bases.
 
     Returns:
         Tupla ``(únicos, n_descartados)``, preservando el orden de aparición.
     """
-    seen: set[str] = set()
+    seen: dict[str, SearchRecord] = {}
     unique: list[SearchRecord] = []
     discarded = 0
     for record in records:
         key = dedup_key(record)
-        if key in seen:
+        kept = seen.get(key)
+        if kept is not None:
             discarded += 1
+            _merge_extra(kept, record)
             continue
-        seen.add(key)
+        seen[key] = record
         unique.append(record)
     return unique, discarded
