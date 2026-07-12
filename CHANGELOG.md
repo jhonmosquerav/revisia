@@ -6,6 +6,8 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.6.0] · 2026-07-12
+
 ### Added
 - **Backend NCBI E-utilities** (`revisia/agents/ncbi.py`): búsqueda PubMed
   (`esearch`+`efetch`) y PMC opt-in (`esummary`), con cortesía NCBI y
@@ -20,6 +22,15 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - Los alias `pubmed` y `medline` ahora apuntan a **NCBI** (antes a Europe PMC).
   Europe PMC conserva sus alias propios: `europepmc` / `europe_pmc` / `epmc`.
   Protocolos que usaban `pubmed` esperando Europe PMC deben cambiarlo a `europepmc`.
+
+### Fixed
+- **Dedup conserva los identificadores de los duplicados**: el registro
+  conservado hereda las claves de `extra` (p. ej. el PMCID de PubMed) que aporten
+  los duplicados, sin pisar las suyas; antes se perdían según el orden de bases.
+- **Cadenas de búsqueda de bases multi-palabra**: `db_key` normaliza el nombre de
+  base igual para el dispatch y para el fichero `search_strings/<base>.txt`, así
+  «Europe PMC» y «Semantic Scholar» ya encuentran su cadena curada (antes caían a
+  la pregunta cruda).
 
 ## [0.5.0] · 2026-07-06
 

@@ -19,8 +19,8 @@ keywords:
   - open science
   - reproducibility
 license: Apache-2.0
-version: "0.5.0"
-date-released: "2026-07-06"
+version: "0.6.0"
+date-released: "2026-07-12"
 doi: "10.5281/zenodo.21215148"
 repository-code: "https://github.com/jhonmosquerav/revisia"
 url: "https://github.com/jhonmosquerav/revisia"
