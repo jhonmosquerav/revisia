@@ -99,6 +99,38 @@ def test_base_de_pago_sugiere_importacion_manual() -> None:
         search_database("Scopus", "q", 5)
 
 
+def test_db_key_normaliza_espacios_y_mayusculas() -> None:
+    from revisia.agents.search_backends import db_key
+
+    assert db_key("Europe PMC") == "europepmc"
+    assert db_key("Semantic Scholar") == "semanticscholar"
+    assert db_key("OpenAlex") == "openalex"
+
+
+def test_multi_database_usa_cadena_de_base_con_espacios(tmp_path, monkeypatch) -> None:
+    # Una base multi-palabra ("Europe PMC") debe encontrar su search_strings/europepmc.txt
+    # con el MISMO criterio que el dispatch (db_key), no con f"{db.lower()}.txt".
+    from types import SimpleNamespace
+
+    from revisia.orchestration.pipeline import _multi_database_search
+
+    ss = tmp_path / "search_strings"
+    ss.mkdir()
+    (ss / "europepmc.txt").write_text("cadena curada europe pmc", encoding="utf-8")
+
+    capturado: dict[str, str] = {}
+
+    def fake_search_database(db, query, max_results, *, mailto=None):
+        capturado[db] = query
+        return []
+
+    monkeypatch.setattr(search_backends, "search_database", fake_search_database)
+
+    protocol = SimpleNamespace(databases=["Europe PMC"])
+    _multi_database_search(protocol, tmp_path, "pregunta cruda", 10, None)
+    assert capturado["Europe PMC"] == "cadena curada europe pmc"  # usó el .txt, no la pregunta
+
+
 def test_parse_ris() -> None:
     ris = """TY  - JOUR
 TI  - Un estudio de prueba

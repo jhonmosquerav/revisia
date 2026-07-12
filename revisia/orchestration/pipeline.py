@@ -112,7 +112,7 @@ def _multi_database_search(
     databases = protocol.databases or ["openalex"]
     records: list[SearchRecord] = []
     for db in databases:
-        string_file = protocol_dir / "search_strings" / f"{db.lower()}.txt"
+        string_file = protocol_dir / "search_strings" / f"{search_backends.db_key(db)}.txt"
         query = question_text
         if string_file.exists():
             query = string_file.read_text(encoding="utf-8").strip() or question_text
