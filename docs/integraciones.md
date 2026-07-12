@@ -13,6 +13,8 @@ concreto, fuera del motor).
 | [Crossref](https://www.crossref.org) | Búsqueda | API abierta | Backend nativo |
 | [Semantic Scholar](https://www.semanticscholar.org) | Búsqueda | API abierta (rate-limited) | Backend nativo |
 | [Europe PMC](https://europepmc.org) | Búsqueda (espeja MEDLINE/PubMed) | API abierta | Backend nativo |
+| [PubMed / PMC (NCBI E-utilities)](https://www.ncbi.nlm.nih.gov/books/NBK25501/) | Búsqueda | API abierta (`NCBI_API_KEY` opcional: 3→10 req/s) | Backend nativo (`agents/ncbi.py` + `search_backends.py`); alias `pubmed`/`medline` → NCBI, `pmc` opt-in |
+| [BioC-PMC](https://www.ncbi.nlm.nih.gov/research/bionlp/APIs/BioC-PMC/) | Texto completo OA | API abierta | Texto completo estructurado (JSON) del subconjunto OA por PMCID en `agents/fulltext.py`, preferente al raspado de PDF |
 | [Unpaywall](https://unpaywall.org) | Texto completo OA | API abierta | Resolución de open access en `agents/fulltext.py` |
 | Import **RIS/BibTeX** | Búsqueda (Scopus/WoS/Zotero/EndNote) | Formatos estándar | `ingest/manual_import.py` — las bases de pago se exportan desde tu institución y se fusionan en la deduplicación |
 

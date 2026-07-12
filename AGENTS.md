@@ -23,7 +23,7 @@ regla no negociable cableada en el diseño: `screening`, `extraccion` y `rob`
 | Agente | Etapa | Tipo | Autonomía por defecto | Verificación |
 |---|---|---|---|---|
 | `protocolo` | Preregistro del protocolo | 🧑 humano + plantillas | A0 | Firma humana; PRISMA-P (`protocolo-prisma-p.md`) |
-| `busqueda` | Búsqueda multi-base (OpenAlex, Crossref, Semantic Scholar, Europe PMC + import RIS/BibTeX) | ⚙️ determinista | A2 | Cadenas versionadas (PRISMA-S); conteos al ledger |
+| `busqueda` | Búsqueda multi-base (OpenAlex, Crossref, Semantic Scholar, PubMed/PMC vía NCBI, Europe PMC + import RIS/BibTeX) | ⚙️ determinista | A2 | Cadenas versionadas (PRISMA-S); conteos al ledger |
 | `dedup` | Deduplicación | ⚙️ determinista | A2 | Conteo de descartes trazado |
 | `screening_ta` | Cribado título/abstract | 🤖 LLM (ensemble + voto pro-recall) | A1 | Gold humano → recall/lost-evidence/MCC/WMCC/κ; checkpoint HITL |
 | `screening_ft` | Cribado a texto completo | 🤖 LLM | A0 | Decisión humana registro a registro |

@@ -11,7 +11,7 @@
   <a href="https://doi.org/10.5281/zenodo.21215148"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.21215148.svg" alt="DOI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.13%2B-blue.svg" alt="Python 3.13+"></a>
-  <a href="tests/"><img src="https://img.shields.io/badge/tests-144%20passing-brightgreen.svg" alt="Tests"></a>
+  <a href="tests/"><img src="https://img.shields.io/badge/tests-162%20passing-brightgreen.svg" alt="Tests"></a>
   <a href="#fundamento-metodológico"><img src="https://img.shields.io/badge/PRISMA-2020%20%2B%20S%20%2B%20trAIce-8A2BE2.svg" alt="PRISMA 2020"></a>
 </p>
 
@@ -143,8 +143,9 @@ navegador.
 con HITL en todas las etapas; capa LLM provider-agnostic (Gemini /
 OpenAI / Anthropic / local / Z.ai (GLM) / OpenRouter / **Claude Code** / `agent` /
 `fake`); **búsqueda multi-base**
-(OpenAlex / Crossref / Semantic Scholar / **Europe PMC (MEDLINE/PubMed)** + import
-RIS/BibTeX para Scopus/WoS);
+(OpenAlex / Crossref / Semantic Scholar / **PubMed + PMC (NCBI E-utilities)** /
+Europe PMC + import RIS/BibTeX para Scopus/WoS; **texto completo OA estructurado
+vía BioC-PMC**);
 **meta-análisis cuantitativo** (efectos fijos/aleatorios, I²/τ², Egger,
 forest/funnel); doble extracción con kappa; exclusiones humano/IA y generación
 de `metodologia.md`; **auditoría post-corrida** (`revisia audit`);
@@ -152,7 +153,7 @@ de `metodologia.md`; **auditoría post-corrida** (`revisia audit`);
 resúmenes + trAIce; exports interoperables (robvis / metafor / PRISMA2020);
 **exportador de documento único** (`revisia export`: HTML autocontenido / PDF).
 Métricas defendibles + verificador anti-alucinación.
-**144 tests verdes** offline (sin API key ni CLI: el provider Claude Code se
+**162 tests verdes** offline (sin API key ni CLI: el provider Claude Code se
 testea con `subprocess` mockeado). Licencia Apache-2.0, `CITATION.cff` y
 `.zenodo.json` listos para depósito en Zenodo.
 
@@ -301,7 +302,7 @@ una RS no repita las limitaciones clásicas de una revisión rápida:
 
 | Limitación típica | Default / guardrail que la mitiga |
 |---|---|
-| Pocas bases | **4 bases abiertas** por defecto (+ Europe PMC = MEDLINE/PubMed); `validate` avisa si hay <3. Scopus/WoS por import RIS/BibTeX |
+| Pocas bases | **5 bases abiertas** por defecto (incl. PubMed vía NCBI + Europe PMC); `validate` avisa si hay <3. Scopus/WoS por import RIS/BibTeX |
 | Un solo cribador / sin kappa | `ensemble` en `screening_ta`; `gold.yml` plantilla + `revisia gold-template`; `validate` avisa si falta gold o ensemble |
 | Volumen bajo | `--max` por defecto **50** por base |
 | Sesgo de idioma | cadenas de ejemplo **EN/ES/PT** + `grounding: agent` (verificación cross-lingual) |

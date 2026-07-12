@@ -13,10 +13,10 @@ flowchart TB
     end
 
     subgraph PIPE["⚙️ Pipeline (revisia run · un agente por etapa)"]
-        BUS["🔎 busqueda · A2<br/>OpenAlex · Crossref · Semantic Scholar ·<br/>Europe PMC + import RIS/BibTeX"]
+        BUS["🔎 busqueda · A2<br/>OpenAlex · Crossref · Semantic Scholar ·<br/>PubMed/PMC (NCBI) · Europe PMC + import RIS/BibTeX"]
         DED["♻️ dedup · A2 (determinista)"]
         SCR["🤖 screening T/A · A1<br/>ensemble multi-modelo · voto pro-recall"]
-        FT["📄 full-text OA→MD + screening · A0"]
+        FT["📄 full-text OA→MD + screening · A0<br/>BioC-PMC · OA/Unpaywall"]
         EXT["📊 extracción (+doble 20% · κ) · A0"]
         ROB["⚖️ riesgo de sesgo (RoB2/ROBINS-I/…) · A0"]
         MA["📈 meta-análisis (si effects.yml) · A2<br/>IV fijo/aleatorio · I²/τ² · Egger"]

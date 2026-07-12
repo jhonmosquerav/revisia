@@ -4,6 +4,23 @@ Todos los cambios notables de `RevisIA` (antes `prisma-loop`) se documentan aqu�
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/)
 y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [Unreleased]
+
+### Added
+- **Backend NCBI E-utilities** (`revisia/agents/ncbi.py`): búsqueda PubMed
+  (`esearch`+`efetch`) y PMC opt-in (`esummary`), con cortesía NCBI y
+  `NCBI_API_KEY` opcional. PubMed queda como línea de búsqueda canónica y
+  citable para PRISMA-S.
+- **Texto completo OA estructurado vía BioC-PMC**: `agents/fulltext.py` prioriza
+  el texto BioC (JSON, sin parsear PDF) cuando hay PMCID (directo o resuelto por
+  ID Converter), mejorando el cribado full-text, la evaluación de riesgo de sesgo
+  y el grounding de citas (la extracción sigue basada en abstract hasta H3).
+
+### Changed (breaking menor)
+- Los alias `pubmed` y `medline` ahora apuntan a **NCBI** (antes a Europe PMC).
+  Europe PMC conserva sus alias propios: `europepmc` / `europe_pmc` / `epmc`.
+  Protocolos que usaban `pubmed` esperando Europe PMC deben cambiarlo a `europepmc`.
+
 ## [0.5.0] · 2026-07-06
 
 ### Added

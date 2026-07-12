@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from revisia.agents import ncbi
 from revisia.schemas.records import SearchRecord
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -83,11 +84,43 @@ def _extract_pdf(content: bytes) -> str | None:
         return None
 
 
+def _resolve_pmcid(record: SearchRecord, *, mailto: str | None = None) -> str | None:
+    """PMCID del registro: directo de ``extra``, o resuelto por DOI/PMID vía ID Converter.
+
+    La resolución por DOI/PMID solo se intenta si hay ``mailto`` (no golpear NCBI sin
+    email, igual que Unpaywall). ``extra['pmcid']`` no necesita red.
+    """
+    pmcid = record.extra.get("pmcid")
+    if pmcid:
+        return str(pmcid)
+    ident = record.extra.get("pmid") or record.doi
+    if not ident or not mailto:
+        return None
+    return ncbi.idconv([str(ident)], mailto=mailto).get(str(ident).lower())
+
+
 def fetch_fulltext(
     record: SearchRecord, *, mailto: str | None = None, max_chars: int = 20000
 ) -> FullText:
-    """Descarga el texto completo OA de un estudio, con fallback al abstract."""
+    """Descarga el texto completo OA de un estudio, con fallback al abstract.
+
+    Prioridad: BioC-PMC (texto estructurado, sin parsear PDF) si hay PMCID
+    resoluble > raspado OA (``extra.fulltext_url``/``oa_url``) > Unpaywall.
+    """
     fallback = FullText(text=record.abstract or "", available=False)
+
+    # 1) BioC-PMC: texto completo estructurado si el registro está en el subconjunto OA.
+    pmcid = _resolve_pmcid(record, mailto=mailto)
+    if pmcid:
+        bioc = ncbi.bioc_fulltext(pmcid, mailto=mailto)
+        if bioc:
+            return FullText(
+                text=bioc[:max_chars],
+                available=True,
+                source_url=f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/",
+            )
+
+    # 2) Fallback: raspado OA / Unpaywall (comportamiento previo, intacto).
     url = resolve_oa_url(record, mailto=mailto)
     if not url:
         return fallback
