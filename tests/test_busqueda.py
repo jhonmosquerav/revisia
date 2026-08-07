@@ -38,3 +38,24 @@ def test_work_to_record_cae_a_openalex_id() -> None:
     assert rec.record_id == "W999"
     assert rec.doi is None
     assert rec.abstract is None
+
+
+def test_build_params_incluye_api_key_del_entorno(monkeypatch) -> None:
+    from revisia.agents.busqueda import _build_params
+
+    monkeypatch.setenv("OPENALEX_API_KEY", "SECRET")
+    params = _build_params("llm review", 10, "x@y.z")
+    assert params["api_key"] == "SECRET"
+    assert params["mailto"] == "x@y.z"
+    assert params["search"] == "llm review"
+    assert params["per-page"] == 10
+
+
+def test_build_params_sin_api_key_ni_mailto_por_defecto(monkeypatch) -> None:
+    from revisia.agents.busqueda import _build_params
+
+    monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
+    params = _build_params("q", 500, None)
+    assert "api_key" not in params  # sin env var no se envía (OpenAlex funciona sin key)
+    assert "mailto" not in params
+    assert params["per-page"] == 200  # tope de OpenAlex

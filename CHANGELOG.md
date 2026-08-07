@@ -6,6 +6,13 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **OpenAlex — API key opcional** (`OPENALEX_API_KEY`): el backend
+  (`agents/busqueda.py`) la envía como `api_key` si está en el entorno (esquema de
+  créditos de OpenAlex 2026, límites mayores). Sin ella el backend **sigue
+  funcionando** por el polite pool (`--mailto`), sin cambios. Verificado en vivo:
+  la API responde sin key.
+
 ### Documentación
 - **Hoja de ruta de fuentes abiertas** (`docs/fuentes-candidatas.md`): candidatas a
   futuros backends —arXiv, CORE, RePEc, RedALyC/SciELO…— priorizadas por área
