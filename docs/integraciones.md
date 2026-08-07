@@ -13,7 +13,7 @@ concreto, fuera del motor).
 
 | Herramienta / servicio | Etapa | Licencia / acceso | Cómo se usa |
 |---|---|---|---|
-| [OpenAlex](https://openalex.org) | Búsqueda | API abierta (CC0) | Backend nativo (`agents/search_backends.py`), polite pool con `--mailto` |
+| [OpenAlex](https://openalex.org) | Búsqueda | API abierta (CC0); funciona sin key | Backend nativo (`agents/busqueda.py`), polite pool con `--mailto`; `OPENALEX_API_KEY` opcional (límites mayores, esquema de créditos 2026) |
 | [Crossref](https://www.crossref.org) | Búsqueda | API abierta | Backend nativo |
 | [Semantic Scholar](https://www.semanticscholar.org) | Búsqueda | API abierta (rate-limited) | Backend nativo |
 | [Europe PMC](https://europepmc.org) | Búsqueda (espeja MEDLINE/PubMed) | API abierta | Backend nativo |

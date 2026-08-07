@@ -95,9 +95,12 @@ De mayor a menor retorno para cobertura abierta sin licencias:
 
 - **Google Scholar**: sin API oficial; el scraping viola sus términos → no es una
   fuente "abierta" en el sentido que RevisIA necesita.
-- **OpenAlex — API key (feb-2026):** OpenAlex pasó a requerir una API key (gratis,
-  con crédito diario). El backend actual usa el *polite pool* con `--mailto`;
-  **pendiente verificar** si sigue operando sin key o requiere ajuste de código.
+- **OpenAlex — esquema con API key (2026):** OpenAlex introdujo un modelo de
+  créditos con API key (gratis, crédito diario) para límites mayores y filtros
+  especiales, pero **sigue funcionando sin key** (verificado en vivo: HTTP 200 sin
+  autenticación). El backend la usa de forma **opcional**: si defines
+  `OPENALEX_API_KEY` se envía como `api_key`; si no, opera por el polite pool
+  (`--mailto`) como siempre. Mecanismo: query param `?api_key=…`.
 
 ## Fuentes
 

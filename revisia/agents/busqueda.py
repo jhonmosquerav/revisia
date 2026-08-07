@@ -11,6 +11,7 @@ Detalle técnico: OpenAlex entrega el abstract como ``abstract_inverted_index``
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from revisia.schemas.records import SearchRecord
@@ -72,6 +73,23 @@ def work_to_record(work: dict[str, Any], source_db: str = "OpenAlex") -> SearchR
     )
 
 
+def _build_params(query: str, max_results: int, mailto: str | None) -> dict[str, Any]:
+    """Construye los params de la petición a OpenAlex.
+
+    OpenAlex funciona **sin API key**; ``mailto`` activa el *polite pool*
+    (recomendado). La ``api_key`` —gratis, da límites mayores bajo el esquema de
+    créditos de OpenAlex (2026)— solo se envía si ``OPENALEX_API_KEY`` está en el
+    entorno, de modo que el backend sigue operando sin credenciales por defecto.
+    """
+    params: dict[str, Any] = {"search": query, "per-page": min(max_results, 200)}
+    if mailto:
+        params["mailto"] = mailto
+    api_key = os.environ.get("OPENALEX_API_KEY")
+    if api_key:
+        params["api_key"] = api_key
+    return params
+
+
 def search(query: str, max_results: int = 25, *, mailto: str | None = None) -> list[SearchRecord]:
     """Busca en OpenAlex y devuelve registros normalizados.
 
@@ -90,9 +108,7 @@ def search(query: str, max_results: int = 25, *, mailto: str | None = None) -> l
             "El agente de búsqueda requiere httpx. Instala el extra: `uv sync --extra search`."
         ) from exc
 
-    params: dict[str, Any] = {"search": query, "per-page": min(max_results, 200)}
-    if mailto:
-        params["mailto"] = mailto
+    params = _build_params(query, max_results, mailto)
     with httpx.Client(timeout=60.0, follow_redirects=True) as client:
         resp = client.get(OPENALEX_WORKS_URL, params=params)
         resp.raise_for_status()
