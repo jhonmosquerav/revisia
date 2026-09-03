@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from revisia.agents import busqueda, ncbi
+from revisia.agents import _http, busqueda, ncbi
 from revisia.schemas.records import SearchRecord
 
 SearchFn = Callable[..., list[SearchRecord]]
@@ -24,21 +24,11 @@ EUROPEPMC_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 
 
 def _client(timeout: float = 60.0) -> Any:
-    try:
-        import httpx
-    except ImportError as exc:  # pragma: no cover - depende del entorno
-        raise RuntimeError(
-            "Los backends de búsqueda requieren httpx. Instala el extra: `uv sync --extra search`."
-        ) from exc
-    return httpx.Client(timeout=timeout, follow_redirects=True)
+    """Indirección local (los tests la parchean) sobre el cliente compartido."""
+    return _http.make_client(timeout)
 
 
-def _strip_html(text: str | None) -> str | None:
-    if not text:
-        return None
-    import re
-
-    return re.sub(r"<[^>]+>", "", text).strip() or None
+_strip_html = _http.strip_html
 
 
 def crossref_search(
