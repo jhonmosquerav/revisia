@@ -1,0 +1,1 @@
+("revisión sistemática" OR "inteligencia artificial") AND dc.date.issued:[2020 TO 2026]

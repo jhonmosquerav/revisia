@@ -11,7 +11,7 @@
   <a href="https://doi.org/10.5281/zenodo.21215148"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.21215148.svg" alt="DOI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.13%2B-blue.svg" alt="Python 3.13+"></a>
-  <a href="tests/"><img src="https://img.shields.io/badge/tests-168%20passing-brightgreen.svg" alt="Tests"></a>
+  <a href="tests/"><img src="https://img.shields.io/badge/tests-188%20passing-brightgreen.svg" alt="Tests"></a>
   <a href="#fundamento-metodológico"><img src="https://img.shields.io/badge/PRISMA-2020%20%2B%20S%20%2B%20trAIce-8A2BE2.svg" alt="PRISMA 2020"></a>
 </p>
 
@@ -144,7 +144,9 @@ con HITL en todas las etapas; capa LLM provider-agnostic (Gemini /
 OpenAI / Anthropic / local / Z.ai (GLM) / OpenRouter / **Claude Code** / `agent` /
 `fake`); **búsqueda multi-base**
 (OpenAlex / Crossref / Semantic Scholar / **PubMed + PMC (NCBI E-utilities)** /
-Europe PMC + import RIS/BibTeX para Scopus/WoS; **texto completo OA estructurado
+Europe PMC, más **ERIC, DOAJ, UNESDOC, BVS/LILACS, repositorios DSpace 7+
+(AGROSAVIA, CLACSO, Banco Mundial OKR) y DOAB**, todos sin API key, opt-in por
+área; import RIS/BibTeX para Scopus/WoS; **texto completo OA estructurado
 vía BioC-PMC**);
 **meta-análisis cuantitativo** (efectos fijos/aleatorios, I²/τ², Egger,
 forest/funnel); doble extracción con kappa; exclusiones humano/IA y generación
@@ -302,7 +304,7 @@ una RS no repita las limitaciones clásicas de una revisión rápida:
 
 | Limitación típica | Default / guardrail que la mitiga |
 |---|---|
-| Pocas bases | **5 bases abiertas** por defecto (incl. PubMed vía NCBI + Europe PMC); `validate` avisa si hay <3. Scopus/WoS por import RIS/BibTeX |
+| Pocas bases | **5 bases abiertas** por defecto (incl. PubMed vía NCBI + Europe PMC) + **9 opt-in por área** (ERIC, DOAJ, UNESDOC, BVS/LILACS, GIM, AGROSAVIA, CLACSO, Banco Mundial OKR, DOAB); `validate` avisa si hay <3. Scopus/WoS por import RIS/BibTeX. Una base caída no aborta la corrida: queda en `01_search/failures.json` |
 | Un solo cribador / sin kappa | `ensemble` en `screening_ta`; `gold.yml` plantilla + `revisia gold-template`; `validate` avisa si falta gold o ensemble |
 | Volumen bajo | `--max` por defecto **50** por base |
 | Sesgo de idioma | cadenas de ejemplo **EN/ES/PT** + `grounding: agent` (verificación cross-lingual) |
@@ -315,9 +317,13 @@ por export→import RIS/BibTeX desde la biblioteca de tu institución.
 > **RevisIA no es solo para biomedicina.** Aunque los ejemplos usan PubMed/PMC, el
 > método PRISMA y las bases multidisciplinares nativas (OpenAlex / Crossref /
 > Semantic Scholar) cubren **economía, administración, negocios, tecnología y
-> ciencias sociales**. La hoja de ruta de fuentes abiertas por integrar
-> —arXiv, CORE, RePEc, RedALyC/SciELO y más, priorizadas por área— vive en
-> [`docs/fuentes-candidatas.md`](docs/fuentes-candidatas.md).
+> ciencias sociales**; las bases opt-in añaden educación (ERIC), salud LATAM
+> (BVS/LILACS), literatura gris institucional (UNESDOC, Banco Mundial) y
+> repositorios regionales (CLACSO, AGROSAVIA). La hoja de ruta de fuentes por
+> integrar —arXiv, CORE, RePEc y más— vive en
+> [`docs/fuentes-candidatas.md`](docs/fuentes-candidatas.md); el **triage
+> verificado** de 40 bases (qué tiene API y qué no) en
+> [`docs/fuentes-triage.md`](docs/fuentes-triage.md).
 
 ## Estructura
 

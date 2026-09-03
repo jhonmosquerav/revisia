@@ -24,8 +24,16 @@ question:
 # el dedup une el solape). 'pmc' (búsqueda bibliográfica en PMC, metadata sin
 # abstract) es opt-in; el texto completo BioC-PMC es automático por PMCID y no
 # depende de esta lista.
+# Bases opt-in por área (todas sin API key; ver docs/fuentes-triage.md):
+#   ERIC (educación) · DOAJ (revistas OA) · UNESDOC (literatura gris UNESCO) ·
+#   BVS o LILACS (salud LATAM, es/pt) · GIM (Global Index Medicus) ·
+#   AGROSAVIA (agro CO) · CLACSO (sociales LATAM) · WorldBank (OKR, desarrollo) ·
+#   DOAB (libros OA). Añádelas a la lista y crea search_strings/<alias>.txt
+#   (hay ejemplos de eric, doaj, bvs y clacso en esta plantilla).
 # Scopus/Web of Science no tienen API abierta: expórtalos a RIS/BibTeX y déjalos
-# en imported/ (se fusionan en la deduplicación).
+# en imported/ (se fusionan en la deduplicación). Redalyc / SciELO / Dialnet no
+# ofrecen búsqueda por texto (solo cosecha OAI): misma ruta RIS. Google Scholar:
+# sin API (términos de servicio).
 databases:
   - OpenAlex
   - Crossref

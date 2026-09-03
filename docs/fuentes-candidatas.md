@@ -15,8 +15,11 @@ Este documento lista fuentes **candidatas a futuros backends**, priorizadas por
 ## Ya integradas (línea base)
 
 OpenAlex · Crossref · Semantic Scholar · **PubMed/PMC (NCBI)** · Europe PMC ·
-Unpaywall (texto completo) · **BioC-PMC** (texto completo estructurado) · import
-RIS/BibTeX. Ver [`integraciones.md`](integraciones.md).
+**ERIC** · **DOAJ** · **UNESDOC** · **BVS/LILACS** · **AGROSAVIA / CLACSO / Banco
+Mundial OKR (DSpace 7+)** · **DOAB** · Unpaywall (texto completo) · **BioC-PMC**
+(texto completo estructurado) · import RIS/BibTeX. Ver
+[`integraciones.md`](integraciones.md) y el triage fuente por fuente en
+[`fuentes-triage.md`](fuentes-triage.md).
 
 ## Generales / multidisciplinares (cubren todas las áreas)
 
@@ -24,7 +27,7 @@ RIS/BibTeX. Ver [`integraciones.md`](integraciones.md).
 |---|---|---|---|
 | [CORE](https://core.ac.uk) | 🟢 (key gratis) | ~300M+ docs OA **con texto completo** | Mejor candidata para full-text fuera de PMC |
 | [BASE](https://www.base-search.net) | 🟢 (token) | ~400M docs OA agregados | Amplia cobertura de repositorios |
-| [DOAJ](https://doaj.org) | 🟢 | Artículos de revistas 100% OA | API sencilla |
+| [DOAJ](https://doaj.org) | 🟢 *(ya integrada)* | Artículos de revistas 100% OA | API sencilla, metadatos CC0 |
 | [OpenAIRE](https://www.openaire.eu) | 🟢 | Agregador OA (fuerte en proyectos EU) | OAI + REST |
 | [Lens.org](https://www.lens.org) | 🟡 | Scholarly + **patentes** | API de pago (trial 14 días) |
 
@@ -59,11 +62,13 @@ la empresa).
 
 | Fuente | Estado | Aporte |
 |---|---|---|
-| [RedALyC](https://www.redalyc.org) | 🟢 (OAI/API) | **Domina ciencias sociales, economía y administración** en la región |
-| [SciELO](https://scielo.org) | 🟢 (OAI + [ArticleMeta API](https://articlemeta.scielo.org)) | Salud y ciencias exactas + algo de social; LATAM + España/Portugal |
+| [BVS / LILACS](https://bvsalud.org) | 🟢 *(ya integrada)* | Salud en español/portugués que **no está en MEDLINE**; DeCS |
+| [CLACSO](https://biblioteca-repositorio.clacso.edu.ar) | 🟢 *(ya integrada · DSpace 10)* | Ciencias sociales de LATAM; libros y capítulos sin DOI |
+| [AGROSAVIA](https://repository.agrosavia.co) | 🟢 *(ya integrada · DSpace 9)* | Agropecuario Colombia; literatura gris técnica |
+| [RedALyC](https://www.redalyc.org) | 🟡 (OAI-PMH solo cosecha; **sin búsqueda por texto**) | **Domina ciencias sociales, economía y administración** en la región; sus DOIs ya entran por OpenAlex/Crossref → import RIS para el resto |
+| [SciELO](https://scielo.org) | 🟡 ([ArticleMeta](https://articlemeta.scielo.org) sin texto libre; buscador tras WAF) | Salud y ciencias exactas + algo de social; LATAM + España/Portugal; DOIs en Crossref |
 | [La Referencia](https://www.lareferencia.info) | 🟢 (OAI) | Agregador OA regional (nodos nacionales) |
-| [CLACSO](https://www.clacso.org) | 🟢 (repositorio/OAI) | Ciencias sociales de LATAM |
-| [Dialnet](https://dialnet.unirioja.es) | 🟡 | Producción en español; **no todo es OA** y su API es limitada |
+| [Dialnet](https://dialnet.unirioja.es) | 🟡 (OAI-PMH solo cosecha → import RIS) | Producción en español; **no todo es OA**; `robots.txt` veta el buscador |
 
 ## Bases de pago → ruta import RIS/BibTeX
 
@@ -89,7 +94,9 @@ De mayor a menor retorno para cobertura abierta sin licencias:
 2. **arXiv** — integración casi trivial (API abierta, sin key); trae `econ`, `q-fin`, `cs`.
 3. **CORE** — texto completo OA más allá de PMC.
 4. **RePEc** — la línea citable de economía (como PubMed lo es de biomedicina).
-5. **RedALyC + SciELO** — diferencial LATAM que casi ningún tool anglosajón integra.
+5. **RedALyC + SciELO** — sus DOIs ya entran por OpenAlex/Crossref; la cosecha
+   OAI-PMH (sin búsqueda por texto) queda como integración de índice local futura.
+   El diferencial LATAM inmediato ya está cubierto por BVS/LILACS, CLACSO y AGROSAVIA.
 
 ## Excluidas y notas
 

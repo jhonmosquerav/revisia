@@ -6,8 +6,10 @@ Tres niveles: **integrado** (el motor lo usa nativamente), **interoperable**
 concreto, fuera del motor).
 
 > **Hoja de ruta:** las fuentes abiertas candidatas a futuros backends —arXiv,
-> CORE, RePEc, RedALyC/SciELO y más, priorizadas por área (economía, negocios,
-> tecnología, LATAM)— están en [`fuentes-candidatas.md`](fuentes-candidatas.md).
+> CORE, RePEc y más, priorizadas por área (economía, negocios, tecnología,
+> LATAM)— están en [`fuentes-candidatas.md`](fuentes-candidatas.md).
+> **Triage verificado (2026-09):** qué tiene API y qué no, fuente por fuente
+> (40 bases de una guía bibliotecaria): [`fuentes-triage.md`](fuentes-triage.md).
 
 ## Integradas (nativas en el motor)
 
@@ -19,6 +21,12 @@ concreto, fuera del motor).
 | [Europe PMC](https://europepmc.org) | Búsqueda (espeja MEDLINE/PubMed) | API abierta | Backend nativo |
 | [PubMed / PMC (NCBI E-utilities)](https://www.ncbi.nlm.nih.gov/books/NBK25501/) | Búsqueda | API abierta (`NCBI_API_KEY` opcional: 3→10 req/s) | Backend nativo (`agents/ncbi.py` + `search_backends.py`); alias `pubmed`/`medline` → NCBI, `pmc` opt-in |
 | [BioC-PMC](https://www.ncbi.nlm.nih.gov/research/bionlp/APIs/BioC-PMC/) | Texto completo OA | API abierta | Texto completo estructurado (JSON) del subconjunto OA por PMCID en `agents/fulltext.py`, preferente al raspado de PDF |
+| [ERIC](https://eric.ed.gov) | Búsqueda (educación) | API abierta (sin key) | Backend nativo (`agents/open_backends.py`); alias `eric`; cadena Lucene (`publicationdateyear:[2020 TO 2024]`) |
+| [DOAJ](https://doaj.org) | Búsqueda (revistas OA) | API abierta (metadatos CC0; 2 req/s) | Backend nativo; alias `doaj`; cadena Elasticsearch (`bibjson.year:2024`) |
+| [UNESDOC](https://unesdoc.unesco.org) vía [UNESCO DataHub](https://data.unesco.org) | Búsqueda (literatura gris institucional) | API abierta (Opendatasoft) | Backend nativo; alias `unesdoc`/`unesco`; *snapshot* del catálogo, no el índice vivo |
+| [BVS / LILACS](https://bvsalud.org) | Búsqueda (salud LATAM, es/pt, DeCS) | API abierta (iAHx, sin key; no documentada oficialmente) | Backend nativo; alias `bvs`/`lilacs` (portal regional) y `gim` (Global Index Medicus); año en la cadena (`year_cluster:[2020 TO 2024]`) |
+| [AGROSAVIA](https://repository.agrosavia.co) · [CLACSO](https://biblioteca-repositorio.clacso.edu.ar) · [Banco Mundial OKR](https://openknowledge.worldbank.org) | Búsqueda (repositorios DSpace 7+) | API abierta (REST HAL) | Adaptador genérico `agents/dspace.py` (otro repositorio = una línea); alias `agrosavia`, `clacso`, `worldbank`/`okr`; año en la cadena (`dc.date.issued:[2020 TO 2024]`) |
+| [DOAB](https://directory.doabooks.org) | Búsqueda (libros OA) | API abierta (DSpace 6 REST) | Backend nativo; alias `doab`; primer backend de libros (`extra.type = "book"`) |
 | [Unpaywall](https://unpaywall.org) | Texto completo OA | API abierta | Resolución de open access en `agents/fulltext.py` |
 | Import **RIS/BibTeX** | Búsqueda (Scopus/WoS/Zotero/EndNote) | Formatos estándar | `ingest/manual_import.py` — las bases de pago se exportan desde tu institución y se fusionan en la deduplicación |
 

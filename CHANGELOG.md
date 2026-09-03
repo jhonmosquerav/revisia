@@ -7,13 +7,32 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Ocho backends de fuentes abiertas, sin API key** (triage verificado en vivo,
+  `docs/fuentes-triage.md`): **ERIC** (educación), **DOAJ** (revistas OA),
+  **UNESDOC** (UNESCO DataHub), **BVS/LILACS** (salud LATAM, es/pt; alias `gim`
+  para Global Index Medicus), **AGROSAVIA**, **CLACSO** y **Banco Mundial OKR**
+  vía un **adaptador DSpace 7+ genérico** (`agents/dspace.py`; otro repositorio =
+  una línea) y **DOAB** (libros OA). Todos opt-in por área en `protocol.databases`.
+- **Degradación por base en la búsqueda**: un backend que falle por red/5xx no
+  aborta la corrida; el fallo queda en `01_search/failures.json` (PRISMA-S).
+- Cliente HTTP compartido (`agents/_http.py`) con User-Agent identificado.
 - **OpenAlex — API key opcional** (`OPENALEX_API_KEY`): el backend
   (`agents/busqueda.py`) la envía como `api_key` si está en el entorno (esquema de
   créditos de OpenAlex 2026, límites mayores). Sin ella el backend **sigue
   funcionando** por el polite pool (`--mailto`), sin cambios. Verificado en vivo:
   la API responde sin key.
 
+### Changed
+- `MANUAL_ONLY` incluye Redalyc, Dialnet, SciELO, Google Scholar, Mendeley,
+  DynaMed, Lens y PEDro: el despacho sugiere importación RIS/BibTeX (ninguna
+  ofrece búsqueda por texto con API abierta).
+- URL del ID Converter de PMC actualizada a
+  `pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/` (la antigua responde 301).
+  El PMC OA Web Service (`oa.fcgi`) fue descontinuado en 2026; RevisIA no lo usaba.
+
 ### Documentación
+- **Triage de fuentes** (`docs/fuentes-triage.md`): 40 bases de una guía
+  bibliotecaria verificadas en vivo (protocolo, auth, campos, veredicto).
 - **Hoja de ruta de fuentes abiertas** (`docs/fuentes-candidatas.md`): candidatas a
   futuros backends —arXiv, CORE, RePEc, RedALyC/SciELO…— priorizadas por área
   (economía, negocios, tecnología, LATAM), enlazada desde README e `integraciones.md`.
