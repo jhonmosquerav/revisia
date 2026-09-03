@@ -18,13 +18,13 @@ from typing import Any
 from revisia.agents import _http
 from revisia.schemas.records import SearchRecord
 
-EUTILS ="https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 ESEARCH_URL = f"{EUTILS}/esearch.fcgi"
 EFETCH_URL = f"{EUTILS}/efetch.fcgi"
 ESUMMARY_URL = f"{EUTILS}/esummary.fcgi"
 IDCONV_URL = "https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/"
 BIOC_URL = (
-    "https://www.ncbi.nlm.nih.gov/research/bionlp/RESTful/" "pmcoa.cgi/BioC_json/{pmcid}/unicode"
+    "https://www.ncbi.nlm.nih.gov/research/bionlp/RESTful/pmcoa.cgi/BioC_json/{pmcid}/unicode"
 )
 
 TOOL = "revisia"

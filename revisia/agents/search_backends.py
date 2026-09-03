@@ -1,10 +1,12 @@
 """Backends de búsqueda multi-base · despacho por nombre de base de datos.
 
-PRISMA exige exhaustividad en **varias** bases (§3). Este módulo añade backends
-abiertos y sin API key —Crossref y Semantic Scholar— junto al de OpenAlex, todos
-con la misma firma ``search(query, max_results, *, mailto) -> list[SearchRecord]``.
-Las bases de pago (Scopus, Web of Science) no tienen API abierta: sus resultados
-se incorporan por **importación manual** (RIS/BibTeX), ver
+PRISMA exige exhaustividad en **varias** bases (§3). Este módulo registra, con
+la misma firma ``search(query, max_results, *, mailto) -> list[SearchRecord]``:
+OpenAlex, Crossref, Semantic Scholar, Europe PMC, PubMed/PMC (NCBI) y las
+fuentes abiertas añadidas tras el triage de 2026-09 (``docs/fuentes-triage.md``):
+ERIC, DOAJ, UNESDOC, BVS/LILACS, AGROSAVIA, CLACSO, Banco Mundial OKR y DOAB.
+Las bases sin API abierta de búsqueda (Scopus, WoS, Redalyc, Dialnet, SciELO…) se
+incorporan por **importación manual** (RIS/BibTeX), ver
 :mod:`revisia.ingest.manual_import`.
 """
 
@@ -13,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from revisia.agents import _http, busqueda, ncbi
+from revisia.agents import _http, busqueda, dspace, ncbi, open_backends
 from revisia.schemas.records import SearchRecord
 
 SearchFn = Callable[..., list[SearchRecord]]
@@ -180,10 +182,45 @@ BACKENDS: dict[str, SearchFn] = {
     "ncbi": pubmed_search,
     "entrez": pubmed_search,
     "pmc": pmc_search,
+    # Fuentes abiertas por área (triage 2026-09 · docs/fuentes-triage.md).
+    "eric": open_backends.eric_search,
+    "doaj": open_backends.doaj_search,
+    "unesdoc": open_backends.unesdoc_search,
+    "unesco": open_backends.unesdoc_search,
+    "bvs": open_backends.bvs_search,
+    "lilacs": open_backends.bvs_search,
+    "bvsalud": open_backends.bvs_search,
+    "gim": open_backends.gim_search,
+    "globalindexmedicus": open_backends.gim_search,
+    "agrosavia": dspace.agrosavia_search,
+    "clacso": dspace.clacso_search,
+    "worldbank": dspace.worldbank_okr_search,
+    "worldbankokr": dspace.worldbank_okr_search,
+    "okr": dspace.worldbank_okr_search,
+    "bancomundial": dspace.worldbank_okr_search,
+    "doab": dspace.doab_search,
 }
 
-# Bases sin API abierta: se ingestan por importación manual (RIS/BibTeX).
-MANUAL_ONLY = {"scopus", "webofscience", "wos", "embase", "psycinfo"}
+# Bases sin API abierta de búsqueda: se ingestan por importación manual (RIS/BibTeX).
+# Redalyc/Dialnet/SciELO solo ofrecen cosecha OAI-PMH (sin texto libre); Google
+# Scholar no tiene API; Mendeley/DynaMed/Lens exigen credenciales por usuario;
+# PEDro solo HTML.
+MANUAL_ONLY = {
+    "scopus",
+    "webofscience",
+    "wos",
+    "embase",
+    "psycinfo",
+    "redalyc",
+    "dialnet",
+    "scielo",
+    "googlescholar",
+    "scholar",
+    "mendeley",
+    "dynamed",
+    "lens",
+    "pedro",
+}
 
 
 def db_key(db: str) -> str:
