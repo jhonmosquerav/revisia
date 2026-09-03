@@ -101,16 +101,20 @@ def _multi_database_search(
     question_text: str,
     max_results: int,
     mailto: str | None,
-) -> list[SearchRecord]:
+) -> tuple[list[SearchRecord], list[dict[str, str]]]:
     """Busca en cada base declarada (con su cadena) + importación manual.
 
     Por cada base de ``protocol.databases`` lee su cadena en
     ``search_strings/<base>.txt`` (cae a la pregunta) y despacha al backend; las
     bases sin backend programático (Scopus/WoS) se cubren con los archivos
-    RIS/BibTeX de ``imported/``. La deduplicación posterior une los solapes.
+    RIS/BibTeX de ``imported/``. Un backend que falle (red, 5xx, JSON inválido)
+    **no aborta la corrida**: se anota en ``failures`` para que quede en disco
+    (``01_search/failures.json``) y en PRISMA-S conste qué base no respondió.
+    La deduplicación posterior une los solapes.
     """
     databases = protocol.databases or ["openalex"]
     records: list[SearchRecord] = []
+    failures: list[dict[str, str]] = []
     for db in databases:
         string_file = protocol_dir / "search_strings" / f"{search_backends.db_key(db)}.txt"
         query = question_text
@@ -121,8 +125,11 @@ def _multi_database_search(
         except ValueError:
             # Base sin backend (p. ej. Scopus): se incorpora vía imported/.
             continue
+        except Exception as exc:  # degradar por base, nunca abortar la corrida
+            failures.append({"db": db, "error": f"{type(exc).__name__}: {exc}"})
+            continue
     records += import_directory(protocol_dir / "imported")
-    return records
+    return records, failures
 
 
 def _rob_table_md(tool: str, assessments: dict[str, RoBAssessment]) -> str:
@@ -171,12 +178,20 @@ def run_pipeline(
     # ── 1. Búsqueda multi-base (A2) ─────────────────────────────────────
     # ``search_fn`` inyectado (tests) tiene prioridad y conserva el contrato
     # de una sola llamada; en producción se busca en todas las bases declaradas.
+    search_failures: list[dict[str, str]] = []
     if search_fn is not None:
         raw_records = search_fn(question_text, max_results)
     else:
-        raw_records = _multi_database_search(
+        raw_records, search_failures = _multi_database_search(
             protocol, protocol_dir, question_text, max_results, mailto
         )
+    if search_failures:
+        run_ctx.write_json("01_search/failures.json", search_failures)
+        for failure in search_failures:
+            print(
+                f"⚠️  búsqueda · {failure['db']} no respondió ({failure['error']}); "
+                "se continúa sin esa base"
+            )
 
     # ── 2. Deduplicación (A2) ───────────────────────────────────────────
     deduped, discarded = dedup_agent.deduplicate(raw_records)
