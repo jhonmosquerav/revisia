@@ -137,8 +137,7 @@ def render_prisma_s_checklist(
     lines = [
         "# Checklist PRISMA-S · reporte de la búsqueda (16 ítems)",
         "",
-        "> Rethlefsen ML, et al. PRISMA-S. _Syst Rev_ 2021;10:39. "
-        "doi:10.1186/s13643-020-01542-z",
+        "> Rethlefsen ML, et al. PRISMA-S. _Syst Rev_ 2021;10:39. doi:10.1186/s13643-020-01542-z",
         "",
     ]
     current_section = ""
