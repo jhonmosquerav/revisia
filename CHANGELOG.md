@@ -30,7 +30,18 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   `pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/` (la antigua responde 301).
   El PMC OA Web Service (`oa.fcgi`) fue descontinuado en 2026; RevisIA no lo usaba.
 
+### Fixed
+- **Búsqueda multi-base**: un `ValueError`/`ValidationError` lanzado *dentro* de un
+  backend registrado ya no se confunde con "base sin backend" (antes desaparecía
+  sin rastro); ahora queda en `01_search/failures.json`. Los mensajes de error se
+  pasan por `_http.redact_secrets` para que `api_key=`/`email=` de la URL que
+  incluye httpx no acaben en disco ni en consola.
+
 ### Documentación
+- **Aviso de procedencia** en `docs/benchmark-cribado.md`: las cifras del artículo
+  fundacional provienen de una corrida reconstruida (no ejecutada por el pipeline
+  del repo) y de un meta-análisis con efectos dependientes; se marcan como
+  ilustrativas hasta regenerar el benchmark.
 - **Triage de fuentes** (`docs/fuentes-triage.md`): 40 bases de una guía
   bibliotecaria verificadas en vivo (protocolo, auth, campos, veredicto).
 - **Hoja de ruta de fuentes abiertas** (`docs/fuentes-candidatas.md`): candidatas a

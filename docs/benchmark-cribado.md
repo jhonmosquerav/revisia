@@ -1,5 +1,18 @@
 # Benchmark de sensibilidad del cribado (panel multi-modelo)
 
+> **Aviso de procedencia (auditoría 2026-09-03).** Las cifras del artículo
+> fundacional que se citan abajo (sensibilidad 0,820, I² = 90,7 %) provienen
+> de la corrida `runs/prisma-ia-origen-20260706-080747`, que la auditoría
+> identificó como una **reconstrucción ilustrativa**, no una ejecución del
+> pipeline tal como está en el repositorio: su manifiesto registra 140 llamadas
+> IA en 1,3 ms, el ledger tiene marcas de tiempo escritas a mano y faltan las
+> etapas intermedias. Además, su `effects.yml` agrega 27 de 28 efectos de un
+> mismo artículo (nueve modelos sobre tres corpus), lo que viola la
+> independencia entre estudios. **Estas cifras deben leerse como ilustración
+> del diseño, no como evidencia**, hasta que el benchmark se regenere con el
+> pipeline real y un meta-análisis por subgrupos (corpus → modelo) sin
+> duplicados. Detalle en `docs/auditoria/2026-09-03-auditoria-completa.md`.
+
 El hallazgo central del artículo fundacional de RevisIA es que **no existe un
 número único de "qué tan bueno es el cribado por LLM"**: la sensibilidad
 agregada fue 0,820 pero con heterogeneidad extrema (I² = 90,7%) — el desempeño
