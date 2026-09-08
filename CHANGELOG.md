@@ -38,6 +38,12 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   incluye httpx no acaben en disco ni en consola.
 
 ### Documentación
+- **Auditoría completa** (`docs/auditoria/2026-09-03-auditoria-completa.md`): cinco
+  auditorías independientes (núcleo, seguridad, metodología, tests/empaquetado,
+  capa LLM) con reproducción de cada hallazgo: 4 críticos, 16 altos, 24 medios,
+  22 bajos, contraste con los principios de diseño y plan de remediación en
+  tres olas. Publicada por transparencia: RevisIA exige auditoría a las
+  revisiones que produce y se aplica el mismo estándar.
 - **Aviso de procedencia** en `docs/benchmark-cribado.md`: las cifras del artículo
   fundacional provienen de una corrida reconstruida (no ejecutada por el pipeline
   del repo) y de un meta-análisis con efectos dependientes; se marcan como

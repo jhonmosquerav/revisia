@@ -155,9 +155,21 @@ de `metodologia.md`; **auditoría post-corrida** (`revisia audit`);
 resúmenes + trAIce; exports interoperables (robvis / metafor / PRISMA2020);
 **exportador de documento único** (`revisia export`: HTML autocontenido / PDF).
 Métricas defendibles + verificador anti-alucinación.
-**168 tests verdes** offline (sin API key ni CLI: el provider Claude Code se
-testea con `subprocess` mockeado). Licencia Apache-2.0, `CITATION.cff` y
-`.zenodo.json` listos para depósito en Zenodo.
+Suite de tests verde y offline (sin API key ni CLI: el provider Claude Code se
+testea con `subprocess` mockeado; el conteo actual está en el badge de arriba).
+Licencia Apache-2.0, `CITATION.cff` y `.zenodo.json` listos para depósito en Zenodo.
+
+> **Auditoría abierta (2026-09-03).** RevisIA exige auditar cada revisión que
+> produce; se aplica el mismo estándar. Cinco auditorías independientes con
+> reproducción de cada hallazgo están en
+> [`docs/auditoria/2026-09-03-auditoria-completa.md`](docs/auditoria/2026-09-03-auditoria-completa.md):
+> la base de ingeniería es sólida (estadística contrastada con `metafor`, suite
+> determinista, capa de proveedores), pero **tres promesas de este README aún no
+> se cumplen en el código**: la decisión humana registro a registro, el
+> verificador anti-alucinación en su modo por defecto, y la reproducibilidad de
+> la corrida de referencia. El plan de remediación en tres olas está en el
+> informe; hasta cerrar las olas 0 y 1, trata las salidas como borradores que
+> requieren revisión humana completa, no como evidencia publicable.
 
 ## Equipo de agentes, autonomías y auditorías
 

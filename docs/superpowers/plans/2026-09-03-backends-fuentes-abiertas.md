@@ -1409,7 +1409,7 @@ uv run python -c "
 from revisia.agents.search_backends import search_database
 for db in ['eric','doaj','unesdoc','bvs','gim','agrosavia','clacso','worldbank','doab']:
     try:
-        rs = search_database(db, 'systematic review', 2, mailto='mosquera.abg@gmail.com')
+        rs = search_database(db, 'systematic review', 2, mailto='tu@correo.org')
         print(f'{db:10s} ok  n={len(rs)}  ->', rs[0].record_id if rs else '-', '|', (rs[0].title[:50] if rs else ''))
     except Exception as e:
         print(f'{db:10s} FAIL', type(e).__name__, e)
