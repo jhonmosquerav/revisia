@@ -15,6 +15,7 @@ from pathlib import Path
 
 import yaml
 
+from revisia.agents import _http, search_backends
 from revisia.agents import dedup as dedup_agent
 from revisia.agents import extraccion as extraccion_agent
 from revisia.agents import fulltext as fulltext_agent
@@ -22,7 +23,6 @@ from revisia.agents import reporte as reporte_agent
 from revisia.agents import rob as rob_agent
 from revisia.agents import screening as screening_agent
 from revisia.agents import screening_ft as screening_ft_agent
-from revisia.agents import search_backends
 from revisia.agents import verificador as verificador_agent
 from revisia.config import ReviewProtocol
 from revisia.exclusions import compute_exclusion_breakdown
@@ -120,13 +120,17 @@ def _multi_database_search(
         query = question_text
         if string_file.exists():
             query = string_file.read_text(encoding="utf-8").strip() or question_text
-        try:
-            records += search_backends.search_database(db, query, max_results, mailto=mailto)
-        except ValueError:
+        if search_backends.db_key(db) not in search_backends.BACKENDS:
             # Base sin backend (p. ej. Scopus): se incorpora vía imported/.
             continue
-        except Exception as exc:  # degradar por base, nunca abortar la corrida
-            failures.append({"db": db, "error": f"{type(exc).__name__}: {exc}"})
+        try:
+            records += search_backends.search_database(db, query, max_results, mailto=mailto)
+        except Exception as exc:  # red, 5xx, JSON o validación: degradar, nunca abortar
+            # Cualquier fallo del backend (incluida una ValidationError de pydantic,
+            # que hereda de ValueError) queda registrado; el mensaje se redacta
+            # porque httpx incluye la URL con api_key/email en el texto del error.
+            error = _http.redact_secrets(f"{type(exc).__name__}: {exc}")
+            failures.append({"db": db, "error": error})
             continue
     records += import_directory(protocol_dir / "imported")
     return records, failures

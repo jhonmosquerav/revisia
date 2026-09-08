@@ -197,6 +197,34 @@ def test_multi_database_degrada_si_una_base_falla(tmp_path, monkeypatch) -> None
     assert failures == [{"db": "BVS", "error": "RuntimeError: 503 Service Unavailable"}]
 
 
+def test_multi_database_redacta_api_key_y_registra_validation_error(tmp_path, monkeypatch) -> None:
+    """Un ValueError/ValidationError DENTRO de un backend registrado no se traga (antes
+    se confundía con "base sin backend"); y el mensaje no filtra api_key/email."""
+    from types import SimpleNamespace
+
+    from revisia.orchestration.pipeline import _multi_database_search
+
+    def fake_search_database(db, query, max_results, *, mailto=None):
+        if db == "OpenAlex":
+            raise RuntimeError(
+                "Client error '429' for url "
+                "'https://api.openalex.org/works?search=x&mailto=me%40x.org&api_key=SECRETO123'"
+            )
+        if db == "ERIC":
+            raise ValueError("1 validation error for SearchRecord: year no es entero")
+        return []
+
+    monkeypatch.setattr(search_backends, "search_database", fake_search_database)
+    protocol = SimpleNamespace(databases=["OpenAlex", "ERIC", "Scopus"])
+    _, failures = _multi_database_search(protocol, tmp_path, "q", 5, None)
+    dbs = [f["db"] for f in failures]
+    assert dbs == ["OpenAlex", "ERIC"]  # Scopus (sin backend) no es un fallo: va por imported/
+    assert "SECRETO123" not in failures[0]["error"]
+    assert "me%40x.org" not in failures[0]["error"]
+    assert "api_key=<redacted>" in failures[0]["error"]
+    assert failures[1]["error"].startswith("ValueError:")
+
+
 def test_parse_ris() -> None:
     ris = """TY  - JOUR
 TI  - Un estudio de prueba

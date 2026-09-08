@@ -34,6 +34,21 @@ def make_client(timeout: float = 60.0, *, mailto: str | None = None) -> Any:
     )
 
 
+_SECRET_PARAM_RE = re.compile(
+    r"(?i)((?:api_key|apikey|key|token|access_token|mailto|email)=)[^&\s'\"]+"
+)
+
+
+def redact_secrets(text: str) -> str:
+    """Oculta valores de credenciales/PII en parámetros de URL (``api_key=…``, ``email=…``).
+
+    Los errores de ``httpx`` incluyen la URL completa con su query string; antes
+    de escribirlos en disco (``01_search/failures.json``) o en consola se pasa
+    por aquí para que ninguna key acabe en un artefacto que se comparte.
+    """
+    return _SECRET_PARAM_RE.sub(r"\1<redacted>", text)
+
+
 def strip_html(text: str | None) -> str | None:
     """Quita etiquetas HTML; ``None`` si no queda texto."""
     if not text:

@@ -13,6 +13,13 @@ def test_user_agent_identifica_a_revisia() -> None:
     assert "mailto:x@y.z" in _http.user_agent("x@y.z")
 
 
+def test_redact_secrets_oculta_keys_y_email() -> None:
+    msg = "url 'https://x/works?search=q&mailto=a%40b.c&api_key=K1&Token=T2' fallo"
+    out = _http.redact_secrets(msg)
+    assert "K1" not in out and "T2" not in out and "a%40b.c" not in out
+    assert "search=q" in out and out.count("<redacted>") == 3
+
+
 def test_strip_html_limpia_etiquetas() -> None:
     assert _http.strip_html("<p>Hola <b>mundo</b></p>") == "Hola mundo"
     assert _http.strip_html(None) is None
