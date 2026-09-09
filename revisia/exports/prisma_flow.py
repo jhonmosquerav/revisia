@@ -114,7 +114,7 @@ def render_flow_diagram(counts: PrismaCounts) -> str:
             else ""
         )
         + '"]',
-        f'        F["Informes excluidos (n = {counts.excluded_ft})' f'{_reason_lines(counts)}"]',
+        f'        F["Informes excluidos (n = {counts.excluded_ft}){_reason_lines(counts)}"]',
         "        C --> D",
         "        C --> E",
         "        E --> F",
@@ -159,7 +159,7 @@ def render_flow_updated(
         "```mermaid",
         "flowchart TB",
         '    subgraph PREV["Estudios previos"]',
-        f'        P["Estudios incluidos en la versión anterior (n = {previous_included})"' "]",
+        f'        P["Estudios incluidos en la versión anterior (n = {previous_included})"]',
         "    end",
         '    subgraph NEW["Identificación de nuevos estudios (esta corrida)"]',
         f'        A["Registros identificados (n = {counts.identified})"]',

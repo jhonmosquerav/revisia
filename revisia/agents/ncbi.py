@@ -15,15 +15,16 @@ import time
 import xml.etree.ElementTree as ET
 from typing import Any
 
+from revisia.agents import _http
 from revisia.schemas.records import SearchRecord
 
 EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 ESEARCH_URL = f"{EUTILS}/esearch.fcgi"
 EFETCH_URL = f"{EUTILS}/efetch.fcgi"
 ESUMMARY_URL = f"{EUTILS}/esummary.fcgi"
-IDCONV_URL = "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/"
+IDCONV_URL = "https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/"
 BIOC_URL = (
-    "https://www.ncbi.nlm.nih.gov/research/bionlp/RESTful/" "pmcoa.cgi/BioC_json/{pmcid}/unicode"
+    "https://www.ncbi.nlm.nih.gov/research/bionlp/RESTful/pmcoa.cgi/BioC_json/{pmcid}/unicode"
 )
 
 TOOL = "revisia"
@@ -46,13 +47,8 @@ def _throttle() -> None:
 
 
 def _client(timeout: float = 60.0) -> Any:
-    try:
-        import httpx
-    except ImportError as exc:  # pragma: no cover - depende del entorno
-        raise RuntimeError(
-            "El cliente NCBI requiere httpx. Instala el extra: `uv sync --extra search`."
-        ) from exc
-    return httpx.Client(timeout=timeout, follow_redirects=True)
+    """Indirección local (los tests la parchean) sobre el cliente compartido."""
+    return _http.make_client(timeout)
 
 
 def _common_params(mailto: str | None) -> dict[str, str]:

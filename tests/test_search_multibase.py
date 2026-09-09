@@ -131,6 +131,100 @@ def test_multi_database_usa_cadena_de_base_con_espacios(tmp_path, monkeypatch) -
     assert capturado["Europe PMC"] == "cadena curada europe pmc"  # usó el .txt, no la pregunta
 
 
+def test_backends_nuevos_registrados() -> None:
+    backends = available_backends()
+    for alias in (
+        "eric",
+        "doaj",
+        "unesdoc",
+        "bvs",
+        "lilacs",
+        "gim",
+        "agrosavia",
+        "clacso",
+        "worldbank",
+        "okr",
+        "doab",
+    ):
+        assert alias in backends, alias
+
+
+def test_lilacs_despacha_a_bvs_portal(monkeypatch) -> None:
+    from revisia.agents import open_backends
+
+    class _Client:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc: object) -> bool:
+            return False
+
+        def get(self, url: str, params: dict | None = None) -> _FakeResp:
+            self.calls.append((url, params or {}))
+            return _FakeResp({"diaServerResponse": [{"response": {"numFound": 0, "docs": []}}]})
+
+    client = _Client()
+    monkeypatch.setattr(open_backends, "_client", lambda timeout=60.0, mailto=None: client)
+    assert search_database("LILACS", "diabetes", 5) == []
+    assert client.calls[0][0] == "https://search.bvsalud.org/portal/"
+    assert client.calls[0][1]["q"] == "diabetes"
+
+
+def test_bases_sin_busqueda_sugieren_importacion_manual() -> None:
+    for db in ("Redalyc", "Dialnet", "SciELO", "Google Scholar", "Mendeley"):
+        with pytest.raises(ValueError, match="importación manual"):
+            search_database(db, "q", 5)
+
+
+def test_multi_database_degrada_si_una_base_falla(tmp_path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from revisia.orchestration.pipeline import _multi_database_search
+    from revisia.schemas.records import SearchRecord
+
+    def fake_search_database(db, query, max_results, *, mailto=None):
+        if db == "BVS":
+            raise RuntimeError("503 Service Unavailable")
+        return [SearchRecord(record_id=f"{db}:1", title="ok", source_db=db)]
+
+    monkeypatch.setattr(search_backends, "search_database", fake_search_database)
+    protocol = SimpleNamespace(databases=["OpenAlex", "BVS", "ERIC"])
+    records, failures = _multi_database_search(protocol, tmp_path, "q", 5, None)
+    assert [r.source_db for r in records] == ["OpenAlex", "ERIC"]
+    assert failures == [{"db": "BVS", "error": "RuntimeError: 503 Service Unavailable"}]
+
+
+def test_multi_database_redacta_api_key_y_registra_validation_error(tmp_path, monkeypatch) -> None:
+    """Un ValueError/ValidationError DENTRO de un backend registrado no se traga (antes
+    se confundía con "base sin backend"); y el mensaje no filtra api_key/email."""
+    from types import SimpleNamespace
+
+    from revisia.orchestration.pipeline import _multi_database_search
+
+    def fake_search_database(db, query, max_results, *, mailto=None):
+        if db == "OpenAlex":
+            raise RuntimeError(
+                "Client error '429' for url "
+                "'https://api.openalex.org/works?search=x&mailto=me%40x.org&api_key=SECRETO123'"
+            )
+        if db == "ERIC":
+            raise ValueError("1 validation error for SearchRecord: year no es entero")
+        return []
+
+    monkeypatch.setattr(search_backends, "search_database", fake_search_database)
+    protocol = SimpleNamespace(databases=["OpenAlex", "ERIC", "Scopus"])
+    _, failures = _multi_database_search(protocol, tmp_path, "q", 5, None)
+    dbs = [f["db"] for f in failures]
+    assert dbs == ["OpenAlex", "ERIC"]  # Scopus (sin backend) no es un fallo: va por imported/
+    assert "SECRETO123" not in failures[0]["error"]
+    assert "me%40x.org" not in failures[0]["error"]
+    assert "api_key=<redacted>" in failures[0]["error"]
+    assert failures[1]["error"].startswith("ValueError:")
+
+
 def test_parse_ris() -> None:
     ris = """TY  - JOUR
 TI  - Un estudio de prueba

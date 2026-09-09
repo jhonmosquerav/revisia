@@ -1,0 +1,1 @@
+(tw:("revisión sistemática" OR "systematic review")) AND (tw:("inteligencia artificial" OR "artificial intelligence")) AND year_cluster:[2020 TO 2026]

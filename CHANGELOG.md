@@ -7,13 +7,49 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Ocho backends de fuentes abiertas, sin API key** (triage verificado en vivo,
+  `docs/fuentes-triage.md`): **ERIC** (educación), **DOAJ** (revistas OA),
+  **UNESDOC** (UNESCO DataHub), **BVS/LILACS** (salud LATAM, es/pt; alias `gim`
+  para Global Index Medicus), **AGROSAVIA**, **CLACSO** y **Banco Mundial OKR**
+  vía un **adaptador DSpace 7+ genérico** (`agents/dspace.py`; otro repositorio =
+  una línea) y **DOAB** (libros OA). Todos opt-in por área en `protocol.databases`.
+- **Degradación por base en la búsqueda**: un backend que falle por red/5xx no
+  aborta la corrida; el fallo queda en `01_search/failures.json` (PRISMA-S).
+- Cliente HTTP compartido (`agents/_http.py`) con User-Agent identificado.
 - **OpenAlex — API key opcional** (`OPENALEX_API_KEY`): el backend
   (`agents/busqueda.py`) la envía como `api_key` si está en el entorno (esquema de
   créditos de OpenAlex 2026, límites mayores). Sin ella el backend **sigue
   funcionando** por el polite pool (`--mailto`), sin cambios. Verificado en vivo:
   la API responde sin key.
 
+### Changed
+- `MANUAL_ONLY` incluye Redalyc, Dialnet, SciELO, Google Scholar, Mendeley,
+  DynaMed, Lens y PEDro: el despacho sugiere importación RIS/BibTeX (ninguna
+  ofrece búsqueda por texto con API abierta).
+- URL del ID Converter de PMC actualizada a
+  `pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/` (la antigua responde 301).
+  El PMC OA Web Service (`oa.fcgi`) fue descontinuado en 2026; RevisIA no lo usaba.
+
+### Fixed
+- **Búsqueda multi-base**: un `ValueError`/`ValidationError` lanzado *dentro* de un
+  backend registrado ya no se confunde con "base sin backend" (antes desaparecía
+  sin rastro); ahora queda en `01_search/failures.json`. Los mensajes de error se
+  pasan por `_http.redact_secrets` para que `api_key=`/`email=` de la URL que
+  incluye httpx no acaben en disco ni en consola.
+
 ### Documentación
+- **Auditoría completa** (`docs/auditoria/2026-09-03-auditoria-completa.md`): cinco
+  auditorías independientes (núcleo, seguridad, metodología, tests/empaquetado,
+  capa LLM) con reproducción de cada hallazgo: 4 críticos, 16 altos, 24 medios,
+  22 bajos, contraste con los principios de diseño y plan de remediación en
+  tres olas. Publicada por transparencia: RevisIA exige auditoría a las
+  revisiones que produce y se aplica el mismo estándar.
+- **Aviso de procedencia** en `docs/benchmark-cribado.md`: las cifras del artículo
+  fundacional provienen de una corrida reconstruida (no ejecutada por el pipeline
+  del repo) y de un meta-análisis con efectos dependientes; se marcan como
+  ilustrativas hasta regenerar el benchmark.
+- **Triage de fuentes** (`docs/fuentes-triage.md`): 40 bases de una guía
+  bibliotecaria verificadas en vivo (protocolo, auth, campos, veredicto).
 - **Hoja de ruta de fuentes abiertas** (`docs/fuentes-candidatas.md`): candidatas a
   futuros backends —arXiv, CORE, RePEc, RedALyC/SciELO…— priorizadas por área
   (economía, negocios, tecnología, LATAM), enlazada desde README e `integraciones.md`.

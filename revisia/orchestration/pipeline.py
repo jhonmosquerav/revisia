@@ -15,6 +15,7 @@ from pathlib import Path
 
 import yaml
 
+from revisia.agents import _http, search_backends
 from revisia.agents import dedup as dedup_agent
 from revisia.agents import extraccion as extraccion_agent
 from revisia.agents import fulltext as fulltext_agent
@@ -22,7 +23,6 @@ from revisia.agents import reporte as reporte_agent
 from revisia.agents import rob as rob_agent
 from revisia.agents import screening as screening_agent
 from revisia.agents import screening_ft as screening_ft_agent
-from revisia.agents import search_backends
 from revisia.agents import verificador as verificador_agent
 from revisia.config import ReviewProtocol
 from revisia.exclusions import compute_exclusion_breakdown
@@ -101,28 +101,39 @@ def _multi_database_search(
     question_text: str,
     max_results: int,
     mailto: str | None,
-) -> list[SearchRecord]:
+) -> tuple[list[SearchRecord], list[dict[str, str]]]:
     """Busca en cada base declarada (con su cadena) + importación manual.
 
     Por cada base de ``protocol.databases`` lee su cadena en
     ``search_strings/<base>.txt`` (cae a la pregunta) y despacha al backend; las
     bases sin backend programático (Scopus/WoS) se cubren con los archivos
-    RIS/BibTeX de ``imported/``. La deduplicación posterior une los solapes.
+    RIS/BibTeX de ``imported/``. Un backend que falle (red, 5xx, JSON inválido)
+    **no aborta la corrida**: se anota en ``failures`` para que quede en disco
+    (``01_search/failures.json``) y en PRISMA-S conste qué base no respondió.
+    La deduplicación posterior une los solapes.
     """
     databases = protocol.databases or ["openalex"]
     records: list[SearchRecord] = []
+    failures: list[dict[str, str]] = []
     for db in databases:
         string_file = protocol_dir / "search_strings" / f"{search_backends.db_key(db)}.txt"
         query = question_text
         if string_file.exists():
             query = string_file.read_text(encoding="utf-8").strip() or question_text
-        try:
-            records += search_backends.search_database(db, query, max_results, mailto=mailto)
-        except ValueError:
+        if search_backends.db_key(db) not in search_backends.BACKENDS:
             # Base sin backend (p. ej. Scopus): se incorpora vía imported/.
             continue
+        try:
+            records += search_backends.search_database(db, query, max_results, mailto=mailto)
+        except Exception as exc:  # red, 5xx, JSON o validación: degradar, nunca abortar
+            # Cualquier fallo del backend (incluida una ValidationError de pydantic,
+            # que hereda de ValueError) queda registrado; el mensaje se redacta
+            # porque httpx incluye la URL con api_key/email en el texto del error.
+            error = _http.redact_secrets(f"{type(exc).__name__}: {exc}")
+            failures.append({"db": db, "error": error})
+            continue
     records += import_directory(protocol_dir / "imported")
-    return records
+    return records, failures
 
 
 def _rob_table_md(tool: str, assessments: dict[str, RoBAssessment]) -> str:
@@ -171,12 +182,20 @@ def run_pipeline(
     # ── 1. Búsqueda multi-base (A2) ─────────────────────────────────────
     # ``search_fn`` inyectado (tests) tiene prioridad y conserva el contrato
     # de una sola llamada; en producción se busca en todas las bases declaradas.
+    search_failures: list[dict[str, str]] = []
     if search_fn is not None:
         raw_records = search_fn(question_text, max_results)
     else:
-        raw_records = _multi_database_search(
+        raw_records, search_failures = _multi_database_search(
             protocol, protocol_dir, question_text, max_results, mailto
         )
+    if search_failures:
+        run_ctx.write_json("01_search/failures.json", search_failures)
+        for failure in search_failures:
+            print(
+                f"⚠️  búsqueda · {failure['db']} no respondió ({failure['error']}); "
+                "se continúa sin esa base"
+            )
 
     # ── 2. Deduplicación (A2) ───────────────────────────────────────────
     deduped, discarded = dedup_agent.deduplicate(raw_records)

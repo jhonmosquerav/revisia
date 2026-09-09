@@ -31,3 +31,8 @@ protocols/*/
 # Cerebro de investigador (memoria personal acumulada con --brain): es TUYA,
 # no del repositorio. Ver docs/memoria-cerebro.md.
 cerebro/
+
+# Cobertura local (pytest-cov)
+.coverage*
+coverage.xml
+htmlcov/
