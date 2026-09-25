@@ -27,8 +27,13 @@ from revisia.schemas.screening import ScreeningDecision
 class ScreeningMetrics(BaseModel):
     """Métricas del cribado frente a un gold standard humano.
 
-    ``None`` = indefinida cuando el gold o la IA asignan una sola clase
-    (denominador 0); nunca ``0.0`` inventado (auditoría 2026-09-03, A11).
+    ``None`` = indefinida, nunca ``0.0`` inventado (auditoría 2026-09-03,
+    A11). Para MCC/WMCC eso ocurre cuando el gold o la IA asignan una sola
+    clase (denominador 0). Para ``cohen_kappa`` es más estricto: solo es
+    ``None`` cuando el gold y la IA son ambos constantes en la misma clase
+    (acuerdo perfecto por azar, ``pe=1``) o cuando ``n=0``; si uno de los dos
+    es de una sola clase pero el otro no, kappa sigue siendo un número
+    (típicamente 0.0) aunque no sea informativo.
     """
 
     n: int
@@ -84,7 +89,12 @@ def wmcc(tp: int, fp: int, fn: int, tn: int, *, fn_weight: float = 10.0) -> floa
 
 
 def cohen_kappa(pred: list[bool], gold: list[bool]) -> float | None:
-    """Cohen's kappa entre dos clasificaciones binarias (``None`` si indefinido)."""
+    """Cohen's kappa entre dos clasificaciones binarias.
+
+    ``None`` solo si ``n=0`` o si ambas clasificaciones son constantes en la
+    misma clase (acuerdo perfecto por azar, ``pe=1``); no basta con que una
+    sola de las dos sea de una sola clase.
+    """
     tp, fp, fn, tn = confusion(pred, gold)
     n = tp + fp + fn + tn
     if n == 0:
