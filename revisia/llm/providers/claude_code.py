@@ -24,6 +24,7 @@ import os
 import shutil
 import subprocess
 from dataclasses import replace
+from pathlib import Path
 from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -48,6 +49,14 @@ _OAUTH_TOKEN_VAR = "CLAUDE_CODE_OAUTH_TOKEN"
 _ENDPOINT_OVERRIDE_VARS = ("ANTHROPIC_BASE_URL", "USE_STAGING_OAUTH", "USE_LOCAL_OAUTH")
 # Flag (env) para limpiar esos overrides en el subproceso cuando hay token propio.
 _CLEAN_ENV_FLAG = "REVISIA_CLAUDE_CODE_CLEAN_ENV"
+
+# Shims que CreateProcess delega en cmd.exe, que RE-PARSEA la línea de comandos
+# (BatBadBut, auditoría 2026-09-03 A1): los argumentos ya citados por subprocess
+# recuperan el significado de estos metacaracteres. No se escapan (``%VAR%`` no
+# es neutralizable dentro de comillas y ``!`` depende de la expansión
+# retardada): si alguno aparece, la llamada se rechaza antes de crear el proceso.
+_CMD_SHIM_SUFFIXES = (".cmd", ".bat")
+_CMD_METACHARS = frozenset('"&|<>^%!\r\n')
 
 
 class ClaudeCodeProvider:
@@ -115,7 +124,33 @@ class ClaudeCodeProvider:
         ]
         if req.system:
             cmd += ["--append-system-prompt", req.system]
+        self._guard_cmd_shim(cmd)
         return cmd
+
+    @staticmethod
+    def _guard_cmd_shim(cmd: list[str]) -> None:
+        """Rechaza argumentos con metacaracteres de cmd.exe si el CLI es un shim.
+
+        Con el binario nativo (``claude.exe`` o POSIX) no hace nada: solo un
+        ``.cmd``/``.bat`` pasa por cmd.exe. El prompt viaja por stdin y no se
+        comprueba: no atraviesa cmd.exe.
+
+        Raises:
+            RuntimeError: si algún argumento contiene un metacarácter de cmd.exe.
+        """
+        exe = Path(cmd[0])
+        if exe.suffix.lower() not in _CMD_SHIM_SUFFIXES:
+            return
+        for arg in cmd[1:]:
+            bad = sorted(set(arg) & _CMD_METACHARS)
+            if bad:
+                raise RuntimeError(
+                    f"Argumento no seguro para el shim {exe.name}: contiene {''.join(bad)!r}. "
+                    "En Windows, cmd.exe re-interpreta esos caracteres al lanzar un .cmd/.bat "
+                    "(BatBadBut) y podría ejecutar comandos. Instala el binario nativo de "
+                    "Claude Code (claude.exe) o usa un modelo y un system prompt sin esos "
+                    "caracteres."
+                )
 
     def _invoke(self, req: LLMRequest) -> tuple[str, dict]:
         """Corre ``claude -p`` con el prompt por stdin y devuelve (texto, usage).

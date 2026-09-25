@@ -186,3 +186,50 @@ def test_sin_clean_env_conserva_el_entorno(monkeypatch) -> None:
     provider = cc.ClaudeCodeProvider(model="sonnet", clean_env=False)
     provider.complete(LLMRequest(prompt="x"))
     assert recorder[0]["env"].get("ANTHROPIC_BASE_URL") == "https://staging.example/"
+
+
+# ── A-2 · guardia fail-closed del shim .CMD (auditoría 2026-09-03, A1) ──────
+
+
+def test_windows_cmd_shim_rejects_metachars(monkeypatch) -> None:
+    recorder: list[dict] = []
+    monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:\npm\claude.CMD")
+    monkeypatch.setattr(cc.subprocess, "run", _fake_run_factory([_result_json("x")], recorder))
+    # Construcción directa: salta ProviderConfig; la guardia debe sostenerse sola.
+    provider = cc.ClaudeCodeProvider(model='opus" & calc & "')
+    with pytest.raises(RuntimeError, match="BatBadBut"):
+        provider.complete(LLMRequest(prompt="hola"))
+    assert recorder == []  # no se llegó a crear ningún proceso
+
+
+def test_windows_cmd_shim_rejects_metachars_in_system_prompt(monkeypatch) -> None:
+    recorder: list[dict] = []
+    monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:\npm\claude.cmd")
+    monkeypatch.setattr(cc.subprocess, "run", _fake_run_factory([_result_json("x")], recorder))
+    provider = cc.ClaudeCodeProvider(model="sonnet")
+    with pytest.raises(RuntimeError, match="BatBadBut"):
+        provider.complete(LLMRequest(prompt="hola", system="usa el 100% & sal"))
+    assert recorder == []
+
+
+def test_windows_cmd_shim_permite_argumentos_seguros(monkeypatch) -> None:
+    recorder: list[dict] = []
+    monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:\npm\claude.CMD")
+    monkeypatch.setattr(cc.subprocess, "run", _fake_run_factory([_result_json("ok")], recorder))
+    provider = cc.ClaudeCodeProvider(model="sonnet")
+    # El prompt viaja por stdin, no por cmd.exe: puede traer cualquier carácter.
+    resp = provider.complete(LLMRequest(prompt="abstract con & y %PATH%", system="eres conciso"))
+    assert resp.text == "ok"
+    assert recorder[0]["cmd"][0].endswith("claude.CMD")
+    assert recorder[0]["input"] == "abstract con & y %PATH%"
+
+
+def test_binario_nativo_no_activa_la_guardia(monkeypatch) -> None:
+    recorder: list[dict] = []
+    monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:\bin\claude.exe")
+    monkeypatch.setattr(cc.subprocess, "run", _fake_run_factory([_result_json("ok")], recorder))
+    provider = cc.ClaudeCodeProvider(model="sonnet")
+    # CreateProcess sobre un .exe no re-parsea: la guardia no aplica.
+    resp = provider.complete(LLMRequest(prompt="x", system="usa el 100%"))
+    assert resp.text == "ok"
+    assert len(recorder) == 1
