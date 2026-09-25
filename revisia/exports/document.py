@@ -18,7 +18,9 @@ en UN solo archivo:
 
 La conversión Markdown→HTML usa la librería ``markdown`` (pura-Python, sin
 dependencias transitivas), declarada en el núcleo para que el formato por
-defecto funcione siempre.
+defecto funcione siempre. El HTML resultante se sanea con ``nh3`` (allowlist
+de etiquetas y atributos, solo ``data:`` en imágenes): el entregable lo
+redacta un LLM y no se confía en él.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from datetime import datetime
 from pathlib import Path
 
 import markdown as md_lib
+import nh3
 import yaml
 from pydantic import ValidationError
 
@@ -64,6 +67,69 @@ _MIME = {
     ".gif": "image/gif",
     ".svg": "image/svg+xml",
 }
+
+# Saneado del Markdown convertido (auditoría 2026-09-03, A2/M1). Todo el texto no
+# confiable del entregable (lo redacta un LLM) entra al HTML por `_md_to_html`;
+# lo que genera el propio exportador (portada, figuras de meta-análisis, BibTeX,
+# plantilla con <style>) no pasa por ahí y ya va escapado.
+_ALLOWED_TAGS = frozenset(
+    {
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "p",
+        "br",
+        "hr",
+        "div",
+        "span",
+        "strong",
+        "em",
+        "b",
+        "i",
+        "del",
+        "sup",
+        "sub",
+        "code",
+        "pre",
+        "blockquote",
+        "ul",
+        "ol",
+        "li",
+        "a",
+        "table",
+        "thead",
+        "tbody",
+        "tfoot",
+        "tr",
+        "th",
+        "td",
+        "caption",
+        "figure",
+        "figcaption",
+        "img",
+    }
+)
+_ALLOWED_ATTRIBUTES: dict[str, set[str]] = {
+    "a": {"href", "title"},
+    "img": {"src", "alt"},
+    "code": {"class"},  # language-x de los bloques de código
+    "th": {"style"},  # la extensión `tables` alinea con style="text-align: …"
+    "td": {"style"},
+}
+
+
+def _attribute_filter(tag: str, attr: str, value: str) -> str | None:
+    """Restringe ``data:`` a imágenes y veta ``javascript:``/``data:`` en enlaces."""
+    if tag == "img" and attr == "src":
+        return value if value.startswith("data:image/") else None
+    if tag == "a" and attr == "href":
+        low = value.strip().lower()
+        return None if low.startswith(("data:", "javascript:")) else value
+    return value
+
 
 # Anexos del deliverable, en orden de ensamblado; los ausentes se omiten.
 _SECTIONS: tuple[tuple[str, str], ...] = (
@@ -198,15 +264,20 @@ def _figure_html(path: Path, caption: str) -> str:
 def _embed_md_images(text: str, base_dir: Path) -> str:
     """Reescribe ``![alt](ruta)`` a ``<figure>`` con la imagen embebida.
 
-    Las referencias externas (http/https) o rotas se degradan a su texto
-    alternativo en cursiva: el HTML resultante nunca carga recursos de fuera.
+    Solo se embeben imágenes (extensión en ``_MIME``) que queden DENTRO de
+    ``base_dir`` tras resolver ``..`` y enlaces simbólicos: una referencia como
+    ``![x](../../.env)`` no puede sacar ficheros del entregable (auditoría
+    2026-09-03, A2). Las referencias externas (http/https), rotas o fuera del
+    entregable se degradan a su texto alternativo en cursiva: el HTML resultante
+    nunca carga recursos de fuera.
     """
+    root = base_dir.resolve()
 
     def _sub(match: re.Match[str]) -> str:
         alt, ref = match.group(1), match.group(2)
         if not ref.startswith(("http://", "https://", "data:", "file:")):
-            target = base_dir / ref
-            if target.is_file():
+            target = (base_dir / ref).resolve()
+            if target.is_relative_to(root) and target.suffix.lower() in _MIME and target.is_file():
                 return _figure_html(target, alt)
         return f"*{alt}*" if alt else ""
 
@@ -223,7 +294,21 @@ def _demote_headings(text: str, levels: int = 2) -> str:
 
 
 def _md_to_html(text: str) -> str:
-    return md_lib.markdown(text, extensions=["tables", "fenced_code"])
+    """Convierte Markdown a HTML y lo sanea con una allowlist (``nh3``).
+
+    Tumba ``<script>``/``<style>`` con su contenido, los manejadores ``on*``,
+    las imágenes remotas y cualquier ``style`` que no sea ``text-align``.
+    """
+    raw = md_lib.markdown(text, extensions=["tables", "fenced_code"])
+    return nh3.clean(
+        raw,
+        tags=set(_ALLOWED_TAGS),
+        clean_content_tags={"script", "style"},
+        attributes=_ALLOWED_ATTRIBUTES,
+        attribute_filter=_attribute_filter,
+        url_schemes={"http", "https", "mailto", "data"},
+        filter_style_properties={"text-align"},
+    )
 
 
 def _titulo(doc_md: str | None, manifest: dict, run_dir: Path) -> str:
@@ -349,10 +434,13 @@ def assemble_html(run_dir: Path | str) -> str:
 
 def _render_pdf(html_text: str, out: Path) -> None:
     try:
-        from weasyprint import HTML  # extra opcional `pdf` (import perezoso)
+        from weasyprint import HTML, URLFetcher  # extra opcional `pdf` (import perezoso)
     except (ImportError, OSError) as exc:
         raise RuntimeError(f"{_PDF_HINT} Detalle: {exc}") from exc
-    HTML(string=html_text).write_pdf(str(out))
+    # Solo data: (las figuras ya viajan embebidas): WeasyPrint no abre file:// ni
+    # http(s):// aunque el HTML los traiga (auditoría 2026-09-03, M1).
+    fetcher = URLFetcher(allowed_protocols={"data"})
+    HTML(string=html_text, url_fetcher=fetcher).write_pdf(str(out))
 
 
 def export_run(run_dir: Path | str, fmt: str = "html", out: Path | str | None = None) -> Path:

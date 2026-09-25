@@ -229,3 +229,100 @@ def test_export_corrida_real(tmp_path: Path) -> None:
     assert "mermaid" not in html
     assert html.count("data:image/png;base64,") >= 2
     assert "Inteligencia artificial en la metodología PRISMA" in html
+
+
+# ── Ola 0 · A-3/A-4/A-5 (auditoría 2026-09-03, A2 y M1) ─────────────────────
+
+
+def _append_documento(run_dir: Path, extra: str) -> None:
+    doc = run_dir / "deliverable" / "documento.md"
+    doc.write_text(doc.read_text(encoding="utf-8") + "\n" + extra + "\n", encoding="utf-8")
+
+
+def test_embed_images_rejects_traversal(run_dir: Path) -> None:
+    # Reproducción literal de la auditoría: un secreto fuera de deliverable/.
+    (run_dir / ".env").write_text("TOP_SECRET=abc123", encoding="utf-8")
+    _append_documento(run_dir, "![fuga](../.env)")
+    html = assemble_html(run_dir)
+    assert "TOP_SECRET" not in html
+    assert base64.b64encode(b"TOP_SECRET=abc123").decode() not in html
+    assert "<em>fuga</em>" in html  # se degrada a su texto alternativo
+
+
+def test_embed_images_rejects_image_outside_deliverable(run_dir: Path) -> None:
+    (run_dir / "fuera.png").write_bytes(_PNG_1PX)
+    _append_documento(run_dir, "![fuera](../fuera.png)")
+    html = assemble_html(run_dir)
+    assert 'alt="fuera"' not in html
+    assert "<em>fuera</em>" in html
+
+
+def test_embed_images_solo_extensiones_de_imagen(run_dir: Path) -> None:
+    _append_documento(run_dir, "![anexo](referencias.bib)")
+    html = assemble_html(run_dir)
+    assert "data:application/octet-stream" not in html
+    assert "<em>anexo</em>" in html
+
+
+_MALICIOSO = """
+<script>alert('xss')</script>
+
+<img src=x onerror="alert(1)">
+
+<img src="http://evil.example/pixel.png">
+
+<a href="javascript:alert(1)">js</a> <a href="https://doi.org/10.1000/ok">ok</a>
+
+<table><tr><td style="background:url(http://evil.example/x);text-align:center">z</td></tr></table>
+"""
+
+
+def test_export_html_strips_script_and_handlers(run_dir: Path) -> None:
+    _append_documento(run_dir, _MALICIOSO)
+    html = assemble_html(run_dir)
+    assert "<script" not in html
+    assert "alert(" not in html
+    assert "onerror" not in html
+    assert "evil.example" not in html
+    assert "javascript:" not in html
+    # Lo legítimo sobrevive: enlaces https, alineación de tablas y figuras data:.
+    assert 'href="https://doi.org/10.1000/ok"' in html
+    assert "text-align:center" in html
+    assert 'src="data:image/png;base64,' in html
+
+
+def test_anexos_tambien_se_sanean(run_dir: Path) -> None:
+    (run_dir / "deliverable" / "meta_analisis.md").write_text(
+        "# Meta-análisis\n\n<script>alert(2)</script>\n", encoding="utf-8"
+    )
+    assert "<script" not in assemble_html(run_dir)
+
+
+def test_pdf_url_fetcher_rejects_non_data(
+    run_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import types
+
+    seen: dict = {}
+
+    class _Fetcher:
+        def __init__(self, **kwargs) -> None:
+            seen["fetcher_kwargs"] = kwargs
+
+    class _HTML:
+        def __init__(self, **kwargs) -> None:
+            seen["html_kwargs"] = kwargs
+
+        def write_pdf(self, target: str) -> None:
+            Path(target).write_bytes(b"%PDF-fake")
+
+    fake = types.ModuleType("weasyprint")
+    fake.HTML = _HTML  # type: ignore[attr-defined]
+    fake.URLFetcher = _Fetcher  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "weasyprint", fake)
+
+    out = export_run(run_dir, fmt="pdf", out=tmp_path / "x.pdf")
+    assert out.read_bytes() == b"%PDF-fake"
+    # Solo data: (las figuras ya viajan embebidas): ni file:// ni http(s)://.
+    assert seen["fetcher_kwargs"] == {"allowed_protocols": {"data"}}
+    assert isinstance(seen["html_kwargs"]["url_fetcher"], _Fetcher)
