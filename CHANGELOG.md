@@ -96,6 +96,11 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   ficheros raíz que enlaza el README (`.env.example`, `AGENTS.md`,
   `CONTRIBUTING.md`, `SECURITY.md`…). `.superpowers/` pasa a `.gitignore`.
 - Un `protocol.yml` con YAML roto da un error de uso (código 2), no un traceback.
+- `revisia validate`/`run` detectan también los modelos retirados escritos con
+  prefijo o variante (`models/…`, `google/…:free` en OpenRouter,
+  `publishers/google/models/…` en Vertex).
+- `revisia check` con `--provider` desconocido o `--model` inválido sale con
+  código 2 y un mensaje, sin traceback.
 
 ### Security
 - **Inyección de comandos en Windows (auditoría A1).** `ProviderConfig.model` se
