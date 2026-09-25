@@ -48,7 +48,12 @@ ficheros en el export) y la parte de **M1** que la Ola 0 puede cubrir.
 
 ### A-1 · Validación del nombre de modelo (`llm/registry.py`)
 
-`ProviderConfig.model` pasa a `Field(pattern=r"^[A-Za-z0-9._:/-]{1,64}$")`. Un
+`ProviderConfig.model` pasa a `Field(pattern=r"^[A-Za-z0-9._:/@+-]{1,128}$")`.
+Frente al patrón de la auditoría se añaden `@` y `+` (ids estilo Vertex como
+`claude-x@20260101`) y se sube el tope a 128 (ids de OpenRouter/HF con
+organización y sufijo): ninguno de los dos es metacarácter de `cmd.exe`, y se
+verificó con `grep` que todos los ids usados hoy en tests, ejemplos y plantilla
+cumplen el patrón. Un
 `protocol.yml` con un `model` que contenga comillas, `&` o `|` deja de cargar
 con `ValidationError`. Es la barrera primaria de A1 y protege a todos los
 proveedores, no solo a `claude_code`.
@@ -133,14 +138,22 @@ scripts del SVG, así que no se retira. API verificada contra `nh3 0.3.7`
 ### A-5 · `url_fetcher` de WeasyPrint (`exports/document.py`)
 
 `HTML(string=…)` usa hoy el fetcher por defecto, que resuelve `file://` y
-`http://`. Se le pasa un `url_fetcher` que solo acepta `data:` y lanza
-`ValueError` para cualquier otro esquema. Cierra la mitad PDF de M1, que la
-auditoría solo pudo reproducir en HTML (WeasyPrint no estaba instalado).
+`http://`. Se le pasa `url_fetcher=URLFetcher(allowed_protocols={"data"})`:
+WeasyPrint descarta cualquier otro esquema antes de abrirlo. Cierra la mitad
+PDF de M1, que la auditoría solo pudo reproducir en HTML (WeasyPrint no estaba
+instalado).
+
+WeasyPrint 70 cambió el contrato: `url_fetcher` ya no es un *callable* sino una
+instancia de `weasyprint.URLFetcher` (verificado leyendo `weasyprint/urls.py`
+del wheel 70.0). Por eso el extra `pdf` sube a `weasyprint>=70`; con el
+suelo actual (`>=63`) el mismo código no funcionaría en todas las versiones
+admitidas. El test no necesita WeasyPrint instalado: sustituye el módulo en
+`sys.modules` y comprueba qué fetcher recibe `HTML`.
 
 ### A-6 · `pyproject.toml`
 
-`nh3>=0.3` entra en `dependencies` (la API de A-4 se verificó en 0.3.7) y se
-regenera `uv.lock`. El núcleo deja de ser pura-Python; se documenta en el
+`nh3>=0.3` entra en `dependencies` (la API de A-4 se verificó en 0.3.7), el
+extra `pdf` sube a `weasyprint>=70` (A-5) y se regenera `uv.lock`. El núcleo deja de ser pura-Python; se documenta en el
 comentario del bloque, junto al de `markdown`.
 
 ## 5. PR-B · `fix/ola0-honestidad-pipeline`
@@ -169,8 +182,12 @@ Modelo Pydantic `HumanDecision`:
 
 `_read_decision` deja de devolver un `dict` crudo:
 
-- YAML malformado o con raíz que no sea mapa → `ValueError` con mensaje
-  accionable (ruta del fichero y qué se esperaba), no un traceback.
+- YAML malformado o con raíz que no sea mapa → `DecisionFileError` (subclase
+  de `ValueError`) con mensaje accionable (ruta del fichero y qué se esperaba).
+- En el CLI, `main()` convierte `DecisionFileError` y la `ValidationError` de
+  un `protocol.yml` inválido en `error: …` por stderr y `rc = 2`, sin
+  traceback. Solo para `validate` y `run`, y solo esas dos excepciones: un
+  error inesperado del motor sigue mostrando su traceback.
 - Los campos desconocidos se conservan en `detail` del ledger, como hoy.
 - `approved` es obligatorio: un `decision.yml` vacío deja de leerse como
   rechazo de `human:desconocido` (hallazgo bajo de la auditoría) y pasa a ser
@@ -225,7 +242,8 @@ Cierra **C4**, **A14** y dos hallazgos bajos de estadística.
 - El docstring del módulo deja de nombrar un id concreto (la auditoría lo pide
   explícitamente: "no fijar el modelo en docstrings").
 - `protocols/_TEMPLATE/protocol.yml` (líneas 64, 69, 99), y el default de
-  `--model` en `cli.py:366` (subcomando `new`) al día. `README.md` no nombra
+  `--model` en `cli.py:366` (subcomando `check`, que pasa a leer
+  `gemini.DEFAULT_MODEL` en vez de repetir el literal) al día. `README.md` no nombra
   ningún id de modelo (la auditoría citaba `README.md:84`, que hoy es la tabla
   de principios): no se toca.
   Inventario hecho con `grep -rn gemini-2`; los tests que usan
@@ -235,8 +253,8 @@ Cierra **C4**, **A14** y dos hallazgos bajos de estadística.
 
 ### C-2 · Lista de modelos retirados
 
-`revisia/llm/deprecations.py` con `RETIRED_MODELS: dict[str, str]` (id → fecha
-de apagado ISO), poblada con lo verificado el 2026-09-08:
+`revisia/llm/deprecations.py` con `RETIRED_MODELS: dict[str, date]` (id →
+fecha de apagado), `Retirement` y `retirement_for(model)`, poblada con lo verificado el 2026-09-08:
 
 | Modelo | Apagado |
 |---|---|
