@@ -63,11 +63,15 @@ class EffectInput(BaseModel):
     def _log_or(self) -> tuple[float, float]:
         if None in (self.e1, self.n1, self.e0, self.n0):
             raise ValueError(f"{self.study_id}: faltan e1/n1/e0/n0 para logOR.")
-        # Corrección de continuidad 0.5 (Haldane-Anscombe), robusta ante ceros.
-        a = self.e1 + 0.5
-        b = (self.n1 - self.e1) + 0.5
-        c = self.e0 + 0.5
-        d = (self.n0 - self.e0) + 0.5
+        a = self.e1
+        b = self.n1 - self.e1
+        c = self.e0
+        d = self.n0 - self.e0
+        # Corrección de continuidad 0.5 (Haldane-Anscombe) SOLO si alguna celda es
+        # 0: aplicarla siempre sesga hacia el nulo (+0,017 medido en la auditoría
+        # 2026-09-03, M10; Sweeting, Sutton y Lambert 2004).
+        if 0 in (a, b, c, d):
+            a, b, c, d = a + 0.5, b + 0.5, c + 0.5, d + 0.5
         yi = math.log((a * d) / (b * c))
         vi = 1 / a + 1 / b + 1 / c + 1 / d
         return yi, vi
