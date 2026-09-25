@@ -144,10 +144,20 @@ def test_rejected_final_gate_is_not_completed(tmp_path) -> None:
 
 
 def test_paused_run_final_gate_falla_en_auditoria(tmp_path) -> None:
+    # Aprueba en humano las etapas de juicio previas al reporte (screening_ta,
+    # screening_ft, extraccion, rob) para que, sin auto-approve, la corrida
+    # llegue viva hasta el checkpoint final y pause justo ahí (A1): es ese gate
+    # el que queremos ver fallar en la auditoría, no uno anterior.
     protocol = load_protocol(EXAMPLE)
     ctx = RunContext(protocol.slug, tmp_path, "TEST-PAUSED")
+    decision_humana = "approved: true\nactor: human:revisora\n"
+    for stage in ("screening_ta", "screening_ft", "extraccion", "rob"):
+        (ctx.stage_dir(stage) / "decision.yml").write_text(decision_humana, encoding="utf-8")
+
     result = run_pipeline(protocol, EXAMPLE, ctx, auto_approve=False, search_fn=_fake_search)
     assert result.status == "paused"
+    assert "reporte" in result.message
+    assert (ctx.run_dir / "reporte" / "review_request.yml").exists()
 
     report = run_audit(ctx.run_dir)
     final_gate = next(c for c in report.checks if c.check_id == "final_gate")
