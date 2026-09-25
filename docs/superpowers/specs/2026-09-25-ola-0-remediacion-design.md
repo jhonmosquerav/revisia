@@ -2,7 +2,7 @@
 
 - **Fecha:** 2026-09-25
 - **Origen:** `docs/auditoria/2026-09-03-auditoria-completa.md` §8, "Ola 0 · esta semana, sin cambiar el diseño".
-- **Base:** `main` @ `fd8dd64` (v0.6.0, 188 tests en verde).
+- **Base:** `main` @ `fd8dd64` (v0.6.0; 190 tests en verde medidos el 2026-09-25).
 - **Alcance declarado por la auditoría:** cierra C4, A1, A2, A3, M2 y la mitad de C1.
 
 ## 1. Por qué esta ola existe
@@ -36,7 +36,7 @@ por las negaciones inoperantes del `.gitignore` (M23), que el ítem 6 corta.
 | D1 | Entrega en **tres PRs temáticas secuenciales** sobre `main` | El ítem 5 es el único que cambia comportamiento observable y merece revisión aislada; mezclarlo con empaquetado hace que un rollback arrastre lo que no debe. Secuenciales y no en paralelo porque PR-B y PR-C tocan ambas `audit.py`. |
 | D2 | El validador de `autonomy` es **error duro al cargar** | C1 es exactamente que un `A3` apaga el HITL en silencio; un aviso por stdout es el mismo fallo con más letras (y M8 documenta que stdout se rompe en Windows redirigido). Es además el principio no negociable de `AGENTS.md`: `screening`, `extraccion` y `rob` nunca superan A1. |
 | D3 | Modelo por defecto: **`gemini-3.5-flash-lite`** | `gemini-2.0-flash` se apagó el 2026-06-01 y `gemini-2.5-flash` se retira el 2026-10-16 (fuentes: changelog y página de deprecations de la Gemini API, consultadas 2026-09-08). El default sirve al quickstart, no al juicio metodológico: una corrida de cribado son ~1.400 llamadas, y quien publique elige modelo en su `protocol.yml`. |
-| D4 | Saneado del HTML con **`nh3` en el núcleo**, sobre el HTML ya convertido | El exportador inyecta HTML propio (`figure` con la imagen en base64, tablas del flujo PRISMA) *antes* de convertir; escapar el markdown de entrada escaparía también lo nuestro. Sanear la salida con allowlist evita reordenar `_embed_md_images` y `_prisma_flow`. `nh3` es un wheel precompilado sin dependencias transitivas. |
+| D4 | Saneado del HTML con **`nh3` en el núcleo**, sobre el HTML ya convertido | El exportador inyecta HTML propio (`figure` con la imagen en base64, tablas del flujo PRISMA) *antes* de convertir; escapar el markdown de entrada escaparía también lo nuestro. Sanear la salida con allowlist evita reordenar `_embed_md_images` y `replace_mermaid_blocks`. `nh3` es un wheel precompilado sin dependencias transitivas. |
 | D5 | Ítem 7: **marca en el manifiesto + guardia en `audit.py`** | Es la única variante que impide que el auditor vuelva a decir APTA sobre el artefacto reconstruido: el aviso en Markdown no lo lee el motor. ~30 líneas, sin invadir el rework del auditor de la Ola 1. |
 | D6 | MCC/WMCC/κ indefinidos → **`float \| None`** en funciones y esquema | Mientras `0.0` sea un valor válido, cualquier umbral `kappa_min` se compara contra un número inventado (A11: hoy el auditor da PASS a `gold` con κ=0.0). Propuesta de Claude aceptada con el diseño; revocable. |
 | D7 | Un modelo retirado hace que `revisia validate` **salga con `rc = 2`** | El ítem 1 existe porque el quickstart está roto; una advertencia que no cambia el código de salida no lo detiene. Es un cambio de tres líneas y no adelanta el rework de `validate` de la Ola 1 (M6, fail-fast de proveedores), que sigue fuera de alcance. |
@@ -53,15 +53,31 @@ ficheros en el export) y la parte de **M1** que la Ola 0 puede cubrir.
 con `ValidationError`. Es la barrera primaria de A1 y protege a todos los
 proveedores, no solo a `claude_code`.
 
-### A-2 · Escapado del shim de Windows (`llm/providers/claude_code.py`)
+### A-2 · Guardia fail-closed del shim de Windows (`llm/providers/claude_code.py`)
 
 `_resolve_cli` devuelve hoy la ruta que da `shutil.which`, que en Windows es
 `claude.CMD`. `CreateProcess` sobre un `.CMD`/`.BAT` delega en `cmd.exe`, que
 **vuelve a parsear** la línea de comandos (BatBadBut): los argumentos que
-`subprocess` ya citó se re-interpretan y `&`, `|`, `^`, `%` recuperan su
-significado. Defensa en profundidad tras A-1: cuando el ejecutable resuelto
-tiene extensión `.cmd` o `.bat`, los argumentos se escapan con las reglas de
-`cmd.exe` antes de entregarlos a `subprocess`.
+`subprocess` ya citó se re-interpretan y `&`, `|`, `<`, `>`, `^`, `%`, `!` y
+`"` recuperan su significado.
+
+**Rechazar, no escapar.** La primera versión de este diseño proponía escapar
+los argumentos con las reglas de `cmd.exe`. Se descarta: `%VAR%` no se puede
+neutralizar dentro de comillas, `!` depende de si la expansión retardada está
+activa, y un escapador de `cmd.exe` es precisamente el tipo de código que
+BatBadBut demostró que casi nadie acierta. En su lugar, cuando el ejecutable
+resuelto tiene extensión `.cmd` o `.bat`, `_command` comprueba que **ningún
+argumento** contiene esos metacaracteres ni saltos de línea, y si alguno los
+contiene lanza `RuntimeError` antes de crear el proceso, con un mensaje que
+explica el porqué y sugiere instalar el binario nativo de Claude Code.
+
+Es viable porque se verificó que todos los argumentos actuales son seguros: los
+flags son constantes, `model` queda acotado por A-1, y los siete `_SYSTEM` que
+viajan en `--append-system-prompt` (`agents/{screening,screening_ft,extraccion,
+rob,reporte}.py`, `check.py`, `rag/grounding.py`) no contienen ningún
+metacarácter. El prompt, que sí trae texto no confiable (abstracts), viaja por
+stdin y no pasa por `cmd.exe`. Con el binario nativo (`claude.exe`) la guardia
+no se activa: `CreateProcess` no re-parsea.
 
 Alcance explícito: no se cambia el transporte (sigue siendo `subprocess` con
 lista de argumentos, sin `shell=True`) ni se tocan los flags de `claude -p`
@@ -80,22 +96,39 @@ entregable. Pasa a exigir dos condiciones:
 Lo que no cumple se degrada a su texto alternativo, como hoy hacen las
 referencias externas y rotas.
 
-### A-4 · Saneado del HTML de salida (`exports/document.py`)
+### A-4 · Saneado del HTML convertido (`exports/document.py`)
 
-Tras `_md_to_html`, el HTML pasa por `nh3.clean` con una allowlist:
+**Un solo punto de estrangulamiento: `_md_to_html`.** Todo el texto no
+confiable del entregable (el `documento.md` que redacta el LLM y los anexos
+`.md`) entra al HTML por esa función; lo que el exportador genera él mismo
+(`_portada`, que ya escapa con `html.escape`; `_figuras_meta`; el anexo BibTeX,
+también escapado; `_wrap_html` con su `<style>`) no pasa por ella y no se
+sanea. `_md_to_html` pasa a devolver `nh3.clean(markdown(...), ...)` con:
 
-- **Etiquetas:** las que emite `markdown` con `tables` y `fenced_code`, más
-  `figure`, `figcaption` e `img`.
-- **Atributos:** `src`, `alt`, `class`, `colspan`, `rowspan`, y `href` en los
-  enlaces. Ningún `on*`.
-- **Esquemas de URL:** solo `data:` para imágenes; `https:` y `mailto:` para
-  enlaces.
+- **Etiquetas:** las que emite `markdown` con `tables` y `fenced_code`
+  (encabezados, párrafos, listas, énfasis, `code`/`pre`, `blockquote`, `hr`,
+  `br`, tablas completas, `a`), más `figure`, `figcaption` e `img`.
+- **`clean_content_tags`:** `script` y `style` se eliminan con su contenido,
+  no solo la etiqueta.
+- **Atributos:** `alt` y `src` en `img`; `href` y `title` en `a`; `class` en
+  `code` (el `language-x` de los bloques de código); `style` en `th`/`td`.
+  Ningún `on*`.
+- **`filter_style_properties={"text-align"}`:** la extensión `tables` de
+  `markdown` alinea columnas con `style="text-align: …"`; se conserva eso y
+  nada más (un `background: url(http://…)` en `style` sería otra fuga de red).
+- **`attribute_filter`:** el `src` de `img` solo sobrevive si empieza por
+  `data:image/`; el `href` de `a` se descarta si empieza por `data:` o
+  `javascript:`.
+- **`url_schemes`:** `{"http", "https", "mailto", "data"}`; el filtro anterior
+  restringe `data:` a imágenes.
 
 Esto tumba `<script>`, los manejadores `onerror=` y las imágenes remotas (fuga
-de red al abrir el entregable). El `figure` que inyecta el propio exportador
-sobrevive porque el saneado corre **después** de la conversión, no antes. Nota:
-`.svg` sigue en `_MIME`; dentro de una imagen con `src` `data:` el SVG no
-ejecuta scripts, así que no se retira.
+de red al abrir el entregable). El `figure` que inyecta `_embed_md_images`
+viaja dentro del markdown y **sí** pasa por el saneado: sobrevive porque su
+`img` lleva `src` `data:image/…` y `alt`, ambos permitidos. Nota: `.svg` sigue
+en `_MIME`; dentro de una imagen con `src` `data:` el navegador no ejecuta los
+scripts del SVG, así que no se retira. API verificada contra `nh3 0.3.7`
+(`filter_style_properties` y `attribute_filter` existen en esa versión).
 
 ### A-5 · `url_fetcher` de WeasyPrint (`exports/document.py`)
 
@@ -106,8 +139,9 @@ auditoría solo pudo reproducir en HTML (WeasyPrint no estaba instalado).
 
 ### A-6 · `pyproject.toml`
 
-`nh3>=0.2` entra en `dependencies`. El núcleo deja de ser pura-Python; se
-documenta en el comentario del bloque, junto al de `markdown`.
+`nh3>=0.3` entra en `dependencies` (la API de A-4 se verificó en 0.3.7) y se
+regenera `uv.lock`. El núcleo deja de ser pura-Python; se documenta en el
+comentario del bloque, junto al de `markdown`.
 
 ## 5. PR-B · `fix/ola0-honestidad-pipeline`
 
@@ -138,6 +172,10 @@ Modelo Pydantic `HumanDecision`:
 - YAML malformado o con raíz que no sea mapa → `ValueError` con mensaje
   accionable (ruta del fichero y qué se esperaba), no un traceback.
 - Los campos desconocidos se conservan en `detail` del ledger, como hoy.
+- `approved` es obligatorio: un `decision.yml` vacío deja de leerse como
+  rechazo de `human:desconocido` (hallazgo bajo de la auditoría) y pasa a ser
+  el mismo `ValueError` accionable. `approved` usa `StrictBool`; el resto del
+  modelo admite campos extra (`extra="allow"`).
 
 Cierra tres hallazgos bajos y el vector en que `bool("false")` es verdadero.
 
@@ -149,15 +187,27 @@ Consecuencias que se verifican con tests:
 
 - Un `reporte/decision.yml` con `approved: false` produce `status: rejected`,
   no `completed`.
-- El CLI sale con `rc != 0` para `rejected` (hoy `paused` ya lo hace).
-- `--brain` no sedimenta una revisión rechazada.
+- El CLI no necesita cambios: `cli.py:169` ya devuelve `1` para todo estado
+  que no sea `completed` ni `paused`, y `cli.py:133-146` solo sedimenta en
+  `--brain` cuando el estado es `completed`. Bastaba con que el pipeline dejara
+  de mentir; el test lo comprueba a través del CLI (rc 1, cerebro vacío).
+- El manifiesto se sigue escribiendo antes de la guarda: una revisión
+  rechazada deja rastro en disco, como hoy una pausada.
 
 ### B-4 · Procedencia en el manifiesto y guardia en el auditor
 
-- `RunContext.write_manifest` escribe `provenance: pipeline`.
-- `audit.py` gana un check `provenance`: **FAIL** si el manifiesto no declara
-  `provenance` o declara algo distinto de `pipeline`. Como `publishable` es
-  `n_fail == 0`, una corrida reconstruida deja de ser publicable.
+- `RunContext.write_manifest` escribe `provenance: pipeline` justo después de
+  `timestamp`. La clave no se puede sobrescribir desde `extra`: se aplica
+  después del desempaquetado.
+- `audit.py` gana un check `provenance` (ítem `PRISMA 27 / trAIce M2`), justo
+  después del de `manifest`: **FAIL** si el manifiesto no declara
+  `provenance` o declara algo distinto de `pipeline`, con el valor encontrado
+  en el detalle. Si el manifiesto falta, no se añade un segundo FAIL (el de
+  `manifest` ya lo cubre). Como `publishable` es `n_fail == 0`, una corrida
+  reconstruida deja de ser publicable.
+- El fixture de `tests/test_audit.py` (el manifiesto de
+  `test_audit_corrida_completa_es_publicable`) gana `provenance: pipeline`:
+  sin eso el test que hoy pasa fallaría, y es la señal correcta.
 - El `manifest.yml` local de `runs/prisma-ia-origen-20260706-080747` se marca a
   mano con `provenance: reconstruction`. No se versiona (no está en git); queda
   registrado aquí y en el CHANGELOG para que la marca sobreviva a la memoria.
@@ -174,7 +224,14 @@ Cierra **C4**, **A14** y dos hallazgos bajos de estadística.
 - `gemini.DEFAULT_MODEL = "gemini-3.5-flash-lite"`.
 - El docstring del módulo deja de nombrar un id concreto (la auditoría lo pide
   explícitamente: "no fijar el modelo en docstrings").
-- `protocols/_TEMPLATE/protocol.yml` (líneas 64, 69, 99) y `README.md:84` al día.
+- `protocols/_TEMPLATE/protocol.yml` (líneas 64, 69, 99), y el default de
+  `--model` en `cli.py:366` (subcomando `new`) al día. `README.md` no nombra
+  ningún id de modelo (la auditoría citaba `README.md:84`, que hoy es la tabla
+  de principios): no se toca.
+  Inventario hecho con `grep -rn gemini-2`; los tests que usan
+  `gemini-2.0-flash` como cadena arbitraria (`test_llm_registry.py:23`,
+  `test_provenance.py:17`) pasan al id nuevo para no normalizar un modelo
+  retirado en la suite.
 
 ### C-2 · Lista de modelos retirados
 
@@ -196,9 +253,12 @@ el código de salida.
 ### C-3 · Empaquetado
 
 - `[tool.hatch.build.targets.sdist]` con `only-include = ["revisia", "docs",
-  "protocols/_TEMPLATE", "tests", "README.md", "CHANGELOG.md", "LICENSE",
-  "NOTICE", "CITATION.cff", "pyproject.toml", "uv.lock"]`. Fuera quedan `runs/`,
-  `.superpowers/`, `.claude/`, `.coverage` y el `dist/` ya construido.
+  "protocols/_TEMPLATE", "tests", "examples", "assets", "README.md",
+  "CHANGELOG.md", "LICENSE", "NOTICE", "CITATION.cff", "pyproject.toml",
+  "uv.lock"]`. Fuera quedan `runs/`, `.superpowers/`, `.claude/`, `.coverage`,
+  `__pycache__` y el `dist/` ya construido. Criterio de aceptación: `tar tzf`
+  del sdist reconstruido no lista ninguna ruta con `runs/`, `.superpowers`,
+  `.claude`, `.coverage`, `__pycache__` ni `dist/`.
 - `.gitignore`: añadir `.superpowers/`. La negación inoperante
   `!runs/*/manifest.yml` se documenta como tal en un comentario; arreglarla es
   Ola 1 (depende de qué se decida versionar de las corridas).
@@ -208,15 +268,21 @@ el código de salida.
 ### C-4 · Métricas honestas (`metrics.py`)
 
 `mcc()`, `wmcc()` y `cohen_kappa()` devuelven `None` cuando el denominador es 0
-(o cuando `1 - pe` es 0 en κ). `ScreeningMetrics.mcc`, `.wmcc` y
-`.cohen_kappa` pasan a `float | None` con default `None`. Consumidores a
-recorrer:
+(o cuando `n == 0` o `1 - pe` es 0 en κ). `ScreeningMetrics.mcc`, `.wmcc` y
+`.cohen_kappa` pasan a `float | None` con default `None`. Consumidores,
+inventariados con `grep` (no hay otros):
 
-- `audit.py` — el check `gold` distingue "no calculable" de "por debajo del
-  umbral"; no calculable es **WARN**, no PASS.
-- `exports/checklist.py`, `exports/prisma_flow.py`, `cli.py` — imprimen
-  `no calculable` en vez de `0.000`.
-- `manifest.yml` y `03_screening/metrics.json` persisten `null`.
+| Consumidor | Cambio |
+|---|---|
+| `extraction_agreement.py:34,88` | `presence_kappa: float \| None`; hoy recibe `cohen_kappa(...)` y, sin este cambio, **Pydantic rechazaría el `None`** y la doble extracción reventaría. Es el consumidor que la primera versión de este diseño omitía. |
+| `exports/methods.py:48-49,100` | `kappa` y `presence_kappa` imprimen `no calculable` en vez de `0.000`. |
+| `exports/checklist.py:241-242` | MCC, WMCC y κ imprimen `no calculable`. |
+| `cli.py:167` | idem en el resumen de la corrida. |
+| `audit.py:253-262` (check `gold`) | κ `None` → **WARN** "κ no calculable (denominador 0): el gold no discrimina"; con κ numérico, PASS como hoy (los umbrales `kappa_min` son Ola 1). |
+
+Un único helper `fmt_metric(value, spec=".3f") -> str` en `metrics.py` evita
+repetir el `if value is None` en cinco sitios. `manifest.yml` y
+`03_screening/metrics.json` persisten `null`.
 
 ### C-5 · Corrección de continuidad (`schemas/effects.py`)
 
@@ -233,7 +299,7 @@ reproducen la evidencia citada en la auditoría, no una versión suavizada:
 | Test | Reproduce |
 |---|---|
 | `test_provider_model_rejects_injection` | un `model` con comillas y `&` → `ValidationError` |
-| `test_windows_cmd_shim_escapes_arguments` | BatBadBut sobre `.CMD` (sin ejecutar el CLI real) |
+| `test_windows_cmd_shim_rejects_metachars` | BatBadBut sobre `.CMD`: argumento con `&` o `%` → `RuntimeError` sin crear proceso |
 | `test_embed_images_rejects_traversal` | `../../.env` no se embebe |
 | `test_export_html_strips_script_and_handlers` | `script`, `onerror=`, imagen remota |
 | `test_pdf_url_fetcher_rejects_non_data` | `file://` y `http://` lanzan |
@@ -246,8 +312,19 @@ reproducen la evidencia citada en la auditoría, no una versión suavizada:
 | `test_mcc_and_kappa_none_when_undefined` | denominador 0 → `None`, no `0.0` |
 | `test_continuity_correction_only_with_zero_cell` | logOR sin corrección con celdas no nulas |
 
-Todos offline, sin red, deterministas. Cada PR cierra con la suite completa en
-verde bajo 3.11, 3.12 y 3.13, `ruff` y `black` limpios y `uv lock --check` OK.
+Todos offline, sin red, deterministas. Línea base medida el 2026-09-25: **190
+tests en verde** en 3.13 (la auditoría decía 188; se sumaron dos después).
+
+Criterio de cierre de cada PR:
+
+- `uv run pytest` en verde (3.13, el `requires-python` actual).
+- La misma suite en 3.11 y 3.12 con un venv desechable, porque
+  `requires-python >= 3.13` impide `uv run --python 3.11` (M24 es Ola 2):
+  `uv venv --python 3.11 <tmp>`, `uv pip install --python <tmp> pydantic pyyaml
+  python-dotenv markdown httpx nh3 pytest`, `PYTHONPATH=. <tmp>/Scripts/python
+  -m pytest`.
+- `uv run ruff check .`, `uv run ruff format --check .` y `uv run black
+  --check .` limpios; `uv lock --check` OK.
 
 ## 8. Fuera de alcance (Olas 1 y 2)
 
