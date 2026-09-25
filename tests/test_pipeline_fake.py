@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import yaml
+
 from revisia.config import load_protocol
 from revisia.orchestration.pipeline import run_pipeline
 from revisia.orchestration.run_context import RunContext
@@ -71,6 +73,8 @@ def test_pipeline_end_to_end_offline(tmp_path) -> None:
     # Manifiesto reproducible + ledger: 5 gates (screening_ta, screening_ft,
     # extraccion, rob, reporte).
     assert (ctx.run_dir / "manifest.yml").exists()
+    manifest = yaml.safe_load((ctx.run_dir / "manifest.yml").read_text(encoding="utf-8"))
+    assert manifest["provenance"] == "pipeline"
     assert len(ctx.ledger.read_all()) == 5
     # Etapas H3 presentes: full-text + riesgo de sesgo.
     assert (ctx.run_dir / "04_fulltext" / "decisions.json").exists()
@@ -113,3 +117,20 @@ def test_pipeline_ensemble_y_metricas(tmp_path) -> None:
         (ctx.run_dir / "03_screening" / "decisions.json").read_text(encoding="utf-8")
     )
     assert len(decisions[0]["votes"]) == 2
+
+
+def test_rejected_final_gate_is_not_completed(tmp_path) -> None:
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "TEST")
+    (ctx.stage_dir("reporte") / "decision.yml").write_text(
+        "approved: false\nactor: human:revisora\nreason: síntesis sin respaldo\n",
+        encoding="utf-8",
+    )
+    result = run_pipeline(
+        protocol, EXAMPLE, ctx, max_results=10, auto_approve=True, search_fn=_fake_search
+    )
+    assert result.status == "rejected"  # antes: "completed"
+    assert "rechazado por human:revisora" in result.message
+    assert (ctx.run_dir / "manifest.yml").exists()  # el rechazo deja rastro en disco
+    last = ctx.ledger.read_all()[-1]
+    assert (last.stage, last.action) == ("reporte", "reject")

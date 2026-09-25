@@ -9,7 +9,13 @@ import yaml
 from revisia.audit import render_audit_md, run_audit
 
 
-def _make_run(tmp_path, *, human_decisions: bool = True, with_gold: bool = True):
+def _make_run(
+    tmp_path,
+    *,
+    human_decisions: bool = True,
+    with_gold: bool = True,
+    provenance: str | None = "pipeline",
+):
     """Construye una corrida sintética completa en disco."""
     run = tmp_path / "runs" / "demo-20260705"
     deliverable = run / "deliverable"
@@ -28,6 +34,8 @@ def _make_run(tmp_path, *, human_decisions: bool = True, with_gold: bool = True)
             {"provider": "fake", "model": "fake-model", "prompt_sha256": "def456"},
         ],
     }
+    if provenance is not None:
+        manifest["provenance"] = provenance
     (run / "manifest.yml").write_text(
         yaml.safe_dump(manifest, allow_unicode=True), encoding="utf-8"
     )
@@ -123,3 +131,29 @@ def test_cli_audit_escribe_informe(tmp_path, capsys) -> None:
     empty = tmp_path / "runs" / "vacia"
     empty.mkdir(parents=True)
     assert main(["audit", str(empty)]) == 1
+
+
+def test_audit_fails_on_reconstruction_provenance(tmp_path) -> None:
+    report = run_audit(_make_run(tmp_path, provenance="reconstruction"))
+    statuses = {c.check_id: c.status for c in report.checks}
+    assert statuses["provenance"] == "FAIL"
+    assert report.publishable is False
+
+
+def test_audit_sin_procedencia_falla(tmp_path) -> None:
+    report = run_audit(_make_run(tmp_path, provenance=None))
+    check = next(c for c in report.checks if c.check_id == "provenance")
+    assert check.status == "FAIL"
+    assert "ausente" in check.detail
+
+
+def test_audit_procedencia_pipeline_pasa(tmp_path) -> None:
+    report = run_audit(_make_run(tmp_path))
+    assert {c.check_id: c.status for c in report.checks}["provenance"] == "PASS"
+
+
+def test_audit_sin_manifiesto_no_duplica_fail_de_procedencia(tmp_path) -> None:
+    run = _make_run(tmp_path)
+    (run / "manifest.yml").unlink()
+    report = run_audit(run)
+    assert "provenance" not in {c.check_id for c in report.checks}

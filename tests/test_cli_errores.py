@@ -59,3 +59,23 @@ def test_cli_run_decision_invalida_sale_2(
     assert rc == 2
     assert "decision.yml" in err
     assert "Traceback" not in err
+
+
+def test_cli_run_rechazado_sale_1_y_no_sedimenta(
+    tmp_path: Path, capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from revisia.orchestration.pipeline import PipelineResult
+
+    run_dir = tmp_path / "runs" / "demo-T"
+    run_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        "revisia.orchestration.flow.run_review",
+        lambda *_a, **_k: PipelineResult(
+            "rejected", "reporte: rechazado por human:x.", run_dir=run_dir
+        ),
+    )
+    brain = tmp_path / "cerebro"
+    rc = main(["run", str(EXAMPLE), "--brain", str(brain)])
+    assert rc == 1
+    assert "REJECTED" in capsys.readouterr().out
+    assert list(brain.rglob("*.md")) == []  # una revisión rechazada no se sedimenta

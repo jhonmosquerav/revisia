@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import yaml
+
+from revisia.orchestration.run_context import RunContext
 from revisia.provenance import DecisionEntry, DecisionLedger, RunMeta, sha256_text
 
 
@@ -53,3 +56,13 @@ def test_ledger_append_y_lectura(tmp_path) -> None:
 
 def test_ledger_vacio_devuelve_lista_vacia(tmp_path) -> None:
     assert DecisionLedger(tmp_path / "noexiste.jsonl").read_all() == []
+
+
+def test_write_manifest_declara_procedencia_no_sobrescribible(tmp_path) -> None:
+    ctx = RunContext("demo", tmp_path, "T")
+    path = ctx.write_manifest(
+        protocol_snapshot={}, counts={}, extra={"provenance": "reconstruction"}
+    )
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert data["provenance"] == "pipeline"
+    assert list(data)[:4] == ["slug", "created_utc", "timestamp", "provenance"]

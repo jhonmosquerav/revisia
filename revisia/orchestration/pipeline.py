@@ -586,9 +586,11 @@ def run_pipeline(
         counts=counts.model_dump(),
         extra=manifest_extra,
     )
-    if final_gate.status == "paused":
+    # Un reporte rechazado ya no se informa como "completed" (auditoría
+    # 2026-09-03, C1): el manifiesto queda escrito arriba como rastro.
+    if final_gate.status != "approved":
         return PipelineResult(
-            "paused",
+            final_gate.status,
             final_gate.message,
             counts=counts,
             included=included,

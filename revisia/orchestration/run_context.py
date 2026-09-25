@@ -15,6 +15,10 @@ import yaml
 from revisia.provenance.ledger import DecisionLedger
 from revisia.provenance.runmeta import RunMeta, utc_now_iso
 
+# Procedencia que el motor escribe en todo manifiesto que produce (auditoría
+# 2026-09-03, C3): distingue una corrida real de una reconstrucción a mano.
+PROVENANCE_PIPELINE = "pipeline"
+
 
 class RunContext:
     """Estado y rutas de una ejecución concreta del pipeline."""
@@ -57,6 +61,7 @@ class RunContext:
             "slug": self.slug,
             "created_utc": utc_now_iso(),
             "timestamp": self.timestamp,
+            "provenance": PROVENANCE_PIPELINE,
             "protocol": protocol_snapshot,
             "counts": counts,
             "llm_calls": [m.model_dump() for m in self.metas],
@@ -66,6 +71,8 @@ class RunContext:
             ),
             **(extra or {}),
         }
+        # La procedencia no es configurable desde `extra`: la fija el motor.
+        manifest["provenance"] = PROVENANCE_PIPELINE
         path = self.run_dir / "manifest.yml"
         path.write_text(
             yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False), encoding="utf-8"

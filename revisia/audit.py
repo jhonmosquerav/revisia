@@ -7,7 +7,8 @@ estándares de reporte que el sistema promete:
 - **PRISMA 2020** (selección documentada, flow diagram, registro, datos abiertos)
 - **PRISMA-S** (ventana temporal de búsqueda declarada y ejecutada)
 - **PRISMA-trAIce** (modelos y versiones, prompts hash-eados, supervisión
-  humana, exclusiones IA/humano separadas, evaluación contra gold humano)
+  humana, exclusiones IA/humano separadas, evaluación contra gold humano,
+  procedencia de la corrida (pipeline vs reconstrucción))
 
 Cada verificación produce ``PASS`` (evidencia presente), ``WARN`` (aceptable
 pero debe declararse/mejorarse antes de publicar) o ``FAIL`` (la corrida no es
@@ -23,6 +24,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+
+from revisia.orchestration.run_context import PROVENANCE_PIPELINE
 
 _STATUS_ICON = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌"}
 
@@ -129,6 +132,31 @@ def run_audit(run_dir: str | Path) -> AuditReport:
                     "PRISMA 27 / trAIce M2",
                     "WARN",
                     "manifest.yml sin llamadas IA registradas (¿corrida determinista/fake?).",
+                )
+            )
+
+    # ── 1b · Procedencia: la corrida la produjo el pipeline (auditoría C3) ────
+    if manifest is not None:
+        provenance = manifest.get("provenance")
+        if provenance == PROVENANCE_PIPELINE:
+            add(
+                AuditCheck(
+                    "provenance",
+                    "PRISMA 27 / trAIce M2",
+                    "PASS",
+                    "Corrida producida por el pipeline de revisia (provenance: pipeline).",
+                )
+            )
+        else:
+            found = "ausente" if provenance is None else repr(provenance)
+            add(
+                AuditCheck(
+                    "provenance",
+                    "PRISMA 27 / trAIce M2",
+                    "FAIL",
+                    f"Procedencia {found}: el manifiesto no declara `provenance: pipeline`. "
+                    "Una corrida reconstruida, o generada antes de que el motor registrara "
+                    "su procedencia, no es evidencia publicable: regenérala con `revisia run`.",
                 )
             )
 
