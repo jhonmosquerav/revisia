@@ -369,6 +369,20 @@ def _demote_headings(text: str, levels: int = 2) -> str:
     return _HEADING_RE.sub(_sub, text)
 
 
+# `<img>` que el saneado dejó sin `src` (imagen remota con título, de estilo
+# referencia o en HTML crudo: sintaxis que no pasan por `_IMG_MD_RE`). Se opera
+# sobre la salida de nh3, que serializa los atributos entre comillas dobles y
+# ya escapados, así que el `alt` capturado se puede reinsertar tal cual.
+_SRCLESS_IMG_RE = re.compile(r"<img\b(?![^>]*\ssrc=)([^>]*)>")
+_ALT_ATTR_RE = re.compile(r'\salt="([^"]*)"')
+
+
+def _srcless_img_to_alt(match: re.Match[str]) -> str:
+    """Degrada una imagen sin ``src`` a su texto alternativo en cursiva."""
+    alt = _ALT_ATTR_RE.search(match.group(1))
+    return f"<em>{alt.group(1)}</em>" if alt and alt.group(1) else ""
+
+
 def _md_to_html(text: str) -> str:
     """Convierte Markdown a HTML y lo sanea con una allowlist (``nh3``).
 
@@ -376,7 +390,7 @@ def _md_to_html(text: str) -> str:
     las imágenes remotas y cualquier ``style`` que no sea ``text-align``.
     """
     raw = md_lib.markdown(text, extensions=["tables", "fenced_code"])
-    return nh3.clean(
+    clean = nh3.clean(
         raw,
         tags=set(_ALLOWED_TAGS),
         clean_content_tags={"script", "style"},
@@ -385,6 +399,7 @@ def _md_to_html(text: str) -> str:
         url_schemes={"http", "https", "mailto", "data"},
         filter_style_properties={"text-align"},
     )
+    return _SRCLESS_IMG_RE.sub(_srcless_img_to_alt, clean)
 
 
 def _titulo(doc_md: str | None, manifest: dict, run_dir: Path) -> str:

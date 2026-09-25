@@ -475,3 +475,24 @@ def test_href_bypass_via_normalizacion_whatwg_rechazado(run_dir: Path) -> None:
     low = html.lower()
     assert "evil" not in low
     assert "alert(" not in low
+
+
+@pytest.mark.parametrize(
+    "markdown",
+    [
+        '![con título](http://evil.example/p.png "Figura remota")',  # con título
+        "![referencia][r]\n\n[r]: http://evil.example/q.png",  # estilo referencia
+        '<img src="http://evil.example/x.png" alt="html crudo">',  # HTML crudo remoto
+    ],
+)
+def test_imagen_sin_src_se_degrada_a_texto_alternativo(run_dir: Path, markdown: str) -> None:
+    # Estas sintaxis no pasan por `_IMG_MD_RE`; el saneado les quita el `src`
+    # remoto y quedaba un `<img>` vacío (icono roto) en vez del texto alternativo
+    # que promete el exportador (seguimiento de la revisión final Ola 0).
+    _append_documento(run_dir, "\n" + markdown + "\n")
+    html = assemble_html(run_dir)
+    assert "evil.example" not in html
+    imgs = html.split("<img")[1:]
+    assert all('src="' in chunk.split(">", 1)[0] for chunk in imgs)
+    alt = markdown.split("[", 1)[1].split("]", 1)[0] if markdown.startswith("!") else "html crudo"
+    assert f"<em>{alt}</em>" in html
