@@ -35,6 +35,8 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - **Incompatible para contenido hecho a mano:** el HTML crudo dentro del
   entregable pierde `class`, `id` y `style` (salvo `text-align` en celdas de
   tabla). El contenido que genera el pipeline no se ve afectado.
+- El CI instala el extra `pdf` (con Pango) y comprueba que WeasyPrint importa,
+  para que la prueba real del fetcher del PDF corra en vez de saltarse.
 
 ### Fixed
 - **Búsqueda multi-base**: un `ValueError`/`ValidationError` lanzado *dentro* de un
@@ -42,6 +44,9 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   sin rastro); ahora queda en `01_search/failures.json`. Los mensajes de error se
   pasan por `_http.redact_secrets` para que `api_key=`/`email=` de la URL que
   incluye httpx no acaben en disco ni en consola.
+- `revisia export`: las imágenes remotas con título, de estilo referencia o en
+  HTML crudo ya no quedan como un `<img>` vacío (icono roto) tras el saneado: se
+  degradan a su texto alternativo, como las demás referencias rechazadas.
 
 ### Security
 - **Inyección de comandos en Windows (auditoría A1).** `ProviderConfig.model` se

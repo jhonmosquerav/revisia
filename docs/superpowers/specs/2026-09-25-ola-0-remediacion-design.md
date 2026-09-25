@@ -401,8 +401,11 @@ alcance fuera de los hallazgos de la Ola 0.
 | V10 | C-4 | WARN de `gold` también con MCC `None` y con gold de una sola clase (ver tabla de C-4). | Revisión final (Important) |
 | V11 | Todas | Los trailers `Co-Authored-By` nombran el modelo que escribió cada commit, no el literal del plan. | Harness de los subagentes |
 
-Seguimientos que quedan fuera de esta ola: prefijos en `RETIRED_MODELS`;
-traceback de `revisia check --model` con un id inválido; `<img>` sin `src` cuando
-la imagen Markdown lleva título o es de estilo referencia (cosmético); la prueba
-real del `URLFetcher` de WeasyPrint solo corre donde el extra `pdf` esté
-instalado.
+Seguimientos, resueltos después de abrir las PRs (2026-09-25):
+
+| # | Seguimiento | Resolución | Rama |
+|---|---|---|---|
+| S1 | Ids con prefijo en `RETIRED_MODELS` | `retirement_for` compara el último segmento de la ruta, sin mayúsculas y sin la variante `:tag` (`models/…`, `google/…:free`, `publishers/google/models/…`); el mensaje conserva el id original. | C |
+| S2 | Traceback de `revisia check` con `--model`/`--provider` inválidos | Validación previa con `available_providers()` y `ProviderConfig`; código 2 y mensaje. | C |
+| S3 | `<img>` sin `src` (imagen remota con título, de estilo referencia o HTML crudo) | Tras el saneado, se degrada a su texto alternativo en cursiva. | A |
+| S4 | La prueba real del `URLFetcher` de WeasyPrint solo corría con el extra `pdf` | CI instala Pango y el extra `pdf` y falla si WeasyPrint no importa. Verificado además en Linux (WSL, WeasyPrint 70.0): suite completa sin omitidos y exportación PDF real de la corrida fundacional; con un HTML trampa, WeasyPrint pidió `file://` y `http://` pero solo abrió el `data:`. | A |
