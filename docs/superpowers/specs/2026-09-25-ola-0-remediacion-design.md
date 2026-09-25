@@ -391,10 +391,10 @@ alcance fuera de los hallazgos de la Ola 0.
 |---|---|---|---|
 | V1 | A-3 | Ancla rechazada antes de `resolve()` (UNC tocaba la red) y `_figuras_meta` confinada con el mismo helper. | Revisión Tarea 2 (Important, fallo del plan) |
 | V2 | A-4 | `style` en `th`/`td` reconstruido a `text-align:<keyword>`: `filter_style_properties` de nh3 filtra por nombre de propiedad, no por valor (`text-align:url(…)` pasaba). | Revisión Tarea 2 |
-| V3 | A-4 | `href` protocol-relative (`//host`) o con barra invertida descartado: abierto desde `file://` y clicado resuelve a UNC. | Revisión final |
+| V3 | A-4 | `href` protocol-relative (`//host`) o con barra invertida descartado: abierto desde `file://` y clicado resuelve a UNC. Los chequeos de `href` se hacen sobre el valor normalizado como el parser WHATWG (sin tab/LF/CR y sin C0 ni espacios en los extremos): `/&#9;/host` y `&#1;//host` se saltaban la primera versión. | Revisión final (dos pasadas) |
 | V4 | A-1 | Patrón de modelo con primer carácter alfanumérico: `^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$` (un id que empiece por guion se parece a un flag). | Revisión final |
 | V5 | A-2 | La guardia del shim también inspecciona `cmd[0]` (la ruta del CLI). | Revisión final |
-| V6 | B | Nuevo check `final_gate` en `revisia audit`: un reporte final rechazado o sin decidir hacía la corrida "APTA" aunque B-3 ya no la informara como `completed`. | Revisión final (Important) |
+| V6 | B | Nuevo check `final_gate` en `revisia audit`: FAIL si el reporte final fue rechazado o no se decidió (un reporte rechazado o pausado hacía la corrida "APTA" aunque B-3 ya no la informara como `completed`); WARN si lo aprobó un actor no humano (`--auto-approve`, `auto-proceed`); sin ledger no duplica el FAIL de `ledger`. | Revisión final (Important + segunda pasada) |
 | V7 | B/C | `main()` convierte también `yaml.YAMLError` de `protocol.yml` en `error: …` con rc 2 (vive en la rama C para no chocar al re-apilar). | Revisión final |
 | V8 | C-2 | `revisia run` consulta `RETIRED_MODELS` antes de crear la carpeta de la corrida: el quickstart del README no llama a `validate`, así que D7 solo no bastaba. `validate` ya no imprime "Protocolo válido" antes de salir con 2. | Revisión final (Important, fallo del plan) |
 | V9 | C-3 | `only-include` conserva los ficheros raíz que enlaza el README: `.env.example` (paso 1 del quickstart), `AGENTS.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `RELEASING.md`. | Revisión Tarea 6 y revisión final (fallo del plan) |
