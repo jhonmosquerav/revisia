@@ -8,7 +8,9 @@ estándares de reporte que el sistema promete:
 - **PRISMA-S** (ventana temporal de búsqueda declarada y ejecutada)
 - **PRISMA-trAIce** (modelos y versiones, prompts hash-eados, supervisión
   humana, exclusiones IA/humano separadas, evaluación contra gold humano,
-  procedencia de la corrida (pipeline vs reconstrucción))
+  procedencia de la corrida (pipeline vs reconstrucción), decisión humana
+  sobre el reporte final — un reporte rechazado o sin decisión no es
+  publicable aunque el resto de la corrida esté completo)
 
 Cada verificación produce ``PASS`` (evidencia presente), ``WARN`` (aceptable
 pero debe declararse/mejorarse antes de publicar) o ``FAIL`` (la corrida no es
@@ -25,12 +27,10 @@ from pathlib import Path
 
 import yaml
 
+from revisia.config import JUDGMENT_STAGES
 from revisia.orchestration.run_context import PROVENANCE_PIPELINE
 
 _STATUS_ICON = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌"}
-
-# Etapas cuyo juicio exige supervisión humana (Cochrane/JBI 2025).
-_JUDGMENT_STAGES = ("screening_ta", "screening_ft", "extraccion", "rob")
 
 
 @dataclass(frozen=True)
@@ -144,7 +144,8 @@ def run_audit(run_dir: str | Path) -> AuditReport:
                     "provenance",
                     "PRISMA 27 / trAIce M2",
                     "PASS",
-                    "Corrida producida por el pipeline de revisia (provenance: pipeline).",
+                    "El manifiesto declara `provenance: pipeline` (marca escrita por el "
+                    "motor; no es una firma).",
                 )
             )
         else:
@@ -198,7 +199,7 @@ def run_audit(run_dir: str | Path) -> AuditReport:
         )
     else:
         human = [e for e in ledger if str(e.get("actor", "")).startswith("human")]
-        judgment = [e for e in ledger if e.get("stage") in _JUDGMENT_STAGES]
+        judgment = [e for e in ledger if e.get("stage") in JUDGMENT_STAGES]
         judgment_human = [e for e in judgment if str(e.get("actor", "")).startswith("human")]
         if judgment and not judgment_human:
             add(
