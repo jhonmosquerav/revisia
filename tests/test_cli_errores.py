@@ -92,3 +92,25 @@ def test_cli_run_rechazado_sale_1_y_no_sedimenta(
     assert rc == 1
     assert "REJECTED" in capsys.readouterr().out
     assert list(brain.rglob("*.md")) == []  # una revisión rechazada no se sedimenta
+
+
+@pytest.mark.parametrize(
+    ("argumentos", "esperado"),
+    [
+        (["--model", 'x" & calc'], "--model"),  # patrón de ProviderConfig (A1)
+        (["--provider", "nope"], "Disponibles"),  # proveedor no registrado
+    ],
+)
+def test_cli_check_argumentos_invalidos_sale_2_sin_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture, argumentos: list[str], esperado: str
+) -> None:
+    # Seguimiento de la Ola 0: `revisia check` dejaba escapar la ValidationError
+    # del nombre de modelo y el ValueError del proveedor como traceback.
+    manuscrito = tmp_path / "m.md"
+    manuscrito.write_text("# Manuscrito\n", encoding="utf-8")
+    rc = main(["check", str(manuscrito), *argumentos])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert err.startswith("error:")
+    assert esperado in err
+    assert "Traceback" not in err

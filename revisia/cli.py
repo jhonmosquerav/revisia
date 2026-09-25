@@ -262,13 +262,30 @@ def _cmd_new(args: argparse.Namespace) -> int:
 def _cmd_check(args: argparse.Namespace) -> int:
     """Pre-chequeo de adherencia de un manuscrito al checklist PRISMA 2020."""
     from revisia.check import check_manuscript, render_adherence_md
-    from revisia.llm.registry import ProviderConfig
+    from revisia.llm.registry import ProviderConfig, available_providers
 
     source = Path(args.manuscript)
     if not source.exists():
         print(f"error: el manuscrito {args.manuscript!r} no existe.", file=sys.stderr)
         return 2
-    cfg = ProviderConfig(provider=args.provider, model=args.model, temperature=0.0)
+    # Errores de uso (proveedor o modelo inválidos) se informan antes de llamar
+    # al LLM, sin traceback (seguimiento de la Ola 0).
+    if args.provider not in available_providers():
+        print(
+            f"error: --provider {args.provider!r} desconocido. "
+            f"Disponibles: {', '.join(available_providers())}.",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        cfg = ProviderConfig(provider=args.provider, model=args.model, temperature=0.0)
+    except ValidationError:
+        print(
+            f"error: --model {args.model!r} no es un identificador de modelo válido "
+            "(letras, dígitos y . _ : / @ + -, empezando por letra o dígito).",
+            file=sys.stderr,
+        )
+        return 2
     report, meta = check_manuscript(source.read_text(encoding="utf-8"), cfg)
     markdown = render_adherence_md(
         report, source_name=source.name, model=f"{meta.provider}:{meta.model}"
