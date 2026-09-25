@@ -44,6 +44,12 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   `revisia run` salen con código 2 y un mensaje, sin traceback.
 - **Incompatible · las corridas de v0.6.0 no pasan `revisia audit`:** su
   manifiesto no declara `provenance`. Hay que regenerarlas con `revisia run`.
+- **Incompatible · tipo público.** `ScreeningMetrics.mcc`, `.wmcc`,
+  `.cohen_kappa` y `ExtractionAgreement.presence_kappa` pasan de `float` a
+  `float | None`. Nuevo helper `revisia.metrics.fmt_metric`.
+- Con celdas no nulas, el logOR de un mismo 2×2 cambia (p. ej. -0,786 → -0,811):
+  los meta-análisis con `measure: logOR` recalculados darán cifras ligeramente
+  distintas, ahora correctas.
 
 ### Fixed
 - **Búsqueda multi-base**: un `ValueError`/`ValidationError` lanzado *dentro* de un
@@ -71,6 +77,25 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   dice otra cosa. La corrida de referencia `prisma-ia-origen-20260706-080747`
   (no versionada) se marcó como `provenance: reconstruction`: el auditor ya no
   la declara publicable.
+- **Quickstart roto (auditoría C4).** El modelo por defecto `gemini-2.0-flash` se
+  apagó el 2026-06-01; el default pasa a `gemini-3.5-flash-lite` (plantilla,
+  proveedor Gemini y `revisia check`). Nueva tabla `revisia/llm/deprecations.py`
+  con los modelos retirados (fuente y fecha de consulta): `revisia validate` y
+  `revisia run` salen con código 2 si el protocolo usa uno ya apagado, y avisan
+  de los retiros anunciados (`gemini-2.5-*`, 2026-10-16).
+- **Métricas honestas (auditoría A11).** MCC, WMCC y kappa de Cohen devuelven
+  `None` cuando están indefinidos (el gold o la IA asignan una sola clase), se
+  persisten como `null` y se muestran como "no calculable". `revisia audit` da
+  WARN, no PASS, cuando las métricas no son informativas, incluido el gold de una
+  sola clase que antes pasaba con κ = 0.0.
+- **Corrección de continuidad (auditoría M10).** El +0.5 de Haldane-Anscombe en
+  logOR solo se aplica si alguna celda vale 0 (Sweeting 2004); aplicarlo siempre
+  sesgaba hacia el nulo.
+- **Sdist limpio (auditoría A14).** `only-include` deja fuera `runs/`,
+  `.superpowers/`, `.claude/`, `.coverage` y `dist/` previos, y conserva los
+  ficheros raíz que enlaza el README (`.env.example`, `AGENTS.md`,
+  `CONTRIBUTING.md`, `SECURITY.md`…). `.superpowers/` pasa a `.gitignore`.
+- Un `protocol.yml` con YAML roto da un error de uso (código 2), no un traceback.
 
 ### Security
 - **Inyección de comandos en Windows (auditoría A1).** `ProviderConfig.model` se
