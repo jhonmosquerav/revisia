@@ -37,6 +37,13 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   tabla). El contenido que genera el pipeline no se ve afectado.
 - El CI instala el extra `pdf` (con Pango) y comprueba que WeasyPrint importa,
   para que la prueba real del fetcher del PDF corra en vez de saltarse.
+- **Incompatible · autonomía validada al cargar el protocolo (auditoría C1).**
+  `screening_ta`, `screening_ft`, `extraccion` y `rob` no admiten `A2` ni `A3`
+  (regla de `AGENTS.md`); las etapas desconocidas y los niveles fuera de
+  `A0`–`A3` (incluidos en minúscula) también se rechazan. `revisia validate` y
+  `revisia run` salen con código 2 y un mensaje, sin traceback.
+- **Incompatible · las corridas de v0.6.0 no pasan `revisia audit`:** su
+  manifiesto no declara `provenance`. Hay que regenerarlas con `revisia run`.
 
 ### Fixed
 - **Búsqueda multi-base**: un `ValueError`/`ValidationError` lanzado *dentro* de un
@@ -47,6 +54,23 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - `revisia export`: las imágenes remotas con título, de estilo referencia o en
   HTML crudo ya no quedan como un `<img>` vacío (icono roto) tras el saneado: se
   degradan a su texto alternativo, como las demás referencias rechazadas.
+- **Un reporte final rechazado ya no se informa como `completed` (auditoría C1).**
+  `run_pipeline` devuelve el estado del checkpoint final (`rejected` o `paused`);
+  el CLI sale con código 1 y `--brain` no sedimenta la revisión. El manifiesto se
+  sigue escribiendo como rastro.
+- **`decision.yml` validado.** `approved` es un booleano estricto: la cadena
+  `"false"` ya no aprueba (antes `bool("false")` era verdadero). Un fichero
+  vacío, con raíz que no sea un mapa, con YAML roto o sin `approved` detiene la
+  corrida con un mensaje que indica el fichero y el formato esperado.
+- **`revisia audit` exige la decisión humana final:** nuevo check `final_gate`
+  que falla si el reporte final fue rechazado o nunca se decidió (corrida
+  pausada o incompleta) y advierte si lo aprobó un actor no humano
+  (`--auto-approve` o autonomía A2/A3 en `reporte`).
+- **Procedencia de la corrida (auditoría C3).** Todo `manifest.yml` declara
+  `provenance: pipeline` (no sobrescribible) y `revisia audit` falla si falta o
+  dice otra cosa. La corrida de referencia `prisma-ia-origen-20260706-080747`
+  (no versionada) se marcó como `provenance: reconstruction`: el auditor ya no
+  la declara publicable.
 
 ### Security
 - **Inyección de comandos en Windows (auditoría A1).** `ProviderConfig.model` se
