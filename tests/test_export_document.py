@@ -326,3 +326,78 @@ def test_pdf_url_fetcher_rejects_non_data(
     # Solo data: (las figuras ya viajan embebidas): ni file:// ni http(s)://.
     assert seen["fetcher_kwargs"] == {"allowed_protocols": {"data"}}
     assert isinstance(seen["html_kwargs"]["url_fetcher"], _Fetcher)
+
+
+# ── Ola 0 · fix de revisión de Tarea 2 (auditoría 2026-09-03) ──────────────
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "//host/share/x.png",
+        "\\\\host\\share\\x.png",
+        "C:/Windows/win.ini",
+        "/etc/passwd.png",
+    ],
+    ids=["barra-doble-unc", "backslash-unc", "unidad-absoluta", "posix-absoluta"],
+)
+def test_embed_images_rechaza_rutas_absolutas_y_unc_sin_resolver(
+    run_dir: Path, monkeypatch: pytest.MonkeyPatch, ref: str
+) -> None:
+    # Con la ruta sin ancla vetada de antemano, ``Path.resolve`` nunca debe
+    # tocar el host/unidad de la referencia: en Windows resolver una UNC abre
+    # una conexión SMB al host que elija el Markdown (auditoría 2026-09-03).
+    original_resolve = Path.resolve
+
+    def _spy(self: Path, *args: object, **kwargs: object) -> Path:
+        marcado = str(self).lower()
+        if "host" in marcado or "windows" in marcado or "etc" in marcado:
+            raise AssertionError(f"Path.resolve() tocó una ruta no confinada: {self!r}")
+        return original_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", _spy)
+    _append_documento(run_dir, f"![x]({ref})")
+    html = assemble_html(run_dir)
+    assert "<em>x</em>" in html
+
+
+def test_figuras_meta_no_sigue_symlinks_fuera(run_dir: Path) -> None:
+    fuera = run_dir.parent / "secreto-fuera-symlink.png"
+    contenido_fuera = b"contenido-secreto-fuera-del-deliverable"
+    fuera.write_bytes(contenido_fuera)
+    forest = run_dir / "deliverable" / "assets" / "forest.png"
+    forest.unlink()
+    try:
+        forest.symlink_to(fuera)
+    except (OSError, NotImplementedError):
+        pytest.skip("sin privilegio para symlinks")
+    html = assemble_html(run_dir)
+    assert base64.b64encode(contenido_fuera).decode() not in html
+
+
+def test_style_solo_text_align_con_valor_valido(run_dir: Path) -> None:
+    _append_documento(
+        run_dir,
+        "\n<table><tr>"
+        '<td style="text-align:url(http://evil.example/x)">a</td>'
+        '<td style="TEXT-ALIGN: Center; color:red">b</td>'
+        "</tr></table>\n",
+    )
+    html = assemble_html(run_dir)
+    assert "evil.example" not in html
+    assert "text-align:center" in html
+    assert "color:red" not in html
+
+
+def test_href_data_y_javascript_variantes(run_dir: Path) -> None:
+    _append_documento(
+        run_dir,
+        "\n"
+        '<a href="DATA:text/html,x">d</a> '
+        '<a href="  JaVaScRiPt:alert(1)">j</a> '
+        '<a href="java&#x09;script:alert(1)">e</a>\n',
+    )
+    low = assemble_html(run_dir).lower()
+    assert "data:text" not in low
+    assert "alert(" not in low
+    assert "javascript" not in low

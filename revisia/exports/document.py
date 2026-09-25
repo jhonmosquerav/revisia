@@ -29,7 +29,7 @@ import base64
 import html
 import re
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import markdown as md_lib
 import nh3
@@ -121,13 +121,40 @@ _ALLOWED_ATTRIBUTES: dict[str, set[str]] = {
 }
 
 
+# Valores legítimos de `text-align` (extensión `tables` de markdown solo emite
+# left/right/center): whitelist cerrada, nunca se deja pasar la declaración cruda.
+_TEXT_ALIGN_VALUES = frozenset({"left", "right", "center", "justify", "start", "end"})
+_STYLE_DECL_RE = re.compile(r"([a-zA-Z-]+)\s*:\s*([^;]+)")
+
+
+def _text_align_only(value: str) -> str | None:
+    """Del ``style`` crudo, conserva solo un ``text-align`` con valor de la whitelist.
+
+    ``filter_style_properties={"text-align"}`` de nh3 filtra por NOMBRE de
+    propiedad; un ``style="text-align:url(http://evil.example/x)"`` sobrevive
+    verbatim porque el nombre es válido aunque el valor sea una URL remota.
+    Aquí se parsean las declaraciones a mano y se descarta cualquier valor que
+    no sea una palabra clave de alineación conocida (auditoría 2026-09-03).
+    """
+    for propiedad, valor in _STYLE_DECL_RE.findall(value):
+        if propiedad.strip().lower() == "text-align":
+            limpio = valor.strip().lower()
+            if limpio in _TEXT_ALIGN_VALUES:
+                return f"text-align:{limpio}"
+    return None
+
+
 def _attribute_filter(tag: str, attr: str, value: str) -> str | None:
-    """Restringe ``data:`` a imágenes y veta ``javascript:``/``data:`` en enlaces."""
+    """Restringe ``data:`` a imágenes, veta ``javascript:``/``data:`` en enlaces y
+    reduce ``style`` en celdas de tabla a un ``text-align`` de valor válido.
+    """
     if tag == "img" and attr == "src":
         return value if value.startswith("data:image/") else None
     if tag == "a" and attr == "href":
         low = value.strip().lower()
         return None if low.startswith(("data:", "javascript:")) else value
+    if attr == "style" and tag in {"th", "td"}:
+        return _text_align_only(value)
     return value
 
 
@@ -261,23 +288,45 @@ def _figure_html(path: Path, caption: str) -> str:
     return fig + "</figure>"
 
 
+def _resolve_inside(base_dir: Path, ref: str) -> Path | None:
+    """Ruta de imagen confinada a ``base_dir`` o ``None`` (auditoría 2026-09-03, A2).
+
+    Rechaza sin tocar el sistema de ficheros cualquier referencia con ancla
+    (``C:``, ``\\\\host``, ``//host``, ``/``): en Windows, resolver una ruta UNC
+    abre una conexión SMB al host que elija el texto. Las relativas se resuelven
+    (symlinks incluidos) y deben quedar dentro de ``base_dir`` con extensión de
+    imagen conocida.
+    """
+    if PureWindowsPath(ref).anchor or PurePosixPath(ref).anchor:
+        return None
+    target = (base_dir / ref).resolve()
+    if (
+        target.is_relative_to(base_dir.resolve())
+        and target.suffix.lower() in _MIME
+        and target.is_file()
+    ):
+        return target
+    return None
+
+
 def _embed_md_images(text: str, base_dir: Path) -> str:
     """Reescribe ``![alt](ruta)`` a ``<figure>`` con la imagen embebida.
 
     Solo se embeben imágenes (extensión en ``_MIME``) que queden DENTRO de
     ``base_dir`` tras resolver ``..`` y enlaces simbólicos: una referencia como
     ``![x](../../.env)`` no puede sacar ficheros del entregable (auditoría
-    2026-09-03, A2). Las referencias externas (http/https), rotas o fuera del
+    2026-09-03, A2). Las referencias absolutas o UNC (``//host/share/x.png``,
+    ``C:/Windows/win.ini``) se descartan por ``_resolve_inside`` antes de tocar
+    el disco o la red. Las referencias externas (http/https), rotas o fuera del
     entregable se degradan a su texto alternativo en cursiva: el HTML resultante
     nunca carga recursos de fuera.
     """
-    root = base_dir.resolve()
 
     def _sub(match: re.Match[str]) -> str:
         alt, ref = match.group(1), match.group(2)
         if not ref.startswith(("http://", "https://", "data:", "file:")):
-            target = (base_dir / ref).resolve()
-            if target.is_relative_to(root) and target.suffix.lower() in _MIME and target.is_file():
+            target = _resolve_inside(base_dir, ref)
+            if target is not None:
                 return _figure_html(target, alt)
         return f"*{alt}*" if alt else ""
 
@@ -363,13 +412,20 @@ def _portada(titulo: str, autor: str, fecha: str, manifest: dict) -> str:
     return "\n".join(lineas)
 
 
-def _figuras_meta(assets_dir: Path) -> str:
+def _figuras_meta(deliverable: Path) -> str:
+    """Figuras de ``assets/`` embebidas, confinadas con ``_resolve_inside``.
+
+    Antes se comprobaba solo ``path.is_file()``: un symlink plantado en
+    ``assets/`` se seguía igual que un fichero normal. Usa la misma regla que
+    ``_embed_md_images`` para que ambos caminos compartan una sola definición
+    de "confinado" (auditoría 2026-09-03, A2).
+    """
     parts = []
     numero = 1
     for nombre, descripcion in _FIGURAS_META:
-        path = assets_dir / nombre
-        if path.is_file():
-            parts.append(_figure_html(path, f"Figura {numero}. {descripcion}"))
+        target = _resolve_inside(deliverable, f"assets/{nombre}")
+        if target is not None:
+            parts.append(_figure_html(target, f"Figura {numero}. {descripcion}"))
             numero += 1
     return "\n".join(parts)
 
@@ -404,7 +460,7 @@ def assemble_html(run_dir: Path | str) -> str:
         preparado = _embed_md_images(replace_mermaid_blocks(preparado, flow_table), deliverable)
         body.append(f'<main class="articulo">\n{_md_to_html(preparado)}\n</main>')
 
-    figuras = _figuras_meta(deliverable / "assets")
+    figuras = _figuras_meta(deliverable)
     figuras_colocadas = False
     for nombre, heading in _SECTIONS:
         path = deliverable / nombre
