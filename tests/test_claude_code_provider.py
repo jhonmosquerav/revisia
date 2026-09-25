@@ -191,12 +191,28 @@ def test_sin_clean_env_conserva_el_entorno(monkeypatch) -> None:
 # ── A-2 · guardia fail-closed del shim .CMD (auditoría 2026-09-03, A1) ──────
 
 
-def test_windows_cmd_shim_rejects_metachars(monkeypatch) -> None:
+@pytest.mark.parametrize("suffix", [".cmd", ".CMD", ".bat", ".BAT"])
+def test_windows_cmd_shim_rejects_metachars(monkeypatch, suffix) -> None:
     recorder: list[dict] = []
-    monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:\npm\claude.CMD")
+    ruta_shim = rf"C:\npm\claude{suffix}"
+    monkeypatch.setattr(cc.shutil, "which", lambda _name: ruta_shim)
     monkeypatch.setattr(cc.subprocess, "run", _fake_run_factory([_result_json("x")], recorder))
     # Construcción directa: salta ProviderConfig; la guardia debe sostenerse sola.
     provider = cc.ClaudeCodeProvider(model='opus" & calc & "')
+    with pytest.raises(RuntimeError, match="BatBadBut"):
+        provider.complete(LLMRequest(prompt="hola"))
+    assert recorder == []  # no se llegó a crear ningún proceso
+
+
+def test_windows_cmd_shim_rejects_metachars_en_ruta_del_shim(monkeypatch) -> None:
+    # Fail-closed sobre cmd[0]: la propia ruta de instalación del shim (la que
+    # devuelve `shutil.which`) puede traer un metacarácter aunque el modelo y
+    # el prompt sean seguros; cmd.exe la re-parsearía igual (revisión final
+    # Ola 0, 2026-09).
+    recorder: list[dict] = []
+    monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:\a&b\claude.cmd")
+    monkeypatch.setattr(cc.subprocess, "run", _fake_run_factory([_result_json("x")], recorder))
+    provider = cc.ClaudeCodeProvider(model="sonnet")
     with pytest.raises(RuntimeError, match="BatBadBut"):
         provider.complete(LLMRequest(prompt="hola"))
     assert recorder == []  # no se llegó a crear ningún proceso

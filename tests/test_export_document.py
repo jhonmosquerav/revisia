@@ -7,6 +7,7 @@ se prueba simulando la ausencia del extra (mensaje accionable).
 from __future__ import annotations
 
 import base64
+import shutil
 import sys
 from pathlib import Path
 
@@ -328,6 +329,22 @@ def test_pdf_url_fetcher_rejects_non_data(
     assert isinstance(seen["html_kwargs"]["url_fetcher"], _Fetcher)
 
 
+def test_url_fetcher_real_rechaza_file_y_http() -> None:
+    # El test anterior mockea `weasyprint.URLFetcher`: verifica que el
+    # exportador LO CONSTRUYE con `allowed_protocols={"data"}`, pero no que
+    # ese contrato realmente bloquee file/http en el WeasyPrint real. Este
+    # test lo hace contra el paquete real; se salta si no está instalado (no
+    # forma parte de las deps de este entorno, ni se instala aquí) pero debe
+    # ser correcto donde sí lo esté (extra `pdf`, WeasyPrint ≥70; revisión
+    # final Ola 0, 2026-09).
+    weasyprint = pytest.importorskip("weasyprint")
+    fetcher = weasyprint.URLFetcher(allowed_protocols={"data"})
+    with pytest.raises(ValueError, match="disallowed protocol"):
+        fetcher.fetch("file:///x")
+    with pytest.raises(ValueError, match="disallowed protocol"):
+        fetcher.fetch("http://example.invalid/x")
+
+
 # ── Ola 0 · fix de revisión de Tarea 2 (auditoría 2026-09-03) ──────────────
 
 
@@ -345,20 +362,29 @@ def test_embed_images_rechaza_rutas_absolutas_y_unc_sin_resolver(
     run_dir: Path, monkeypatch: pytest.MonkeyPatch, ref: str
 ) -> None:
     # Con la ruta sin ancla vetada de antemano, ``Path.resolve`` nunca debe
-    # tocar el host/unidad de la referencia: en Windows resolver una UNC abre
-    # una conexión SMB al host que elija el Markdown (auditoría 2026-09-03).
+    # construirse a partir de la referencia peligrosa: en Windows resolver una
+    # UNC abre una conexión SMB al host que elija el Markdown (auditoría
+    # 2026-09-03). El espía NO aborta por subcadenas genéricas ("host",
+    # "windows", "etc") porque colisionan con la ruta temporal real (p. ej.
+    # `TEMP` puede vivir bajo `C:\Windows\Temp`, o el usuario del sistema
+    # llamarse "etc" y aparecer en el `tmp_path` de pytest); en vez de eso se
+    # registran TODAS las rutas resueltas y se comprueba, ya fuera del espía,
+    # que ninguna contiene la referencia peligrosa completa normalizada
+    # (revisión final Ola 0, 2026-09).
     original_resolve = Path.resolve
+    resueltas: list[str] = []
 
     def _spy(self: Path, *args: object, **kwargs: object) -> Path:
-        marcado = str(self).lower()
-        if "host" in marcado or "windows" in marcado or "etc" in marcado:
-            raise AssertionError(f"Path.resolve() tocó una ruta no confinada: {self!r}")
+        resueltas.append(str(self))
         return original_resolve(self, *args, **kwargs)
 
     monkeypatch.setattr(Path, "resolve", _spy)
     _append_documento(run_dir, f"![x]({ref})")
     html = assemble_html(run_dir)
     assert "<em>x</em>" in html
+    peligrosa = ref.replace("\\", "/").lower().lstrip("/")
+    tocadas = [r for r in resueltas if peligrosa in r.replace("\\", "/").lower()]
+    assert not tocadas, f"Path.resolve() tocó una ruta no confinada: {tocadas!r}"
 
 
 def test_figuras_meta_no_sigue_symlinks_fuera(run_dir: Path) -> None:
@@ -370,7 +396,23 @@ def test_figuras_meta_no_sigue_symlinks_fuera(run_dir: Path) -> None:
     try:
         forest.symlink_to(fuera)
     except (OSError, NotImplementedError):
-        pytest.skip("sin privilegio para symlinks")
+        # Sin privilegio para symlinks (Windows sin modo desarrollador ni
+        # admin: caso típico de CI/dev). En vez de saltar el test entero, se
+        # prueba la misma protección con una *junction* de directorio, que no
+        # requiere privilegio especial: `deliverable/assets` pasa a ser una
+        # junction hacia una carpeta externa con su propio `forest.png` de
+        # bytes distinguibles (revisión final Ola 0, 2026-09).
+        try:
+            import _winapi
+
+            assets = run_dir / "deliverable" / "assets"
+            fuera_dir = run_dir.parent / "assets-fuera-junction"
+            fuera_dir.mkdir()
+            (fuera_dir / "forest.png").write_bytes(contenido_fuera)
+            shutil.rmtree(assets)
+            _winapi.CreateJunction(str(fuera_dir), str(assets))
+        except (OSError, AttributeError, ImportError, NotImplementedError):
+            pytest.skip("sin privilegio para symlinks ni soporte de junctions")
     html = assemble_html(run_dir)
     assert base64.b64encode(contenido_fuera).decode() not in html
 
@@ -401,3 +443,15 @@ def test_href_data_y_javascript_variantes(run_dir: Path) -> None:
     assert "data:text" not in low
     assert "alert(" not in low
     assert "javascript" not in low
+
+
+def test_href_protocolo_relativo_y_unc_rechazados(run_dir: Path) -> None:
+    # `//host/...` (protocol-relative) y `\\host\...` (UNC): abierto el HTML
+    # desde file://, un clic resuelve contra el host que elija el documento
+    # (revisión final Ola 0, 2026-09).
+    _append_documento(
+        run_dir,
+        '\n<a href="//evil.example/x">a</a> <a href="\\\\evil.example\\share\\x">b</a>\n',
+    )
+    html = assemble_html(run_dir)
+    assert "evil" not in html

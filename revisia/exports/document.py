@@ -145,14 +145,28 @@ def _text_align_only(value: str) -> str | None:
 
 
 def _attribute_filter(tag: str, attr: str, value: str) -> str | None:
-    """Restringe ``data:`` a imágenes, veta ``javascript:``/``data:`` en enlaces y
+    """Restringe ``data:`` a imágenes, veta esquemas peligrosos en enlaces y
     reduce ``style`` en celdas de tabla a un ``text-align`` de valor válido.
+
+    Este filtro (no ``nh3``) es el que elimina ``data:`` de ``href``: ``data``
+    está en ``url_schemes`` (lo necesitan las imágenes embebidas), así que sin
+    esta comprobación explícita ``nh3`` dejaría pasar un enlace ``data:``.
     """
     if tag == "img" and attr == "src":
         return value if value.startswith("data:image/") else None
     if tag == "a" and attr == "href":
-        low = value.strip().lower()
-        return None if low.startswith(("data:", "javascript:")) else value
+        stripped = value.strip()
+        low = stripped.lower()
+        if low.startswith(("data:", "javascript:")):
+            return None
+        # Protocol-relative (``//host/...``) o UNC (``\\host\...``): abierto
+        # el HTML desde file://, un clic resuelve contra el host que elija el
+        # documento y en Windows dispara una conexión SMB (revisión final Ola
+        # 0, 2026-09). Una barra invertida en cualquier posición también se
+        # rechaza: es el separador UNC y no tiene uso legítimo en un href.
+        if stripped.startswith(("//", "\\")) or "\\" in stripped:
+            return None
+        return value
     if attr == "style" and tag in {"th", "td"}:
         return _text_align_only(value)
     return value

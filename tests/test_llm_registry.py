@@ -101,6 +101,8 @@ def test_claude_code_se_construye_offline() -> None:
         "gpt 4",
         "",
         "m" * 129,
+        "--dangerously-skip-permissions",  # se parecería a un flag del CLI
+        "-x",
     ],
 )
 def test_provider_model_rejects_injection(bad: str) -> None:

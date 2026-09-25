@@ -36,7 +36,10 @@ _BUILDERS: dict[str, tuple[str, str]] = {
 # como argumento de línea de comandos en `claude_code` y, en Windows, un shim
 # .CMD lo re-parsea con cmd.exe (BatBadBut). Solo caracteres que no son
 # metacaracteres de ningún shell; `@` y `+` admiten ids estilo Vertex/OpenRouter.
-MODEL_NAME_PATTERN = r"^[A-Za-z0-9._:/@+-]{1,128}$"
+# El primer carácter debe ser alfanumérico (revisión final Ola 0, 2026-09):
+# defensa en profundidad para que un modelo que empiece por `-` no se parezca
+# a un flag del CLI (p. ej. `--dangerously-skip-permissions` o `-x`).
+MODEL_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$"
 
 
 class ProviderConfig(BaseModel):

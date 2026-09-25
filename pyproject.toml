@@ -50,8 +50,9 @@ search = ["httpx>=0.27"]
 meta = ["matplotlib>=3.8", "scipy>=1.11"]
 # Exportación a PDF (`revisia export --format pdf`): WeasyPrint, multiplataforma,
 # sin Word/COM, sin LaTeX, sin pandoc, sin Chromium. El HTML autocontenido
-# (formato por defecto de `export`) NO necesita este extra. ≥70: `url_fetcher`
-# es una instancia de `URLFetcher`, no un callable.
+# (formato por defecto de `export`) NO necesita este extra. ≥70: versión
+# verificada del contrato `URLFetcher(allowed_protocols=…)` que usa el
+# exportador.
 pdf = ["weasyprint>=70"]
 # Conveniencia: todo lo necesario para correr el tracer bullet con Gemini.
 demo = ["google-genai>=1.0", "httpx>=0.27", "prefect>=3.0"]

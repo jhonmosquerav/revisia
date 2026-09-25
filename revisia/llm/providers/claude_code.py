@@ -135,13 +135,19 @@ class ClaudeCodeProvider:
         ``.cmd``/``.bat`` pasa por cmd.exe. El prompt viaja por stdin y no se
         comprueba: no atraviesa cmd.exe.
 
+        Se inspecciona ``cmd`` completo, incluido ``cmd[0]`` (la ruta del
+        propio CLI resuelta por ``shutil.which``): fail-closed, porque una
+        ruta de instalación con ``&`` (p. ej. ``C:\\a&b\\claude.cmd``) también
+        rompe cmd.exe aunque los demás argumentos sean seguros (revisión
+        final Ola 0, 2026-09).
+
         Raises:
             RuntimeError: si algún argumento contiene un metacarácter de cmd.exe.
         """
         exe = Path(cmd[0])
         if exe.suffix.lower() not in _CMD_SHIM_SUFFIXES:
             return
-        for arg in cmd[1:]:
+        for arg in cmd:
             bad = sorted(set(arg) & _CMD_METACHARS)
             if bad:
                 raise RuntimeError(
