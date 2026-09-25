@@ -338,15 +338,23 @@ def run_audit(run_dir: str | Path) -> AuditReport:
             metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
             recall = metrics.get("recall")
             kappa = metrics.get("cohen_kappa")
-            if kappa is None:
+            # mcc solo cuenta como indefinido si la clave está presente y es
+            # null: un metrics.json de formato antiguo (sin "mcc") no debe
+            # convertir un PASS previo en WARN.
+            mcc_indefinido = "mcc" in metrics and metrics.get("mcc") is None
+            tiene_matriz = all(k in metrics for k in ("tp", "fp", "fn", "tn"))
+            gold_una_sola_clase = tiene_matriz and (
+                metrics["tp"] + metrics["fn"] == 0 or metrics["tn"] + metrics["fp"] == 0
+            )
+            if kappa is None or mcc_indefinido or gold_una_sola_clase:
                 add(
                     AuditCheck(
                         "gold",
                         "trAIce M9/R2",
                         "WARN",
-                        f"Métricas vs gold humano: recall={recall} · kappa no calculable "
-                        "(denominador 0: el gold no tiene ambas clases). Amplía el gold con "
-                        "registros relevantes e irrelevantes.",
+                        f"Métricas vs gold humano: recall={recall} · kappa/mcc no calculable: "
+                        "métricas indefinidas o no informativas (el gold o la IA asignaron una "
+                        "sola clase). Amplía el gold con registros relevantes e irrelevantes.",
                     )
                 )
             else:

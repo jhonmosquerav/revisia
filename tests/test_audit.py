@@ -288,3 +288,52 @@ def test_audit_gold_kappa_no_calculable_advierte(tmp_path) -> None:
     gold = next(c for c in report.checks if c.check_id == "gold")
     assert gold.status == "WARN"  # antes: PASS con κ inventado
     assert "no calculable" in gold.detail
+
+
+def test_audit_gold_una_sola_clase_advierte_aunque_kappa_no_sea_none(tmp_path) -> None:
+    """Caso A11 (decisión D6): IA de una sola clase con kappa=0.0 (no None) y
+    mcc=None no debe pasar como PASS — hay que mirar mcc y la matriz, no solo κ."""
+    run = _make_run(tmp_path)
+    (run / "03_screening" / "metrics.json").write_text(
+        json.dumps(
+            {"recall": 1.0, "cohen_kappa": 0.0, "mcc": None, "tp": 3, "fp": 2, "fn": 0, "tn": 0}
+        ),
+        encoding="utf-8",
+    )
+    report = run_audit(run)
+    gold = next(c for c in report.checks if c.check_id == "gold")
+    assert gold.status == "WARN"
+
+
+def test_audit_ia_una_sola_clase_con_gold_mixto_advierte(tmp_path) -> None:
+    """mcc=None con kappa numérico (formato antiguo, sin matriz de confusión):
+    decide solo por los None, sigue siendo WARN."""
+    run = _make_run(tmp_path)
+    (run / "03_screening" / "metrics.json").write_text(
+        json.dumps({"recall": 1.0, "cohen_kappa": 0.42, "mcc": None}),
+        encoding="utf-8",
+    )
+    report = run_audit(run)
+    gold = next(c for c in report.checks if c.check_id == "gold")
+    assert gold.status == "WARN"
+
+
+def test_audit_gold_sano_con_matriz_completa_pasa(tmp_path) -> None:
+    run = _make_run(tmp_path)
+    (run / "03_screening" / "metrics.json").write_text(
+        json.dumps(
+            {
+                "recall": 0.8,
+                "cohen_kappa": 0.75,
+                "mcc": 0.6,
+                "tp": 4,
+                "fp": 1,
+                "fn": 1,
+                "tn": 4,
+            }
+        ),
+        encoding="utf-8",
+    )
+    report = run_audit(run)
+    gold = next(c for c in report.checks if c.check_id == "gold")
+    assert gold.status == "PASS"
