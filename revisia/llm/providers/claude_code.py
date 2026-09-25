@@ -141,22 +141,37 @@ class ClaudeCodeProvider:
         rompe cmd.exe aunque los demás argumentos sean seguros (revisión
         final Ola 0, 2026-09).
 
+        Si el metacarácter está en ``cmd[0]`` (la ruta de instalación resuelta
+        por ``shutil.which``), la sugerencia es distinta de la de un
+        metacarácter en el modelo o el system prompt: ahí no hay modelo ni
+        system prompt que cambiar, hay que cambiar el binario o la ruta de
+        instalación (revisión final Ola 0, 2026-09).
+
         Raises:
             RuntimeError: si algún argumento contiene un metacarácter de cmd.exe.
         """
         exe = Path(cmd[0])
         if exe.suffix.lower() not in _CMD_SHIM_SUFFIXES:
             return
-        for arg in cmd:
+        for idx, arg in enumerate(cmd):
             bad = sorted(set(arg) & _CMD_METACHARS)
-            if bad:
-                raise RuntimeError(
-                    f"Argumento no seguro para el shim {exe.name}: contiene {''.join(bad)!r}. "
-                    "En Windows, cmd.exe re-interpreta esos caracteres al lanzar un .cmd/.bat "
-                    "(BatBadBut) y podría ejecutar comandos. Instala el binario nativo de "
-                    "Claude Code (claude.exe) o usa un modelo y un system prompt sin esos "
-                    "caracteres."
+            if not bad:
+                continue
+            if idx == 0:
+                sugerencia = (
+                    "Instala el binario nativo de Claude Code (claude.exe) o "
+                    "reinstala el CLI en una ruta sin esos caracteres."
                 )
+            else:
+                sugerencia = (
+                    "Instala el binario nativo de Claude Code (claude.exe) o usa "
+                    "un modelo y un system prompt sin esos caracteres."
+                )
+            raise RuntimeError(
+                f"Argumento no seguro para el shim {exe.name}: contiene {''.join(bad)!r}. "
+                "En Windows, cmd.exe re-interpreta esos caracteres al lanzar un .cmd/.bat "
+                f"(BatBadBut) y podría ejecutar comandos. {sugerencia}"
+            )
 
     def _invoke(self, req: LLMRequest) -> tuple[str, dict]:
         """Corre ``claude -p`` con el prompt por stdin y devuelve (texto, usage).

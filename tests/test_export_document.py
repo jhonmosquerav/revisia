@@ -455,3 +455,23 @@ def test_href_protocolo_relativo_y_unc_rechazados(run_dir: Path) -> None:
     )
     html = assemble_html(run_dir)
     assert "evil" not in html
+
+
+def test_href_bypass_via_normalizacion_whatwg_rechazado(run_dir: Path) -> None:
+    # El parser de URL WHATWG (usado por cualquier navegador) quita tab/LF/CR
+    # en cualquier posición y C0/espacio en los extremos ANTES de resolver el
+    # esquema. Un chequeo ingenuo con `str.strip()` deja pasar estas cuatro
+    # variantes, que el navegador termina resolviendo como `//evil.example/x`
+    # o `javascript:alert(1)` (revisión final Ola 0, 2026-09):
+    _append_documento(
+        run_dir,
+        "\n"
+        '<a href="/&#9;/evil.example/x">a</a> '
+        '<a href="/&#10;/evil.example/x">b</a> '
+        '<a href="&#1;//evil.example/x">c</a> '
+        '<a href="java&#9;script:alert(1)">d</a>\n',
+    )
+    html = assemble_html(run_dir)
+    low = html.lower()
+    assert "evil" not in low
+    assert "alert(" not in low

@@ -155,8 +155,17 @@ def _attribute_filter(tag: str, attr: str, value: str) -> str | None:
     if tag == "img" and attr == "src":
         return value if value.startswith("data:image/") else None
     if tag == "a" and attr == "href":
-        stripped = value.strip()
-        low = stripped.lower()
+        # Normalización WHATWG (url.spec.whatwg.org, "basic URL parser", pasos
+        # 1-2): un navegador quita C0/espacio de los extremos y TODO tab/LF/CR
+        # del string completo antes de resolver el esquema. `str.strip()` no
+        # cubre eso: deja pasar `&#9;`/`&#10;`/`&#13;` intercalados o `&#1;`
+        # al inicio, que el chequeo ingenuo no detecta pero el navegador sí
+        # descarta, resolviendo igual `//evil.example` o `javascript:` (
+        # revisión final Ola 0, 2026-09).
+        c0_o_espacio = "".join(chr(c) for c in range(0x21))
+        norm = value.strip(c0_o_espacio)
+        norm = re.sub(r"[\t\n\r]", "", norm)
+        low = norm.lower()
         if low.startswith(("data:", "javascript:")):
             return None
         # Protocol-relative (``//host/...``) o UNC (``\\host\...``): abierto
@@ -164,9 +173,13 @@ def _attribute_filter(tag: str, attr: str, value: str) -> str | None:
         # documento y en Windows dispara una conexión SMB (revisión final Ola
         # 0, 2026-09). Una barra invertida en cualquier posición también se
         # rechaza: es el separador UNC y no tiene uso legítimo en un href.
-        if stripped.startswith(("//", "\\")) or "\\" in stripped:
+        if norm.startswith(("//", "\\")) or "\\" in norm:
             return None
-        return value
+        # Se devuelve `norm` (no `value`): así el href que llega al entregable
+        # ya no conserva los C0/tab/LF/CR que demostraron ser el vector de
+        # bypass del chequeo ingenuo; es defensa en profundidad, no solo el
+        # chequeo (revisión final Ola 0, 2026-09).
+        return norm
     if attr == "style" and tag in {"th", "td"}:
         return _text_align_only(value)
     return value

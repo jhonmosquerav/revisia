@@ -213,7 +213,11 @@ def test_windows_cmd_shim_rejects_metachars_en_ruta_del_shim(monkeypatch) -> Non
     monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:\a&b\claude.cmd")
     monkeypatch.setattr(cc.subprocess, "run", _fake_run_factory([_result_json("x")], recorder))
     provider = cc.ClaudeCodeProvider(model="sonnet")
-    with pytest.raises(RuntimeError, match="BatBadBut"):
+    # El carácter ofensivo está en cmd[0] (la ruta de instalación): el mensaje
+    # debe sugerir el binario nativo o reinstalar en otra ruta, no "un modelo
+    # y un system prompt sin esos caracteres" (ahí no hay modelo ni system
+    # prompt que cambiar) (revisión final Ola 0, 2026-09).
+    with pytest.raises(RuntimeError, match="BatBadBut.*reinstala el CLI en una ruta"):
         provider.complete(LLMRequest(prompt="hola"))
     assert recorder == []  # no se llegó a crear ningún proceso
 
