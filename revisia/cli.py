@@ -11,13 +11,17 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
+import yaml
 from pydantic import ValidationError
 
 from revisia import __version__
 from revisia.config import STAGES, load_protocol
+from revisia.llm.deprecations import retirement_for
+from revisia.llm.providers.gemini import DEFAULT_MODEL as GEMINI_DEFAULT_MODEL
+from revisia.metrics import fmt_metric
 
 
 def _protocol_warnings(protocol, protocol_dir: str) -> list[str]:
@@ -47,9 +51,56 @@ def _protocol_warnings(protocol, protocol_dir: str) -> list[str]:
     return warns
 
 
-def _cmd_validate(protocol_dir: str) -> int:
-    protocol = load_protocol(protocol_dir)
-    print(f"✓ Protocolo válido: {protocol.title}  [{protocol.slug}]")
+def _today() -> date:
+    """Fecha de hoy (función aparte para poder fijarla en los tests)."""
+    return date.today()
+
+
+def _configured_models(protocol) -> list[str]:
+    """Ids de modelo de todas las etapas y miembros de ensemble del protocolo."""
+    models = {cfg.model for cfg in protocol.llm.values()}
+    models |= {cfg.model for members in protocol.ensemble_llm.values() for cfg in members}
+    return sorted(models)
+
+
+def _retired_model_problems(protocol, today: date) -> tuple[list[str], list[str]]:
+    """Modelos retirados del protocolo configurado: ``(errores, avisos)``.
+
+    Un modelo ya apagado es un error (bloquea `validate`/`run`); uno con
+    retiro futuro es solo un aviso. Función compartida por `_cmd_validate` y
+    por `run` en `main()` para que el quickstart (que llama a `revisia run`
+    directamente, sin pasar por `validate`) también se ataje aquí, antes del
+    404 a mitad de corrida (auditoría 2026-09-03, C4; revisión final, ítem 3).
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    for model in _configured_models(protocol):
+        retirement = retirement_for(model)
+        if retirement is None:
+            continue
+        fecha = retirement.shutdown.isoformat()
+        if retirement.is_past(today):
+            errors.append(
+                f"el modelo {model!r} fue retirado por su proveedor el {fecha}; "
+                "las llamadas fallarán. Cámbialo en protocol.yml."
+            )
+        else:
+            warnings.append(f"el modelo {model!r} se retira el {fecha}; planifica el cambio.")
+    return errors, warnings
+
+
+def _cmd_validate(protocol, protocol_dir: str) -> int:
+    # Modelos retirados (auditoría 2026-09-03, C4): calculados antes para no
+    # imprimir "✓ Protocolo válido" cuando el protocolo carga pero usaría un
+    # modelo que ya no responde (revisión final, ítem 4).
+    errors, avisos_retiro = _retired_model_problems(protocol, _today())
+    if errors:
+        print(
+            f"⚠ Protocolo carga, pero usa modelo(s) retirado(s): "
+            f"{protocol.title}  [{protocol.slug}]"
+        )
+    else:
+        print(f"✓ Protocolo válido: {protocol.title}  [{protocol.slug}]")
     print(f"  Pregunta ({protocol.question.framework.value}): {protocol.question.text}")
     print(f"  Bases: {', '.join(protocol.databases) or '(ninguna declarada)'}")
     print(f"  RoB tool: {protocol.rob_tool} · Extensión: {protocol.prisma_extension}")
@@ -71,7 +122,11 @@ def _cmd_validate(protocol_dir: str) -> int:
         print("  Advertencias (no bloquean la corrida):")
         for w in warns:
             print(f"    ⚠ {w}")
-    return 0
+    for aviso in avisos_retiro:
+        print(f"  aviso: {aviso}")
+    for error in errors:
+        print(f"error: {error}", file=sys.stderr)
+    return 2 if errors else 0
 
 
 def _cmd_gold_template(args: argparse.Namespace) -> int:
@@ -166,7 +221,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         lost = "n/d" if m.lost_evidence is None else f"{m.lost_evidence:.2f}"
         print(
             f"  Métricas (vs gold n={m.n}): recall={recall} · lost-evidence={lost} "
-            f"· MCC={m.mcc:.2f} · WMCC={m.wmcc:.2f} · kappa={m.cohen_kappa:.2f}"
+            f"· MCC={fmt_metric(m.mcc, '.2f')} · WMCC={fmt_metric(m.wmcc, '.2f')} "
+            f"· kappa={fmt_metric(m.cohen_kappa, '.2f')}"
         )
     return 0 if result.status in {"completed", "paused"} else 1
 
@@ -206,13 +262,30 @@ def _cmd_new(args: argparse.Namespace) -> int:
 def _cmd_check(args: argparse.Namespace) -> int:
     """Pre-chequeo de adherencia de un manuscrito al checklist PRISMA 2020."""
     from revisia.check import check_manuscript, render_adherence_md
-    from revisia.llm.registry import ProviderConfig
+    from revisia.llm.registry import ProviderConfig, available_providers
 
     source = Path(args.manuscript)
     if not source.exists():
         print(f"error: el manuscrito {args.manuscript!r} no existe.", file=sys.stderr)
         return 2
-    cfg = ProviderConfig(provider=args.provider, model=args.model, temperature=0.0)
+    # Errores de uso (proveedor o modelo inválidos) se informan antes de llamar
+    # al LLM, sin traceback (seguimiento de la Ola 0).
+    if args.provider not in available_providers():
+        print(
+            f"error: --provider {args.provider!r} desconocido. "
+            f"Disponibles: {', '.join(available_providers())}.",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        cfg = ProviderConfig(provider=args.provider, model=args.model, temperature=0.0)
+    except ValidationError:
+        print(
+            f"error: --model {args.model!r} no es un identificador de modelo válido "
+            "(letras, dígitos y . _ : / @ + -, empezando por letra o dígito).",
+            file=sys.stderr,
+        )
+        return 2
     report, meta = check_manuscript(source.read_text(encoding="utf-8"), cfg)
     markdown = render_adherence_md(
         report, source_name=source.name, model=f"{meta.provider}:{meta.model}"
@@ -365,7 +438,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_check.add_argument("manuscript", help="Manuscrito a evaluar (.md o texto plano).")
     p_check.add_argument("--provider", default="gemini", help="Proveedor LLM (default: gemini).")
     p_check.add_argument(
-        "--model", default="gemini-2.0-flash", help="Modelo (default: gemini-2.0-flash)."
+        "--model",
+        default=GEMINI_DEFAULT_MODEL,
+        help=f"Modelo (default: {GEMINI_DEFAULT_MODEL}).",
     )
     p_check.add_argument(
         "--out", default=None, help="Informe de salida (default: <manuscrito>.prisma-check.md)."
@@ -426,18 +501,32 @@ def main(argv: list[str] | None = None) -> int:
     if not Path(protocol_dir).exists():
         print(f"error: la carpeta {protocol_dir!r} no existe.", file=sys.stderr)
         return 2
+    protocol = None
     if args.command in {"validate", "run"}:
-        # Un protocol.yml inválido (p. ej. A3 en una etapa de juicio) se informa
-        # como error de uso, no como traceback (auditoría 2026-09-03, C1).
+        # Un protocol.yml inválido (p. ej. A3 en una etapa de juicio) o con YAML
+        # roto se informa como error de uso, no como traceback (auditoría
+        # 2026-09-03, C1; revisión final, ítem 6 para el YAML roto).
         try:
-            load_protocol(protocol_dir)
-        except ValidationError as exc:
+            protocol = load_protocol(protocol_dir)
+        except (ValidationError, yaml.YAMLError) as exc:
             print(f"error: protocol.yml inválido en {protocol_dir}:\n{exc}", file=sys.stderr)
             return 2
     if args.command == "validate":
-        return _cmd_validate(protocol_dir)
+        return _cmd_validate(protocol, protocol_dir)
     if args.command == "run":
         from revisia.orchestration.hitl import DecisionFileError
+
+        # Modelos retirados (auditoría 2026-09-03, C4): el quickstart del README
+        # va directo a `run` sin pasar por `validate`, así que el 404 a mitad de
+        # corrida seguía ocurriendo. Se ataja aquí, antes de crear ninguna
+        # carpeta de corrida (revisión final, ítem 3).
+        errors, avisos_retiro = _retired_model_problems(protocol, _today())
+        if errors:
+            for error in errors:
+                print(f"error: {error}", file=sys.stderr)
+            return 2
+        for aviso in avisos_retiro:
+            print(f"aviso: {aviso}")
 
         try:
             return _cmd_run(args)

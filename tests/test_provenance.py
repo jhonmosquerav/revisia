@@ -17,7 +17,7 @@ def test_sha256_text_es_determinista() -> None:
 def test_runmeta_serializa_redondo() -> None:
     meta = RunMeta(
         provider="gemini",
-        model="gemini-2.0-flash",
+        model="gemini-3.5-flash-lite",
         temperature=0.0,
         prompt_sha256=sha256_text("p"),
         response_sha256=sha256_text("r"),

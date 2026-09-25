@@ -13,6 +13,9 @@ build/
 
 # Outputs de ejecuciones: se ignoran salvo el manifest y los entregables,
 # que son los artefactos reproducibles que SÍ se versionan/comparten.
+# OJO: estas negaciones son inoperantes porque `runs/*/` excluye el directorio
+# padre (git no re-incluye hijos de un directorio ignorado). Hoy ninguna corrida
+# se versiona. Decidir qué se versiona de una corrida es trabajo de la Ola 1.
 runs/*/
 !runs/*/manifest.yml
 !runs/*/deliverable/
@@ -36,3 +39,6 @@ cerebro/
 .coverage*
 coverage.xml
 htmlcov/
+
+# Artefactos de proceso de agentes (planes/borradores locales): no son del repo.
+.superpowers/

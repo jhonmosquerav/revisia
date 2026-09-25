@@ -61,12 +61,12 @@ registration:
 llm:
   default:
     provider: gemini
-    model: gemini-2.0-flash
+    model: gemini-3.5-flash-lite
     temperature: 0.0
     seed: 42
   sintesis:
     provider: gemini
-    model: gemini-2.0-flash
+    model: gemini-3.5-flash-lite
     temperature: 0.2
     seed: 42
 
@@ -96,7 +96,7 @@ ensemble:
 # ensemble_llm:
 #   screening_ta:
 #     - provider: gemini
-#       model: gemini-2.0-flash
+#       model: gemini-3.5-flash-lite
 #       seed: 42
 #     - provider: openai
 #       model: gpt-4o-mini

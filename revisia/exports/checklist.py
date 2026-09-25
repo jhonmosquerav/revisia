@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
+from revisia.metrics import fmt_metric
 from revisia.provenance.runmeta import RunMeta
 
 if TYPE_CHECKING:
@@ -238,8 +239,9 @@ def render_traice_checklist(
             "## Métricas de cribado (vs gold standard humano)",
             f"- Recall (evidencia recuperada): {_fmt(metrics.recall)}",
             f"- Lost-Evidence (evidencia perdida): {_fmt(metrics.lost_evidence)}",
-            f"- MCC: {metrics.mcc:.3f} · WMCC (w={metrics.wmcc_fn_weight:g}): {metrics.wmcc:.3f}",
-            f"- Cohen's kappa humano-IA: {metrics.cohen_kappa:.3f}",
+            f"- MCC: {fmt_metric(metrics.mcc)} · "
+            f"WMCC (w={metrics.wmcc_fn_weight:g}): {fmt_metric(metrics.wmcc)}",
+            f"- Cohen's kappa humano-IA: {fmt_metric(metrics.cohen_kappa)}",
             f"- Confusión (n={metrics.n}): TP={metrics.tp} FP={metrics.fp} "
             f"FN={metrics.fn} TN={metrics.tn}",
             "- _accuracy se omite a propósito (engañosa con datos desbalanceados)._",

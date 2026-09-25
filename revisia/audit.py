@@ -338,15 +338,56 @@ def run_audit(run_dir: str | Path) -> AuditReport:
             metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
             recall = metrics.get("recall")
             kappa = metrics.get("cohen_kappa")
-            add(
-                AuditCheck(
-                    "gold",
-                    "trAIce M9/R2",
-                    "PASS",
-                    f"Métricas vs gold humano: recall={recall} · kappa={kappa} "
-                    "(accuracy omitida a propósito).",
-                )
+            # mcc solo cuenta como indefinido si la clave está presente y es
+            # null: un metrics.json de formato antiguo (sin "mcc") no debe
+            # convertir un PASS previo en WARN.
+            mcc_indefinido = "mcc" in metrics and metrics.get("mcc") is None
+            # La matriz cuenta como presente solo si sus cuatro celdas son
+            # enteras: un valor null/no numérico (metrics.json corrupto o de
+            # una versión intermedia) no debe romper la auditoría con un
+            # TypeError al sumar — se trata como matriz ilegible (WARN).
+            matriz_bruta = {k: metrics.get(k) for k in ("tp", "fp", "fn", "tn")}
+            tiene_matriz = all(k in metrics for k in matriz_bruta)
+            matriz_legible = tiene_matriz and all(
+                isinstance(v, int) and not isinstance(v, bool) for v in matriz_bruta.values()
             )
+            matriz_ilegible = tiene_matriz and not matriz_legible
+            gold_una_sola_clase = matriz_legible and (
+                matriz_bruta["tp"] + matriz_bruta["fn"] == 0
+                or matriz_bruta["tn"] + matriz_bruta["fp"] == 0
+            )
+            if matriz_ilegible:
+                add(
+                    AuditCheck(
+                        "gold",
+                        "trAIce M9/R2",
+                        "WARN",
+                        f"Métricas vs gold humano: recall={recall} · "
+                        "metrics.json con matriz de confusión ilegible "
+                        "(tp/fp/fn/tn con algún valor no numérico).",
+                    )
+                )
+            elif kappa is None or mcc_indefinido or gold_una_sola_clase:
+                add(
+                    AuditCheck(
+                        "gold",
+                        "trAIce M9/R2",
+                        "WARN",
+                        f"Métricas vs gold humano: recall={recall} · kappa/mcc no calculable: "
+                        "métricas indefinidas o no informativas (el gold o la IA asignaron una "
+                        "sola clase). Amplía el gold con registros relevantes e irrelevantes.",
+                    )
+                )
+            else:
+                add(
+                    AuditCheck(
+                        "gold",
+                        "trAIce M9/R2",
+                        "PASS",
+                        f"Métricas vs gold humano: recall={recall} · kappa={kappa} "
+                        "(accuracy omitida a propósito).",
+                    )
+                )
         except json.JSONDecodeError:
             add(AuditCheck("gold", "trAIce M9/R2", "WARN", "metrics.json ilegible."))
     else:

@@ -54,12 +54,21 @@ def test_weights_suman_100() -> None:
     assert sum(s.weight_random for s in res.studies) == pytest.approx(100.0, abs=1e-6)
 
 
-def test_log_or_desde_2x2() -> None:
-    # e1=10/n1=100, e0=20/n0=100 con corrección 0.5.
+def test_log_or_desde_2x2_sin_ceros_no_corrige() -> None:
+    # e1=10/n1=100, e0=20/n0=100: sin celdas en cero no hay corrección de
+    # continuidad (Sweeting 2004; auditoría 2026-09-03, M10). Antes: -0.786.
     eff = EffectInput(study_id="x", e1=10, n1=100, e0=20, n0=100)
     yi, vi = eff.to_yi_vi("logOR")
-    assert yi == pytest.approx(-0.786, abs=1e-2)
-    assert vi == pytest.approx(0.1675, abs=1e-3)
+    assert yi == pytest.approx(-0.810930, abs=1e-6)
+    assert vi == pytest.approx(0.173611, abs=1e-6)
+
+
+def test_log_or_con_celda_cero_aplica_haldane_anscombe() -> None:
+    # e1=0: se suma 0.5 a las cuatro celdas (a=.5, b=10.5, c=5.5, d=5.5).
+    eff = EffectInput(study_id="z", e1=0, n1=10, e0=5, n0=10)
+    yi, vi = eff.to_yi_vi("logOR")
+    assert yi == pytest.approx(-3.044522, abs=1e-6)
+    assert vi == pytest.approx(2.458874, abs=1e-6)
 
 
 def test_mean_difference() -> None:
