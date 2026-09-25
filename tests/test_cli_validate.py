@@ -85,3 +85,12 @@ def test_run_con_modelo_por_retirarse_avisa_y_ejecuta(
     out = capsys.readouterr().out
     assert rc == 0
     assert "2026-10-16" in out
+
+
+def test_validate_detecta_retirado_con_prefijo_de_openrouter(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    proto = _protocolo_con_modelo(tmp_path, "google/gemini-2.0-flash-001")
+    rc = cli.main(["validate", str(proto)])
+    assert rc == 2
+    assert "google/gemini-2.0-flash-001" in capsys.readouterr().err

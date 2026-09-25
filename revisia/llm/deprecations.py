@@ -8,7 +8,8 @@ El quickstart de v0.6.0 se rompió en silencio: el modelo por defecto
 Se mantiene a mano: la fuente es la documentación oficial de cada proveedor.
 Gemini: https://ai.google.dev/gemini-api/docs/deprecations y
 https://ai.google.dev/gemini-api/docs/changelog (consultadas 2026-09-08).
-La clave es el id exacto que se escribe en ``protocol.yml``.
+La clave es el id canónico del proveedor; ``retirement_for`` también reconoce
+los prefijos de ruta (``models/``, ``google/``…) y las variantes ``:tag``.
 """
 
 from __future__ import annotations
@@ -40,7 +41,28 @@ class Retirement:
         return today >= self.shutdown
 
 
+def _candidate_ids(model: str) -> tuple[str, ...]:
+    """Ids con los que buscar ``model`` en la tabla.
+
+    Un mismo modelo se escribe con prefijo según la vía de acceso:
+    ``models/gemini-2.0-flash`` (recurso de la API de Gemini),
+    ``google/gemini-2.0-flash-001`` o ``…:free`` (OpenRouter),
+    ``publishers/google/models/…`` (Vertex AI). Se prueba el último segmento de
+    la ruta, sin distinguir mayúsculas, y después sin la variante ``:tag``.
+    """
+    base = model.strip().lower().rsplit("/", 1)[-1]
+    sin_variante = base.split(":", 1)[0]
+    return (base, sin_variante) if sin_variante != base else (base,)
+
+
 def retirement_for(model: str) -> Retirement | None:
-    """Retirada conocida de ``model``, o ``None`` si no consta ninguna."""
-    shutdown = RETIRED_MODELS.get(model)
-    return None if shutdown is None else Retirement(model, shutdown)
+    """Retirada conocida de ``model``, o ``None`` si no consta ninguna.
+
+    ``Retirement.model`` conserva el id tal como se escribió, para que el
+    mensaje al usuario coincida con su ``protocol.yml``.
+    """
+    for candidate in _candidate_ids(model):
+        shutdown = RETIRED_MODELS.get(candidate)
+        if shutdown is not None:
+            return Retirement(model, shutdown)
+    return None

@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from revisia.config import load_protocol
 from revisia.llm.deprecations import RETIRED_MODELS, Retirement, retirement_for
 from revisia.llm.providers.gemini import DEFAULT_MODEL
@@ -37,3 +39,29 @@ def test_plantilla_no_usa_modelos_retirados() -> None:
 def test_lista_de_retirados_bien_formada() -> None:
     assert RETIRED_MODELS
     assert all(isinstance(d, date) for d in RETIRED_MODELS.values())
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "models/gemini-2.0-flash",  # nombre de recurso de la API de Gemini
+        "google/gemini-2.0-flash-001",  # OpenRouter
+        "google/gemini-2.0-flash-001:free",  # OpenRouter, variante gratuita
+        "publishers/google/models/gemini-2.5-pro",  # Vertex AI
+        "Gemini-2.0-Flash",  # mayúsculas
+    ],
+)
+def test_retirado_con_prefijo_o_variante(model: str) -> None:
+    # Seguimiento de la Ola 0: la tabla comparaba el id exacto y un id con
+    # prefijo de proveedor o variante `:tag` se colaba.
+    r = retirement_for(model)
+    assert r is not None
+    assert r.model == model  # el mensaje muestra el id tal como está en protocol.yml
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["gemini-3.5-flash-lite", "google/gemini-3.5-flash-lite:free", "llama3.1:8b", "openai/gpt-5"],
+)
+def test_vigente_con_prefijo_no_se_marca(model: str) -> None:
+    assert retirement_for(model) is None
