@@ -9,7 +9,13 @@ import yaml
 from revisia.audit import render_audit_md, run_audit
 
 
-def _make_run(tmp_path, *, human_decisions: bool = True, with_gold: bool = True):
+def _make_run(
+    tmp_path,
+    *,
+    human_decisions: bool = True,
+    with_gold: bool = True,
+    provenance: str | None = "pipeline",
+):
     """Construye una corrida sintética completa en disco."""
     run = tmp_path / "runs" / "demo-20260705"
     deliverable = run / "deliverable"
@@ -28,6 +34,8 @@ def _make_run(tmp_path, *, human_decisions: bool = True, with_gold: bool = True)
             {"provider": "fake", "model": "fake-model", "prompt_sha256": "def456"},
         ],
     }
+    if provenance is not None:
+        manifest["provenance"] = provenance
     (run / "manifest.yml").write_text(
         yaml.safe_dump(manifest, allow_unicode=True), encoding="utf-8"
     )
@@ -41,7 +49,16 @@ def _make_run(tmp_path, *, human_decisions: bool = True, with_gold: bool = True)
                 "action": "approve",
                 "timestamp_utc": "2026-07-05T00:00:00+00:00",
             }
-        )
+        ),
+        json.dumps(
+            {
+                "stage": "reporte",
+                "actor": actor,
+                "autonomy": "A1",
+                "action": "approve",
+                "timestamp_utc": "2026-07-05T00:10:00+00:00",
+            }
+        ),
     ]
     (run / "decisions_ledger.jsonl").write_text("\n".join(ledger_lines) + "\n", encoding="utf-8")
     for name in (
@@ -82,6 +99,7 @@ def test_audit_corrida_completa_es_publicable(tmp_path) -> None:
     assert statuses["deliverable"] == "PASS"
     assert statuses["gold"] == "PASS"
     assert statuses["registration"] == "PASS"
+    assert statuses["final_gate"] == "PASS"
     markdown = render_audit_md(report)
     assert "APTA" in markdown
     assert "trAIce M8" in markdown
@@ -123,3 +141,139 @@ def test_cli_audit_escribe_informe(tmp_path, capsys) -> None:
     empty = tmp_path / "runs" / "vacia"
     empty.mkdir(parents=True)
     assert main(["audit", str(empty)]) == 1
+
+
+def test_audit_fails_on_reconstruction_provenance(tmp_path) -> None:
+    report = run_audit(_make_run(tmp_path, provenance="reconstruction"))
+    statuses = {c.check_id: c.status for c in report.checks}
+    assert statuses["provenance"] == "FAIL"
+    assert report.publishable is False
+
+
+def test_audit_sin_procedencia_falla(tmp_path) -> None:
+    report = run_audit(_make_run(tmp_path, provenance=None))
+    check = next(c for c in report.checks if c.check_id == "provenance")
+    assert check.status == "FAIL"
+    assert "ausente" in check.detail
+
+
+def test_audit_procedencia_pipeline_pasa(tmp_path) -> None:
+    report = run_audit(_make_run(tmp_path))
+    assert {c.check_id: c.status for c in report.checks}["provenance"] == "PASS"
+
+
+def test_audit_sin_manifiesto_no_duplica_fail_de_procedencia(tmp_path) -> None:
+    run = _make_run(tmp_path)
+    (run / "manifest.yml").unlink()
+    report = run_audit(run)
+    assert "provenance" not in {c.check_id for c in report.checks}
+
+
+def test_audit_sin_decision_de_reporte_falla_gate_final(tmp_path) -> None:
+    run = _make_run(tmp_path)
+    ledger = run / "decisions_ledger.jsonl"
+    lines = [line for line in ledger.read_text(encoding="utf-8").splitlines() if line.strip()]
+    only_screening = [line for line in lines if json.loads(line)["stage"] != "reporte"]
+    ledger.write_text("\n".join(only_screening) + "\n", encoding="utf-8")
+
+    report = run_audit(run)
+    final_gate = next(c for c in report.checks if c.check_id == "final_gate")
+    assert final_gate.status == "FAIL"
+    assert "pausada o incompleta" in final_gate.detail
+    assert report.publishable is False
+
+
+def test_audit_reporte_rechazado_falla_gate_final(tmp_path) -> None:
+    run = _make_run(tmp_path)
+    ledger = run / "decisions_ledger.jsonl"
+    lines = [line for line in ledger.read_text(encoding="utf-8").splitlines() if line.strip()]
+    entries = [json.loads(line) for line in lines]
+    for entry in entries:
+        if entry["stage"] == "reporte":
+            entry["action"] = "reject"
+            entry["actor"] = "human:revisora"
+    ledger.write_text("\n".join(json.dumps(entry) for entry in entries) + "\n", encoding="utf-8")
+
+    report = run_audit(run)
+    final_gate = next(c for c in report.checks if c.check_id == "final_gate")
+    assert final_gate.status == "FAIL"
+    assert "rechazado" in final_gate.detail
+    assert "human:revisora" in final_gate.detail
+    assert report.publishable is False
+
+
+def test_audit_reporte_aprobado_pasa_gate_final(tmp_path) -> None:
+    report = run_audit(_make_run(tmp_path))
+    final_gate = next(c for c in report.checks if c.check_id == "final_gate")
+    assert final_gate.status == "PASS"
+
+
+def _set_ultima_decision_reporte(run, *, action: str, actor: str) -> None:
+    """Reescribe la última entrada `reporte` del ledger sintético de `_make_run`."""
+    ledger = run / "decisions_ledger.jsonl"
+    lines = [line for line in ledger.read_text(encoding="utf-8").splitlines() if line.strip()]
+    entries = [json.loads(line) for line in lines]
+    for entry in entries:
+        if entry["stage"] == "reporte":
+            entry["action"] = action
+            entry["actor"] = actor
+    ledger.write_text("\n".join(json.dumps(entry) for entry in entries) + "\n", encoding="utf-8")
+
+
+def test_audit_gate_final_auto_approve_no_es_humano_advierte(tmp_path) -> None:
+    # `--auto-approve` sin decision.yml deja actor "auto-approve (demo)": no es
+    # aprobación humana, así que no puede ser PASS (revisión final 2026-09-25).
+    run = _make_run(tmp_path)
+    _set_ultima_decision_reporte(run, action="approve", actor="auto-approve (demo)")
+
+    report = run_audit(run)
+    final_gate = next(c for c in report.checks if c.check_id == "final_gate")
+    assert final_gate.status == "WARN"
+    assert "no lo aprobó un humano" in final_gate.detail
+    assert "auto-approve (demo)" in final_gate.detail
+    assert report.publishable  # WARN no bloquea publicabilidad, a diferencia de FAIL
+
+
+def test_audit_gate_final_auto_proceed_advierte(tmp_path) -> None:
+    # `reporte` en A2/A3 se auto-ejecuta y notifica (agent:reporte): tampoco es
+    # una decisión humana.
+    run = _make_run(tmp_path)
+    _set_ultima_decision_reporte(run, action="auto-proceed", actor="agent:reporte")
+
+    report = run_audit(run)
+    final_gate = next(c for c in report.checks if c.check_id == "final_gate")
+    assert final_gate.status == "WARN"
+    assert "no lo aprobó un humano" in final_gate.detail
+    assert "agent:reporte" in final_gate.detail
+
+
+def test_audit_gate_final_accion_desconocida_falla(tmp_path) -> None:
+    run = _make_run(tmp_path)
+    _set_ultima_decision_reporte(run, action="otra-cosa", actor="human:revisor")
+
+    report = run_audit(run)
+    final_gate = next(c for c in report.checks if c.check_id == "final_gate")
+    assert final_gate.status == "FAIL"
+    assert "Acción desconocida" in final_gate.detail
+    assert "otra-cosa" in final_gate.detail
+
+
+def test_audit_sin_ledger_no_duplica_fail_de_final_gate(tmp_path) -> None:
+    # El ledger ausente ya produce un FAIL propio (§3); final_gate no debe
+    # añadir un segundo FAIL redundante (mismo criterio que "provenance" con
+    # manifest ausente).
+    run = _make_run(tmp_path)
+    (run / "decisions_ledger.jsonl").unlink()
+
+    report = run_audit(run)
+    assert "final_gate" not in {c.check_id for c in report.checks}
+    ledger_check = next(c for c in report.checks if c.check_id == "ledger")
+    assert ledger_check.status == "FAIL"
+
+
+def test_audit_ledger_vacio_no_duplica_fail_de_final_gate(tmp_path) -> None:
+    run = _make_run(tmp_path)
+    (run / "decisions_ledger.jsonl").write_text("", encoding="utf-8")
+
+    report = run_audit(run)
+    assert "final_gate" not in {c.check_id for c in report.checks}

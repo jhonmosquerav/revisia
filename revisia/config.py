@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from revisia.llm.registry import ProviderConfig
 from revisia.schemas.question import ResearchQuestion
@@ -45,6 +45,10 @@ DEFAULT_AUTONOMY: dict[str, str] = {
     "sintesis": "A1",
     "reporte": "A1",
 }
+
+AUTONOMY_LEVELS: tuple[str, ...] = ("A0", "A1", "A2", "A3")
+# Etapas de juicio (AGENTS.md): nunca superan A1; la decisión final es humana.
+JUDGMENT_STAGES: tuple[str, ...] = ("screening_ta", "screening_ft", "extraccion", "rob")
 
 
 class ReviewProtocol(BaseModel):
@@ -83,6 +87,32 @@ class ReviewProtocol(BaseModel):
     # "agent" (un modelo juzga; cruza idiomas, sin vectores) o "existence" (solo
     # comprueba que el id citado exista en el corpus). Default: embedder.
     grounding: str = "embedder"
+
+    @field_validator("autonomy")
+    @classmethod
+    def _autonomia_valida(cls, value: dict[str, str]) -> dict[str, str]:
+        """Aplica la regla dura de autonomía al cargar (auditoría 2026-09-03, C1).
+
+        Un ``A3`` en una etapa de juicio apagaba todo el HITL en silencio; ahora
+        el protocolo no carga.
+        """
+        for stage, level in value.items():
+            if stage not in STAGES:
+                raise ValueError(
+                    f"autonomy: etapa desconocida {stage!r}. Etapas válidas: {', '.join(STAGES)}."
+                )
+            if level not in AUTONOMY_LEVELS:
+                raise ValueError(
+                    f"autonomy.{stage}: nivel {level!r} inválido; usa uno de "
+                    f"{', '.join(AUTONOMY_LEVELS)}."
+                )
+            if stage in JUDGMENT_STAGES and level not in ("A0", "A1"):
+                raise ValueError(
+                    f"autonomy.{stage}: {level} no permitido. Regla no negociable de "
+                    "AGENTS.md: screening, extracción y riesgo de sesgo nunca superan A1 "
+                    "(la decisión final es siempre humana). Usa A0 o A1."
+                )
+        return value
 
     def autonomy_for(self, stage: str) -> str:
         """Autonomía efectiva de una etapa (config > default)."""

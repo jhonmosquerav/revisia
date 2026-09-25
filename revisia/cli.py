@@ -14,6 +14,8 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from revisia import __version__
 from revisia.config import STAGES, load_protocol
 
@@ -424,10 +426,24 @@ def main(argv: list[str] | None = None) -> int:
     if not Path(protocol_dir).exists():
         print(f"error: la carpeta {protocol_dir!r} no existe.", file=sys.stderr)
         return 2
+    if args.command in {"validate", "run"}:
+        # Un protocol.yml inválido (p. ej. A3 en una etapa de juicio) se informa
+        # como error de uso, no como traceback (auditoría 2026-09-03, C1).
+        try:
+            load_protocol(protocol_dir)
+        except ValidationError as exc:
+            print(f"error: protocol.yml inválido en {protocol_dir}:\n{exc}", file=sys.stderr)
+            return 2
     if args.command == "validate":
         return _cmd_validate(protocol_dir)
     if args.command == "run":
-        return _cmd_run(args)
+        from revisia.orchestration.hitl import DecisionFileError
+
+        try:
+            return _cmd_run(args)
+        except DecisionFileError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
     parser.print_help()
     return 1
 

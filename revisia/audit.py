@@ -7,7 +7,10 @@ estándares de reporte que el sistema promete:
 - **PRISMA 2020** (selección documentada, flow diagram, registro, datos abiertos)
 - **PRISMA-S** (ventana temporal de búsqueda declarada y ejecutada)
 - **PRISMA-trAIce** (modelos y versiones, prompts hash-eados, supervisión
-  humana, exclusiones IA/humano separadas, evaluación contra gold humano)
+  humana, exclusiones IA/humano separadas, evaluación contra gold humano,
+  procedencia de la corrida (pipeline vs reconstrucción), decisión humana
+  sobre el reporte final — un reporte rechazado o sin decisión no es
+  publicable aunque el resto de la corrida esté completo)
 
 Cada verificación produce ``PASS`` (evidencia presente), ``WARN`` (aceptable
 pero debe declararse/mejorarse antes de publicar) o ``FAIL`` (la corrida no es
@@ -24,10 +27,10 @@ from pathlib import Path
 
 import yaml
 
-_STATUS_ICON = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌"}
+from revisia.config import JUDGMENT_STAGES
+from revisia.orchestration.run_context import PROVENANCE_PIPELINE
 
-# Etapas cuyo juicio exige supervisión humana (Cochrane/JBI 2025).
-_JUDGMENT_STAGES = ("screening_ta", "screening_ft", "extraccion", "rob")
+_STATUS_ICON = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌"}
 
 
 @dataclass(frozen=True)
@@ -132,6 +135,32 @@ def run_audit(run_dir: str | Path) -> AuditReport:
                 )
             )
 
+    # ── 1b · Procedencia: la corrida la produjo el pipeline (auditoría C3) ────
+    if manifest is not None:
+        provenance = manifest.get("provenance")
+        if provenance == PROVENANCE_PIPELINE:
+            add(
+                AuditCheck(
+                    "provenance",
+                    "PRISMA 27 / trAIce M2",
+                    "PASS",
+                    "El manifiesto declara `provenance: pipeline` (marca escrita por el "
+                    "motor; no es una firma).",
+                )
+            )
+        else:
+            found = "ausente" if provenance is None else repr(provenance)
+            add(
+                AuditCheck(
+                    "provenance",
+                    "PRISMA 27 / trAIce M2",
+                    "FAIL",
+                    f"Procedencia {found}: el manifiesto no declara `provenance: pipeline`. "
+                    "Una corrida reconstruida, o generada antes de que el motor registrara "
+                    "su procedencia, no es evidencia publicable: regenérala con `revisia run`.",
+                )
+            )
+
     # ── 2 · Prompts hash-eados por llamada (trAIce M6) ──────────────────────
     if manifest is not None:
         calls = manifest.get("llm_calls") or []
@@ -170,7 +199,7 @@ def run_audit(run_dir: str | Path) -> AuditReport:
         )
     else:
         human = [e for e in ledger if str(e.get("actor", "")).startswith("human")]
-        judgment = [e for e in ledger if e.get("stage") in _JUDGMENT_STAGES]
+        judgment = [e for e in ledger if e.get("stage") in JUDGMENT_STAGES]
         judgment_human = [e for e in judgment if str(e.get("actor", "")).startswith("human")]
         if judgment and not judgment_human:
             add(
@@ -191,6 +220,64 @@ def run_audit(run_dir: str | Path) -> AuditReport:
                     f"{len(ledger)} decisiones en el ledger; {len(human)} humana(s).",
                 )
             )
+
+    # ── 3b · Decisión final sobre el reporte (gate de honestidad) ───────────
+    # Sin ledger ya hay un FAIL de "ledger" arriba (§3): no lo dupliquemos,
+    # igual que "provenance" no duplica el FAIL de "manifest" ausente.
+    if ledger:
+        reporte_entries = [e for e in ledger if e.get("stage") == "reporte"]
+        if not reporte_entries:
+            add(
+                AuditCheck(
+                    "final_gate",
+                    "trAIce M8",
+                    "FAIL",
+                    "Sin decisión sobre el reporte final: la corrida está pausada o incompleta.",
+                )
+            )
+        else:
+            last_reporte = reporte_entries[-1]
+            action = last_reporte.get("action")
+            actor = str(last_reporte.get("actor", "desconocido"))
+            if action == "approve" and actor.startswith("human"):
+                add(
+                    AuditCheck(
+                        "final_gate",
+                        "trAIce M8",
+                        "PASS",
+                        f"Reporte final aprobado por humano ({actor}).",
+                    )
+                )
+            elif action in ("approve", "auto-proceed"):
+                # Aprobación no humana: actor "auto-approve (demo)" (--auto-approve
+                # sin decision.yml) o "auto-proceed" (etapa reporte en A2/A3). Ninguno
+                # de los dos es la decisión humana que exige el gate de honestidad.
+                add(
+                    AuditCheck(
+                        "final_gate",
+                        "trAIce M8",
+                        "WARN",
+                        f"El reporte final no lo aprobó un humano: {actor}/{action}.",
+                    )
+                )
+            elif action == "reject":
+                add(
+                    AuditCheck(
+                        "final_gate",
+                        "trAIce M8",
+                        "FAIL",
+                        f"El reporte final fue rechazado por {actor}.",
+                    )
+                )
+            else:
+                add(
+                    AuditCheck(
+                        "final_gate",
+                        "trAIce M8",
+                        "FAIL",
+                        f"Acción desconocida {action} en la decisión final.",
+                    )
+                )
 
     # ── 4 · Entregables PRISMA completos ────────────────────────────────────
     deliverable = run / "deliverable"
