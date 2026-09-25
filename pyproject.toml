@@ -77,6 +77,7 @@ only-include = [
     "examples",
     "assets",
     "README.md",
+    "AGENTS.md",
     ".env.example",
     "CONTRIBUTING.md",
     "CODE_OF_CONDUCT.md",

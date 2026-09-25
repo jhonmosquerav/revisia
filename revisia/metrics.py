@@ -27,8 +27,8 @@ from revisia.schemas.screening import ScreeningDecision
 class ScreeningMetrics(BaseModel):
     """Métricas del cribado frente a un gold standard humano.
 
-    ``None`` = indefinida (denominador 0: el gold no tiene ambas clases); nunca
-    ``0.0`` inventado (auditoría 2026-09-03, A11).
+    ``None`` = indefinida cuando el gold o la IA asignan una sola clase
+    (denominador 0); nunca ``0.0`` inventado (auditoría 2026-09-03, A11).
     """
 
     n: int

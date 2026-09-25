@@ -61,6 +61,19 @@ def test_cli_run_decision_invalida_sale_2(
     assert "Traceback" not in err
 
 
+def test_cli_validate_yaml_roto_sale_2_sin_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    proto = tmp_path / "p"
+    proto.mkdir()
+    (proto / "protocol.yml").write_text("autonomy: [", encoding="utf-8")
+    rc = main(["validate", str(proto)])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "protocol.yml inválido" in err
+    assert "Traceback" not in err
+
+
 def test_cli_run_rechazado_sale_1_y_no_sedimenta(
     tmp_path: Path, capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
