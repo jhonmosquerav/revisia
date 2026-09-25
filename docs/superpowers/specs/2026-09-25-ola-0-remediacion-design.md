@@ -92,8 +92,14 @@ lista de argumentos, sin `shell=True`) ni se tocan los flags de `claude -p`
 
 `_embed_md_images` acepta hoy cualquier ruta relativa: una referencia
 `![x](../../.env)` se embebe en el HTML como `data:` y el secreto viaja en el
-entregable. Pasa a exigir dos condiciones:
+entregable. Pasa a exigir, en este orden (helper `_resolve_inside`, compartido
+con `_figuras_meta`):
 
+0. Ninguna ancla: `PureWindowsPath(ref).anchor` y `PurePosixPath(ref).anchor`
+   vacíos. Se comprueba **antes** de tocar el sistema de ficheros: en Windows,
+   `resolve()` sobre `//host/share/x.png` abre una conexión SMB al host que
+   elija el texto (fuga de hash NTLM). La primera versión del plan resolvía
+   primero; lo detectó la revisión de la Tarea 2 (ver §10).
 1. `target.resolve().is_relative_to(base_dir.resolve())` — nada fuera de
    `deliverable/`, con symlinks resueltos.
 2. `target.suffix.lower() in _MIME` — solo extensiones de imagen declaradas.
@@ -273,7 +279,9 @@ el código de salida.
 - `[tool.hatch.build.targets.sdist]` con `only-include = ["revisia", "docs",
   "protocols/_TEMPLATE", "tests", "examples", "assets", "README.md",
   "CHANGELOG.md", "LICENSE", "NOTICE", "CITATION.cff", "pyproject.toml",
-  "uv.lock"]`. Fuera quedan `runs/`, `.superpowers/`, `.claude/`, `.coverage`,
+  "uv.lock"]` más los ficheros raíz que enlaza el README (`.env.example`,
+  `AGENTS.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`,
+  `RELEASING.md`; ver §10 V9). Fuera quedan `runs/`, `.superpowers/`, `.claude/`, `.coverage`,
   `__pycache__` y el `dist/` ya construido. Criterio de aceptación: `tar tzf`
   del sdist reconstruido no lista ninguna ruta con `runs/`, `.superpowers`,
   `.claude`, `.coverage`, `__pycache__` ni `dist/`.
@@ -296,7 +304,7 @@ inventariados con `grep` (no hay otros):
 | `exports/methods.py:48-49,100` | `kappa` y `presence_kappa` imprimen `no calculable` en vez de `0.000`. |
 | `exports/checklist.py:241-242` | MCC, WMCC y κ imprimen `no calculable`. |
 | `cli.py:167` | idem en el resumen de la corrida. |
-| `audit.py:253-262` (check `gold`) | κ `None` → **WARN** "κ no calculable (denominador 0): el gold no discrimina"; con κ numérico, PASS como hoy (los umbrales `kappa_min` son Ola 1). |
+| `audit.py` (check `gold`) | **WARN** si κ o MCC son `None`, o si la matriz de confusión muestra que el gold tiene una sola clase (`tp+fn == 0` o `tn+fp == 0`): con gold de una sola clase κ vale 0.0 (definido) y es justo el caso A11. Con todo definido y ambas clases, PASS como hoy (los umbrales `kappa_min` son Ola 1). |
 
 Un único helper `fmt_metric(value, spec=".3f") -> str` en `metrics.py` evita
 repetir el `if value is None` en cinco sitios. `manifest.yml` y
@@ -368,5 +376,33 @@ benchmark y la matriz de CI.
    intencional: correr con el HITL apagado en silencio es el fallo que C1
    describe.
 4. **`gemini-3.5-flash-lite` también se retirará.** Por eso el arreglo no es el
-   id nuevo sino `RETIRED_MODELS` más `validate` con `rc = 2`: la próxima vez el
-   quickstart falla con un mensaje, no con un 404.
+   id nuevo sino `RETIRED_MODELS` consultado por `validate` **y por `run`** con
+   `rc = 2`: la próxima vez el quickstart falla con un mensaje, no con un 404.
+   La tabla se mantiene a mano y compara el id exacto: un id con prefijo
+   (`models/…`, `google/…` en OpenRouter) no se detecta todavía.
+
+## 10. Desviaciones durante la implementación
+
+Registro de lo que cambió respecto a §4–§6 y al plan, y por qué. Todas salen de
+las revisiones por tarea o de la revisión final de la pila; ninguna amplía el
+alcance fuera de los hallazgos de la Ola 0.
+
+| # | Dónde | Cambio | Origen |
+|---|---|---|---|
+| V1 | A-3 | Ancla rechazada antes de `resolve()` (UNC tocaba la red) y `_figuras_meta` confinada con el mismo helper. | Revisión Tarea 2 (Important, fallo del plan) |
+| V2 | A-4 | `style` en `th`/`td` reconstruido a `text-align:<keyword>`: `filter_style_properties` de nh3 filtra por nombre de propiedad, no por valor (`text-align:url(…)` pasaba). | Revisión Tarea 2 |
+| V3 | A-4 | `href` protocol-relative (`//host`) o con barra invertida descartado: abierto desde `file://` y clicado resuelve a UNC. | Revisión final |
+| V4 | A-1 | Patrón de modelo con primer carácter alfanumérico: `^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$` (un id que empiece por guion se parece a un flag). | Revisión final |
+| V5 | A-2 | La guardia del shim también inspecciona `cmd[0]` (la ruta del CLI). | Revisión final |
+| V6 | B | Nuevo check `final_gate` en `revisia audit`: un reporte final rechazado o sin decidir hacía la corrida "APTA" aunque B-3 ya no la informara como `completed`. | Revisión final (Important) |
+| V7 | B/C | `main()` convierte también `yaml.YAMLError` de `protocol.yml` en `error: …` con rc 2 (vive en la rama C para no chocar al re-apilar). | Revisión final |
+| V8 | C-2 | `revisia run` consulta `RETIRED_MODELS` antes de crear la carpeta de la corrida: el quickstart del README no llama a `validate`, así que D7 solo no bastaba. `validate` ya no imprime "Protocolo válido" antes de salir con 2. | Revisión final (Important, fallo del plan) |
+| V9 | C-3 | `only-include` conserva los ficheros raíz que enlaza el README: `.env.example` (paso 1 del quickstart), `AGENTS.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `RELEASING.md`. | Revisión Tarea 6 y revisión final (fallo del plan) |
+| V10 | C-4 | WARN de `gold` también con MCC `None` y con gold de una sola clase (ver tabla de C-4). | Revisión final (Important) |
+| V11 | Todas | Los trailers `Co-Authored-By` nombran el modelo que escribió cada commit, no el literal del plan. | Harness de los subagentes |
+
+Seguimientos que quedan fuera de esta ola: prefijos en `RETIRED_MODELS`;
+traceback de `revisia check --model` con un id inválido; `<img>` sin `src` cuando
+la imagen Markdown lleva título o es de estilo referencia (cosmético); la prueba
+real del `URLFetcher` de WeasyPrint solo corre donde el extra `pdf` esté
+instalado.
