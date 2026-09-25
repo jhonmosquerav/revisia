@@ -65,6 +65,22 @@ def test_acuerdo_extraccion_valor_y_kappa() -> None:
     assert agr.value_agreement == 0.5
 
 
+def test_acuerdo_extraccion_sin_pares_kappa_none() -> None:
+    agr = compute_extraction_agreement({}, {})
+    assert agr.presence_kappa is None
+    assert agr.value_agreement is None
+
+
+def test_acuerdo_extraccion_kappa_indefinido_no_revienta() -> None:
+    # Todos los campos presentes en ambos extractores: κ de presencia indefinido.
+    # Antes cohen_kappa devolvía 0.0; con None, el modelo debe aceptarlo.
+    def ext(rid: str) -> ExtractionRecord:
+        return ExtractionRecord(study_id=rid, fields={"d": ExtractionField(value="RCT")})
+
+    agr = compute_extraction_agreement({"a": ext("a")}, {"a": ext("a")})
+    assert agr.presence_kappa is None
+
+
 # ── metodologia.md ─────────────────────────────────────────────────────
 
 

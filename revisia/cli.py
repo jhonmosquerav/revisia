@@ -20,6 +20,7 @@ from revisia import __version__
 from revisia.config import STAGES, load_protocol
 from revisia.llm.deprecations import retirement_for
 from revisia.llm.providers.gemini import DEFAULT_MODEL as GEMINI_DEFAULT_MODEL
+from revisia.metrics import fmt_metric
 
 
 def _protocol_warnings(protocol, protocol_dir: str) -> list[str]:
@@ -198,7 +199,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         lost = "n/d" if m.lost_evidence is None else f"{m.lost_evidence:.2f}"
         print(
             f"  Métricas (vs gold n={m.n}): recall={recall} · lost-evidence={lost} "
-            f"· MCC={m.mcc:.2f} · WMCC={m.wmcc:.2f} · kappa={m.cohen_kappa:.2f}"
+            f"· MCC={fmt_metric(m.mcc, '.2f')} · WMCC={fmt_metric(m.wmcc, '.2f')} "
+            f"· kappa={fmt_metric(m.cohen_kappa, '.2f')}"
         )
     return 0 if result.status in {"completed", "paused"} else 1
 

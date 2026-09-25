@@ -31,7 +31,7 @@ class ExtractionAgreement(BaseModel):
     n_field_pairs: int = 0
     n_value_match: int = 0
     value_agreement: float | None = None
-    presence_kappa: float = 0.0
+    presence_kappa: float | None = None
 
 
 def select_double_extraction_subset(
@@ -85,5 +85,5 @@ def compute_extraction_agreement(
         n_field_pairs=n_pairs,
         n_value_match=n_match,
         value_agreement=(n_match / n_pairs) if n_pairs else None,
-        presence_kappa=cohen_kappa(present_a, present_b) if n_pairs else 0.0,
+        presence_kappa=cohen_kappa(present_a, present_b) if n_pairs else None,
     )

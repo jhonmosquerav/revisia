@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from revisia.metrics import fmt_metric
+
 if TYPE_CHECKING:
     from revisia.config import ReviewProtocol
     from revisia.exclusions import ExclusionBreakdown
@@ -46,7 +48,7 @@ def render_methods(
     components = "; ".join(f"{k}={v}" for k, v in q.components.items()) or "(no detallados)"
     bases = ", ".join(protocol.databases) or "OpenAlex"
     kappa = (
-        f"Cohen's kappa humano-IA = {metrics.cohen_kappa:.3f}"
+        f"Cohen's kappa humano-IA = {fmt_metric(metrics.cohen_kappa)}"
         if metrics is not None
         else "no calculado (sin gold standard)"
     )
@@ -97,7 +99,7 @@ def render_methods(
         lines.append(
             f"Doble extracción independiente en {ea.n_studies} estudios "
             f"({ea.n_field_pairs} pares de campo): acuerdo de valor={agr}, "
-            f"kappa de presencia={ea.presence_kappa:.3f}."
+            f"kappa de presencia={fmt_metric(ea.presence_kappa)}."
         )
 
     lines += [

@@ -8,6 +8,7 @@ from revisia.metrics import (
     cohen_kappa,
     compute_screening_metrics,
     confusion,
+    fmt_metric,
     mcc,
     wmcc,
 )
@@ -63,3 +64,25 @@ def test_compute_screening_metrics_usa_ensemble_label() -> None:
     assert m.recall == 2 / 3
     assert m.lost_evidence == 1 / 3
     assert m.n == 4
+
+
+def test_mcc_and_kappa_none_when_undefined() -> None:
+    # Una sola clase en gold y predicción: MCC y κ no están definidos (antes: 0.0,
+    # que se leía como "acuerdo nulo" y el auditor daba PASS · auditoría A11).
+    assert mcc(4, 0, 0, 0) is None
+    assert wmcc(4, 0, 0, 0) is None
+    assert cohen_kappa([True] * 4, [True] * 4) is None
+    assert cohen_kappa([], []) is None
+
+
+def test_compute_screening_metrics_persiste_none() -> None:
+    decisions = [ScreeningDecision(record_id=r, ensemble_label="include") for r in "abc"]
+    m = compute_screening_metrics(decisions, {"a": True, "b": True, "c": True})
+    assert m.mcc is None and m.wmcc is None and m.cohen_kappa is None
+    assert m.model_dump()["cohen_kappa"] is None  # metrics.json persistirá null
+
+
+def test_fmt_metric() -> None:
+    assert fmt_metric(None) == "no calculable"
+    assert fmt_metric(0.12345) == "0.123"
+    assert fmt_metric(0.5, ".2f") == "0.50"

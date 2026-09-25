@@ -277,3 +277,14 @@ def test_audit_ledger_vacio_no_duplica_fail_de_final_gate(tmp_path) -> None:
 
     report = run_audit(run)
     assert "final_gate" not in {c.check_id for c in report.checks}
+
+
+def test_audit_gold_kappa_no_calculable_advierte(tmp_path) -> None:
+    run = _make_run(tmp_path)
+    (run / "03_screening" / "metrics.json").write_text(
+        json.dumps({"recall": 1.0, "cohen_kappa": None}), encoding="utf-8"
+    )
+    report = run_audit(run)
+    gold = next(c for c in report.checks if c.check_id == "gold")
+    assert gold.status == "WARN"  # antes: PASS con κ inventado
+    assert "no calculable" in gold.detail

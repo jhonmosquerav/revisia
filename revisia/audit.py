@@ -338,15 +338,27 @@ def run_audit(run_dir: str | Path) -> AuditReport:
             metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
             recall = metrics.get("recall")
             kappa = metrics.get("cohen_kappa")
-            add(
-                AuditCheck(
-                    "gold",
-                    "trAIce M9/R2",
-                    "PASS",
-                    f"Métricas vs gold humano: recall={recall} · kappa={kappa} "
-                    "(accuracy omitida a propósito).",
+            if kappa is None:
+                add(
+                    AuditCheck(
+                        "gold",
+                        "trAIce M9/R2",
+                        "WARN",
+                        f"Métricas vs gold humano: recall={recall} · kappa no calculable "
+                        "(denominador 0: el gold no tiene ambas clases). Amplía el gold con "
+                        "registros relevantes e irrelevantes.",
+                    )
                 )
-            )
+            else:
+                add(
+                    AuditCheck(
+                        "gold",
+                        "trAIce M9/R2",
+                        "PASS",
+                        f"Métricas vs gold humano: recall={recall} · kappa={kappa} "
+                        "(accuracy omitida a propósito).",
+                    )
+                )
         except json.JSONDecodeError:
             add(AuditCheck("gold", "trAIce M9/R2", "WARN", "metrics.json ilegible."))
     else:

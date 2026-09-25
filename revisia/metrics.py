@@ -25,7 +25,11 @@ from revisia.schemas.screening import ScreeningDecision
 
 
 class ScreeningMetrics(BaseModel):
-    """Métricas del cribado frente a un gold standard humano."""
+    """Métricas del cribado frente a un gold standard humano.
+
+    ``None`` = indefinida (denominador 0: el gold no tiene ambas clases); nunca
+    ``0.0`` inventado (auditoría 2026-09-03, A11).
+    """
 
     n: int
     tp: int
@@ -35,10 +39,10 @@ class ScreeningMetrics(BaseModel):
     recall: float | None = None
     lost_evidence: float | None = None
     precision: float | None = None
-    mcc: float = 0.0
-    wmcc: float = 0.0
+    mcc: float | None = None
+    wmcc: float | None = None
     wmcc_fn_weight: float = 10.0
-    cohen_kappa: float = 0.0
+    cohen_kappa: float | None = None
 
 
 def confusion(pred: list[bool], gold: list[bool]) -> tuple[int, int, int, int]:
@@ -56,32 +60,38 @@ def _safe_ratio(num: float, den: float) -> float | None:
     return num / den if den else None
 
 
-def mcc(tp: int, fp: int, fn: int, tn: int) -> float:
-    """Coeficiente de correlación de Matthews (0.0 si el denominador es 0)."""
+def fmt_metric(value: float | None, spec: str = ".3f") -> str:
+    """Formatea una métrica; ``None`` (indefinida) se muestra como ``no calculable``."""
+    return "no calculable" if value is None else format(value, spec)
+
+
+def mcc(tp: int, fp: int, fn: int, tn: int) -> float | None:
+    """Coeficiente de correlación de Matthews (``None`` si el denominador es 0)."""
     denom = math.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
-    return ((tp * tn) - (fp * fn)) / denom if denom else 0.0
+    return ((tp * tn) - (fp * fn)) / denom if denom else None
 
 
-def wmcc(tp: int, fp: int, fn: int, tn: int, *, fn_weight: float = 10.0) -> float:
+def wmcc(tp: int, fp: int, fn: int, tn: int, *, fn_weight: float = 10.0) -> float | None:
     """MCC con el falso negativo ponderado por ``fn_weight`` (coste FN ≫ FP).
 
     Variante pragmática (no estandarizada): se reemplaza ``fn`` por
-    ``fn_weight * fn`` para penalizar perder evidencia relevante.
+    ``fn_weight * fn`` para penalizar perder evidencia relevante. ``None`` si
+    el denominador es 0.
     """
     fnw = fn_weight * fn
     denom = math.sqrt((tp + fp) * (tp + fnw) * (tn + fp) * (tn + fnw))
-    return ((tp * tn) - (fp * fnw)) / denom if denom else 0.0
+    return ((tp * tn) - (fp * fnw)) / denom if denom else None
 
 
-def cohen_kappa(pred: list[bool], gold: list[bool]) -> float:
-    """Cohen's kappa entre dos clasificaciones binarias (0.0 si indefinido)."""
+def cohen_kappa(pred: list[bool], gold: list[bool]) -> float | None:
+    """Cohen's kappa entre dos clasificaciones binarias (``None`` si indefinido)."""
     tp, fp, fn, tn = confusion(pred, gold)
     n = tp + fp + fn + tn
     if n == 0:
-        return 0.0
+        return None
     po = (tp + tn) / n
     pe = ((tp + fp) * (tp + fn) + (fn + tn) * (fp + tn)) / (n * n)
-    return (po - pe) / (1 - pe) if (1 - pe) else 0.0
+    return (po - pe) / (1 - pe) if (1 - pe) else None
 
 
 def compute_screening_metrics(
