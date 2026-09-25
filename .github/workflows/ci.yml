@@ -18,8 +18,19 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Sync (dev extras)
-        run: uv sync --extra dev
+      # Pango para WeasyPrint (extra `pdf`): así la prueba real del
+      # `URLFetcher(allowed_protocols={"data"})` del exportador corre en CI en
+      # vez de saltarse (seguimiento de la Ola 0).
+      - name: System libs for WeasyPrint
+        run: sudo apt-get install -y --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0
+
+      - name: Sync (dev + pdf extras)
+        run: uv sync --extra dev --extra pdf
+
+      # Falla aquí si WeasyPrint no carga: sin este paso, `importorskip` saltaría
+      # la prueba en silencio y el CI seguiría en verde sin verificar nada.
+      - name: WeasyPrint importable
+        run: uv run python -c "import weasyprint; print('weasyprint', weasyprint.__version__)"
 
       - name: Lint (ruff)
         run: uv run ruff check .
@@ -28,4 +39,4 @@ jobs:
         run: uv run black --check .
 
       - name: Tests (pytest, offline)
-        run: uv run pytest -q
+        run: uv run pytest -q -rs

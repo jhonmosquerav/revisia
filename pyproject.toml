@@ -29,6 +29,10 @@ dependencies = [
     # Markdown→HTML del exportador (`revisia export`): pura-Python, sin deps
     # transitivas; en el núcleo para que el HTML autocontenido funcione siempre.
     "markdown>=3.6",
+    # Saneado del HTML del exportador (auditoría 2026-09-03, A2/M1): allowlist
+    # sobre el Markdown convertido. Wheel precompilado (Rust/ammonia) sin deps
+    # transitivas; con él el núcleo deja de ser pura-Python, a sabiendas.
+    "nh3>=0.3",
 ]
 
 [project.optional-dependencies]
@@ -46,8 +50,10 @@ search = ["httpx>=0.27"]
 meta = ["matplotlib>=3.8", "scipy>=1.11"]
 # Exportación a PDF (`revisia export --format pdf`): WeasyPrint, multiplataforma,
 # sin Word/COM, sin LaTeX, sin pandoc, sin Chromium. El HTML autocontenido
-# (formato por defecto de `export`) NO necesita este extra.
-pdf = ["weasyprint>=63"]
+# (formato por defecto de `export`) NO necesita este extra. ≥70: versión
+# verificada del contrato `URLFetcher(allowed_protocols=…)` que usa el
+# exportador.
+pdf = ["weasyprint>=70"]
 # Conveniencia: todo lo necesario para correr el tracer bullet con Gemini.
 demo = ["google-genai>=1.0", "httpx>=0.27", "prefect>=3.0"]
 dev = ["pytest>=8.0", "ruff>=0.6", "black>=24.0"]

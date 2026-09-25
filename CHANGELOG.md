@@ -29,6 +29,14 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - URL del ID Converter de PMC actualizada a
   `pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/` (la antigua responde 301).
   El PMC OA Web Service (`oa.fcgi`) fue descontinuado en 2026; RevisIA no lo usaba.
+- **`nh3` pasa a ser dependencia del núcleo** (wheel precompilado, sin
+  dependencias transitivas): el núcleo deja de ser pura-Python.
+- El extra `pdf` exige `weasyprint>=70`.
+- **Incompatible para contenido hecho a mano:** el HTML crudo dentro del
+  entregable pierde `class`, `id` y `style` (salvo `text-align` en celdas de
+  tabla). El contenido que genera el pipeline no se ve afectado.
+- El CI instala el extra `pdf` (con Pango) y comprueba que WeasyPrint importa,
+  para que la prueba real del fetcher del PDF corra en vez de saltarse.
 
 ### Fixed
 - **Búsqueda multi-base**: un `ValueError`/`ValidationError` lanzado *dentro* de un
@@ -36,8 +44,34 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   sin rastro); ahora queda en `01_search/failures.json`. Los mensajes de error se
   pasan por `_http.redact_secrets` para que `api_key=`/`email=` de la URL que
   incluye httpx no acaben en disco ni en consola.
+- `revisia export`: las imágenes remotas con título, de estilo referencia o en
+  HTML crudo ya no quedan como un `<img>` vacío (icono roto) tras el saneado: se
+  degradan a su texto alternativo, como las demás referencias rechazadas.
+
+### Security
+- **Inyección de comandos en Windows (auditoría A1).** `ProviderConfig.model` se
+  valida con `^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$`: un `model` con comillas,
+  `&`, `|`, `%` o que empiece por guion ya no carga. Además, si el CLI de Claude
+  Code resuelve a un shim `.cmd`/`.bat` (que `cmd.exe` re-parsea: BatBadBut), el
+  proveedor `claude_code` rechaza cualquier argumento con metacaracteres de
+  `cmd.exe` antes de crear el proceso. Con el binario nativo no cambia nada.
+- **Lectura arbitraria de ficheros en `revisia export` (auditoría A2).** Las
+  imágenes de `![alt](ruta)` solo se embeben si quedan dentro de `deliverable/`
+  (tras resolver `..` y symlinks) y tienen extensión de imagen. Las rutas
+  absolutas y UNC (`C:`, `//host`, `\\host`) se rechazan **antes** de tocar el
+  sistema de ficheros: en Windows, resolver una ruta UNC abría una conexión SMB
+  al host que eligiera el texto.
+- **HTML del entregable saneado (auditoría M1).** El Markdown convertido pasa por
+  una allowlist de `nh3`: fuera `<script>`, `<style>`, manejadores `on*`,
+  imágenes remotas, enlaces `javascript:`/`data:`/protocol-relative y cualquier
+  `style` que no sea un `text-align` válido. El exportador en PDF solo resuelve
+  `data:` (`URLFetcher(allowed_protocols={"data"})`).
 
 ### Documentación
+- **Diseño y plan de la Ola 0 de remediación**
+  (`docs/superpowers/specs/2026-09-25-ola-0-remediacion-design.md` y
+  `docs/superpowers/plans/2026-09-25-ola-0-remediacion.md`): decisiones, alcance
+  por PR y registro de desviaciones (§10).
 - **Auditoría completa** (`docs/auditoria/2026-09-03-auditoria-completa.md`): cinco
   auditorías independientes (núcleo, seguridad, metodología, tests/empaquetado,
   capa LLM) con reproducción de cada hallazgo: 4 críticos, 16 altos, 24 medios,

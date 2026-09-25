@@ -18,7 +18,9 @@ en UN solo archivo:
 
 La conversión Markdown→HTML usa la librería ``markdown`` (pura-Python, sin
 dependencias transitivas), declarada en el núcleo para que el formato por
-defecto funcione siempre.
+defecto funcione siempre. El HTML resultante se sanea con ``nh3`` (allowlist
+de etiquetas y atributos, solo ``data:`` en imágenes): el entregable lo
+redacta un LLM y no se confía en él.
 """
 
 from __future__ import annotations
@@ -27,9 +29,10 @@ import base64
 import html
 import re
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import markdown as md_lib
+import nh3
 import yaml
 from pydantic import ValidationError
 
@@ -64,6 +67,123 @@ _MIME = {
     ".gif": "image/gif",
     ".svg": "image/svg+xml",
 }
+
+# Saneado del Markdown convertido (auditoría 2026-09-03, A2/M1). Todo el texto no
+# confiable del entregable (lo redacta un LLM) entra al HTML por `_md_to_html`;
+# lo que genera el propio exportador (portada, figuras de meta-análisis, BibTeX,
+# plantilla con <style>) no pasa por ahí y ya va escapado.
+_ALLOWED_TAGS = frozenset(
+    {
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "p",
+        "br",
+        "hr",
+        "div",
+        "span",
+        "strong",
+        "em",
+        "b",
+        "i",
+        "del",
+        "sup",
+        "sub",
+        "code",
+        "pre",
+        "blockquote",
+        "ul",
+        "ol",
+        "li",
+        "a",
+        "table",
+        "thead",
+        "tbody",
+        "tfoot",
+        "tr",
+        "th",
+        "td",
+        "caption",
+        "figure",
+        "figcaption",
+        "img",
+    }
+)
+_ALLOWED_ATTRIBUTES: dict[str, set[str]] = {
+    "a": {"href", "title"},
+    "img": {"src", "alt"},
+    "code": {"class"},  # language-x de los bloques de código
+    "th": {"style"},  # la extensión `tables` alinea con style="text-align: …"
+    "td": {"style"},
+}
+
+
+# Valores legítimos de `text-align` (extensión `tables` de markdown solo emite
+# left/right/center): whitelist cerrada, nunca se deja pasar la declaración cruda.
+_TEXT_ALIGN_VALUES = frozenset({"left", "right", "center", "justify", "start", "end"})
+_STYLE_DECL_RE = re.compile(r"([a-zA-Z-]+)\s*:\s*([^;]+)")
+
+
+def _text_align_only(value: str) -> str | None:
+    """Del ``style`` crudo, conserva solo un ``text-align`` con valor de la whitelist.
+
+    ``filter_style_properties={"text-align"}`` de nh3 filtra por NOMBRE de
+    propiedad; un ``style="text-align:url(http://evil.example/x)"`` sobrevive
+    verbatim porque el nombre es válido aunque el valor sea una URL remota.
+    Aquí se parsean las declaraciones a mano y se descarta cualquier valor que
+    no sea una palabra clave de alineación conocida (auditoría 2026-09-03).
+    """
+    for propiedad, valor in _STYLE_DECL_RE.findall(value):
+        if propiedad.strip().lower() == "text-align":
+            limpio = valor.strip().lower()
+            if limpio in _TEXT_ALIGN_VALUES:
+                return f"text-align:{limpio}"
+    return None
+
+
+def _attribute_filter(tag: str, attr: str, value: str) -> str | None:
+    """Restringe ``data:`` a imágenes, veta esquemas peligrosos en enlaces y
+    reduce ``style`` en celdas de tabla a un ``text-align`` de valor válido.
+
+    Este filtro (no ``nh3``) es el que elimina ``data:`` de ``href``: ``data``
+    está en ``url_schemes`` (lo necesitan las imágenes embebidas), así que sin
+    esta comprobación explícita ``nh3`` dejaría pasar un enlace ``data:``.
+    """
+    if tag == "img" and attr == "src":
+        return value if value.startswith("data:image/") else None
+    if tag == "a" and attr == "href":
+        # Normalización WHATWG (url.spec.whatwg.org, "basic URL parser", pasos
+        # 1-2): un navegador quita C0/espacio de los extremos y TODO tab/LF/CR
+        # del string completo antes de resolver el esquema. `str.strip()` no
+        # cubre eso: deja pasar `&#9;`/`&#10;`/`&#13;` intercalados o `&#1;`
+        # al inicio, que el chequeo ingenuo no detecta pero el navegador sí
+        # descarta, resolviendo igual `//evil.example` o `javascript:` (
+        # revisión final Ola 0, 2026-09).
+        c0_o_espacio = "".join(chr(c) for c in range(0x21))
+        norm = value.strip(c0_o_espacio)
+        norm = re.sub(r"[\t\n\r]", "", norm)
+        low = norm.lower()
+        if low.startswith(("data:", "javascript:")):
+            return None
+        # Protocol-relative (``//host/...``) o UNC (``\\host\...``): abierto
+        # el HTML desde file://, un clic resuelve contra el host que elija el
+        # documento y en Windows dispara una conexión SMB (revisión final Ola
+        # 0, 2026-09). Una barra invertida en cualquier posición también se
+        # rechaza: es el separador UNC y no tiene uso legítimo en un href.
+        if norm.startswith(("//", "\\")) or "\\" in norm:
+            return None
+        # Se devuelve `norm` (no `value`): así el href que llega al entregable
+        # ya no conserva los C0/tab/LF/CR que demostraron ser el vector de
+        # bypass del chequeo ingenuo; es defensa en profundidad, no solo el
+        # chequeo (revisión final Ola 0, 2026-09).
+        return norm
+    if attr == "style" and tag in {"th", "td"}:
+        return _text_align_only(value)
+    return value
+
 
 # Anexos del deliverable, en orden de ensamblado; los ausentes se omiten.
 _SECTIONS: tuple[tuple[str, str], ...] = (
@@ -195,18 +315,45 @@ def _figure_html(path: Path, caption: str) -> str:
     return fig + "</figure>"
 
 
+def _resolve_inside(base_dir: Path, ref: str) -> Path | None:
+    """Ruta de imagen confinada a ``base_dir`` o ``None`` (auditoría 2026-09-03, A2).
+
+    Rechaza sin tocar el sistema de ficheros cualquier referencia con ancla
+    (``C:``, ``\\\\host``, ``//host``, ``/``): en Windows, resolver una ruta UNC
+    abre una conexión SMB al host que elija el texto. Las relativas se resuelven
+    (symlinks incluidos) y deben quedar dentro de ``base_dir`` con extensión de
+    imagen conocida.
+    """
+    if PureWindowsPath(ref).anchor or PurePosixPath(ref).anchor:
+        return None
+    target = (base_dir / ref).resolve()
+    if (
+        target.is_relative_to(base_dir.resolve())
+        and target.suffix.lower() in _MIME
+        and target.is_file()
+    ):
+        return target
+    return None
+
+
 def _embed_md_images(text: str, base_dir: Path) -> str:
     """Reescribe ``![alt](ruta)`` a ``<figure>`` con la imagen embebida.
 
-    Las referencias externas (http/https) o rotas se degradan a su texto
-    alternativo en cursiva: el HTML resultante nunca carga recursos de fuera.
+    Solo se embeben imágenes (extensión en ``_MIME``) que queden DENTRO de
+    ``base_dir`` tras resolver ``..`` y enlaces simbólicos: una referencia como
+    ``![x](../../.env)`` no puede sacar ficheros del entregable (auditoría
+    2026-09-03, A2). Las referencias absolutas o UNC (``//host/share/x.png``,
+    ``C:/Windows/win.ini``) se descartan por ``_resolve_inside`` antes de tocar
+    el disco o la red. Las referencias externas (http/https), rotas o fuera del
+    entregable se degradan a su texto alternativo en cursiva: el HTML resultante
+    nunca carga recursos de fuera.
     """
 
     def _sub(match: re.Match[str]) -> str:
         alt, ref = match.group(1), match.group(2)
         if not ref.startswith(("http://", "https://", "data:", "file:")):
-            target = base_dir / ref
-            if target.is_file():
+            target = _resolve_inside(base_dir, ref)
+            if target is not None:
                 return _figure_html(target, alt)
         return f"*{alt}*" if alt else ""
 
@@ -222,8 +369,37 @@ def _demote_headings(text: str, levels: int = 2) -> str:
     return _HEADING_RE.sub(_sub, text)
 
 
+# `<img>` que el saneado dejó sin `src` (imagen remota con título, de estilo
+# referencia o en HTML crudo: sintaxis que no pasan por `_IMG_MD_RE`). Se opera
+# sobre la salida de nh3, que serializa los atributos entre comillas dobles y
+# ya escapados, así que el `alt` capturado se puede reinsertar tal cual.
+_SRCLESS_IMG_RE = re.compile(r"<img\b(?![^>]*\ssrc=)([^>]*)>")
+_ALT_ATTR_RE = re.compile(r'\salt="([^"]*)"')
+
+
+def _srcless_img_to_alt(match: re.Match[str]) -> str:
+    """Degrada una imagen sin ``src`` a su texto alternativo en cursiva."""
+    alt = _ALT_ATTR_RE.search(match.group(1))
+    return f"<em>{alt.group(1)}</em>" if alt and alt.group(1) else ""
+
+
 def _md_to_html(text: str) -> str:
-    return md_lib.markdown(text, extensions=["tables", "fenced_code"])
+    """Convierte Markdown a HTML y lo sanea con una allowlist (``nh3``).
+
+    Tumba ``<script>``/``<style>`` con su contenido, los manejadores ``on*``,
+    las imágenes remotas y cualquier ``style`` que no sea ``text-align``.
+    """
+    raw = md_lib.markdown(text, extensions=["tables", "fenced_code"])
+    clean = nh3.clean(
+        raw,
+        tags=set(_ALLOWED_TAGS),
+        clean_content_tags={"script", "style"},
+        attributes=_ALLOWED_ATTRIBUTES,
+        attribute_filter=_attribute_filter,
+        url_schemes={"http", "https", "mailto", "data"},
+        filter_style_properties={"text-align"},
+    )
+    return _SRCLESS_IMG_RE.sub(_srcless_img_to_alt, clean)
 
 
 def _titulo(doc_md: str | None, manifest: dict, run_dir: Path) -> str:
@@ -278,13 +454,20 @@ def _portada(titulo: str, autor: str, fecha: str, manifest: dict) -> str:
     return "\n".join(lineas)
 
 
-def _figuras_meta(assets_dir: Path) -> str:
+def _figuras_meta(deliverable: Path) -> str:
+    """Figuras de ``assets/`` embebidas, confinadas con ``_resolve_inside``.
+
+    Antes se comprobaba solo ``path.is_file()``: un symlink plantado en
+    ``assets/`` se seguía igual que un fichero normal. Usa la misma regla que
+    ``_embed_md_images`` para que ambos caminos compartan una sola definición
+    de "confinado" (auditoría 2026-09-03, A2).
+    """
     parts = []
     numero = 1
     for nombre, descripcion in _FIGURAS_META:
-        path = assets_dir / nombre
-        if path.is_file():
-            parts.append(_figure_html(path, f"Figura {numero}. {descripcion}"))
+        target = _resolve_inside(deliverable, f"assets/{nombre}")
+        if target is not None:
+            parts.append(_figure_html(target, f"Figura {numero}. {descripcion}"))
             numero += 1
     return "\n".join(parts)
 
@@ -319,7 +502,7 @@ def assemble_html(run_dir: Path | str) -> str:
         preparado = _embed_md_images(replace_mermaid_blocks(preparado, flow_table), deliverable)
         body.append(f'<main class="articulo">\n{_md_to_html(preparado)}\n</main>')
 
-    figuras = _figuras_meta(deliverable / "assets")
+    figuras = _figuras_meta(deliverable)
     figuras_colocadas = False
     for nombre, heading in _SECTIONS:
         path = deliverable / nombre
@@ -349,10 +532,13 @@ def assemble_html(run_dir: Path | str) -> str:
 
 def _render_pdf(html_text: str, out: Path) -> None:
     try:
-        from weasyprint import HTML  # extra opcional `pdf` (import perezoso)
+        from weasyprint import HTML, URLFetcher  # extra opcional `pdf` (import perezoso)
     except (ImportError, OSError) as exc:
         raise RuntimeError(f"{_PDF_HINT} Detalle: {exc}") from exc
-    HTML(string=html_text).write_pdf(str(out))
+    # Solo data: (las figuras ya viajan embebidas): WeasyPrint no abre file:// ni
+    # http(s):// aunque el HTML los traiga (auditoría 2026-09-03, M1).
+    fetcher = URLFetcher(allowed_protocols={"data"})
+    HTML(string=html_text, url_fetcher=fetcher).write_pdf(str(out))
 
 
 def export_run(run_dir: Path | str, fmt: str = "html", out: Path | str | None = None) -> Path:

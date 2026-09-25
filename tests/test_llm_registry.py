@@ -8,6 +8,7 @@ que el núcleo es provider-agnostic de verdad.
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from revisia.llm import LLMProvider, ProviderConfig, build_provider
 from revisia.llm.base import LLMRequest
@@ -88,3 +89,38 @@ def test_claude_code_se_construye_offline() -> None:
     assert provider.name == "claude_code"
     assert provider.model == "sonnet"
     assert isinstance(provider, LLMProvider)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        'opus" & calc & "',  # reproducción de la auditoría (A1, BatBadBut)
+        "sonnet|whoami",
+        "a%PATH%",
+        "x\ny",
+        "gpt 4",
+        "",
+        "m" * 129,
+        "--dangerously-skip-permissions",  # se parecería a un flag del CLI
+        "-x",
+    ],
+)
+def test_provider_model_rejects_injection(bad: str) -> None:
+    with pytest.raises(ValidationError):
+        ProviderConfig(provider="claude_code", model=bad)
+
+
+@pytest.mark.parametrize(
+    "ok",
+    [
+        "sonnet",
+        "gemini-3.5-flash-lite",
+        "openai/gpt-5",
+        "fake:fake-1",
+        "llama3.1:8b",
+        "claude-x@20260101",
+        "glm-5.2",
+    ],
+)
+def test_provider_model_accepts_real_ids(ok: str) -> None:
+    assert ProviderConfig(provider="gemini", model=ok).model == ok

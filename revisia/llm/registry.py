@@ -12,7 +12,7 @@ from __future__ import annotations
 import importlib
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from revisia.llm.base import LLMProvider
@@ -32,19 +32,29 @@ _BUILDERS: dict[str, tuple[str, str]] = {
 }
 
 
+# Identificador de modelo admisible (auditoría 2026-09-03, A1). El nombre viaja
+# como argumento de línea de comandos en `claude_code` y, en Windows, un shim
+# .CMD lo re-parsea con cmd.exe (BatBadBut). Solo caracteres que no son
+# metacaracteres de ningún shell; `@` y `+` admiten ids estilo Vertex/OpenRouter.
+# El primer carácter debe ser alfanumérico (revisión final Ola 0, 2026-09):
+# defensa en profundidad para que un modelo que empiece por `-` no se parezca
+# a un flag del CLI (p. ej. `--dangerously-skip-permissions` o `-x`).
+MODEL_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$"
+
+
 class ProviderConfig(BaseModel):
     """Config de proveedor para una etapa (subbloque ``llm`` de protocol.yml).
 
     Attributes:
         provider: nombre lógico del proveedor (clave de ``_BUILDERS``).
-        model: nombre del modelo a usar.
+        model: nombre del modelo a usar (acotado por ``MODEL_NAME_PATTERN``).
         temperature: temperatura por defecto de la etapa.
         top_p: nucleus sampling opcional.
         seed: semilla para reproducibilidad (si el proveedor la soporta).
     """
 
     provider: str
-    model: str
+    model: str = Field(pattern=MODEL_NAME_PATTERN)
     temperature: float = 0.0
     top_p: float | None = None
     seed: int | None = None
