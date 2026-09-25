@@ -4,9 +4,10 @@ Implementa el contrato :class:`revisia.llm.base.LLMProvider` sobre el SDK
 oficial de Google. El SDK se importa de forma perezosa para no exigirlo a quien
 no use Gemini.
 
-Proveedor por defecto de la plantilla (``gemini-2.0-flash``): tier gratis y sin
-fricción para empezar. Cualquier investigador puede elegir otro proveedor en
-``protocol.yml`` sin tocar nada del núcleo.
+Proveedor por defecto de la plantilla: tier gratis y sin fricción para empezar.
+El id concreto vive solo en ``DEFAULT_MODEL`` (los ids caducan: ver
+:mod:`revisia.llm.deprecations`). Cualquier investigador puede elegir otro
+proveedor o modelo en ``protocol.yml`` sin tocar nada del núcleo.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ if TYPE_CHECKING:
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
-DEFAULT_MODEL = "gemini-2.0-flash"
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
 
 
 class GeminiProvider:

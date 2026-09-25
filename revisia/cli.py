@@ -11,13 +11,15 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from pydantic import ValidationError
 
 from revisia import __version__
 from revisia.config import STAGES, load_protocol
+from revisia.llm.deprecations import retirement_for
+from revisia.llm.providers.gemini import DEFAULT_MODEL as GEMINI_DEFAULT_MODEL
 
 
 def _protocol_warnings(protocol, protocol_dir: str) -> list[str]:
@@ -47,6 +49,18 @@ def _protocol_warnings(protocol, protocol_dir: str) -> list[str]:
     return warns
 
 
+def _today() -> date:
+    """Fecha de hoy (función aparte para poder fijarla en los tests)."""
+    return date.today()
+
+
+def _configured_models(protocol) -> list[str]:
+    """Ids de modelo de todas las etapas y miembros de ensemble del protocolo."""
+    models = {cfg.model for cfg in protocol.llm.values()}
+    models |= {cfg.model for members in protocol.ensemble_llm.values() for cfg in members}
+    return sorted(models)
+
+
 def _cmd_validate(protocol_dir: str) -> int:
     protocol = load_protocol(protocol_dir)
     print(f"✓ Protocolo válido: {protocol.title}  [{protocol.slug}]")
@@ -71,7 +85,25 @@ def _cmd_validate(protocol_dir: str) -> int:
         print("  Advertencias (no bloquean la corrida):")
         for w in warns:
             print(f"    ⚠ {w}")
-    return 0
+    # Modelos retirados (auditoría 2026-09-03, C4): el quickstart debe fallar
+    # aquí con un mensaje, no con un 404 a mitad de corrida.
+    rc = 0
+    today = _today()
+    for model in _configured_models(protocol):
+        retirement = retirement_for(model)
+        if retirement is None:
+            continue
+        fecha = retirement.shutdown.isoformat()
+        if retirement.is_past(today):
+            print(
+                f"error: el modelo {model!r} fue retirado por su proveedor el {fecha}; "
+                "las llamadas fallarán. Cámbialo en protocol.yml.",
+                file=sys.stderr,
+            )
+            rc = 2
+        else:
+            print(f"  aviso: el modelo {model!r} se retira el {fecha}; planifica el cambio.")
+    return rc
 
 
 def _cmd_gold_template(args: argparse.Namespace) -> int:
@@ -365,7 +397,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_check.add_argument("manuscript", help="Manuscrito a evaluar (.md o texto plano).")
     p_check.add_argument("--provider", default="gemini", help="Proveedor LLM (default: gemini).")
     p_check.add_argument(
-        "--model", default="gemini-2.0-flash", help="Modelo (default: gemini-2.0-flash)."
+        "--model",
+        default=GEMINI_DEFAULT_MODEL,
+        help=f"Modelo (default: {GEMINI_DEFAULT_MODEL}).",
     )
     p_check.add_argument(
         "--out", default=None, help="Informe de salida (default: <manuscrito>.prisma-check.md)."

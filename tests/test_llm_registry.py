@@ -21,9 +21,9 @@ def test_build_provider_desconocido_falla() -> None:
 
 def test_build_provider_gemini_sin_credenciales() -> None:
     # Instanciar NO debe requerir API key ni el SDK (carga perezosa).
-    provider = build_provider(ProviderConfig(provider="gemini", model="gemini-2.0-flash"))
+    provider = build_provider(ProviderConfig(provider="gemini", model="gemini-3.5-flash-lite"))
     assert provider.name == "gemini"
-    assert provider.model == "gemini-2.0-flash"
+    assert provider.model == "gemini-3.5-flash-lite"
 
 
 def test_gemini_cumple_el_protocolo() -> None:
