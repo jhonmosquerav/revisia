@@ -12,6 +12,7 @@ from pathlib import Path
 
 import yaml
 
+from revisia.audit import run_audit
 from revisia.config import load_protocol
 from revisia.orchestration.pipeline import run_pipeline
 from revisia.orchestration.run_context import RunContext
@@ -134,3 +135,20 @@ def test_rejected_final_gate_is_not_completed(tmp_path) -> None:
     assert (ctx.run_dir / "manifest.yml").exists()  # el rechazo deja rastro en disco
     last = ctx.ledger.read_all()[-1]
     assert (last.stage, last.action) == ("reporte", "reject")
+
+    # El auditor no debe declarar publicable una corrida rechazada en el gate final.
+    report = run_audit(ctx.run_dir)
+    final_gate = next(c for c in report.checks if c.check_id == "final_gate")
+    assert final_gate.status == "FAIL"
+    assert report.publishable is False
+
+
+def test_paused_run_final_gate_falla_en_auditoria(tmp_path) -> None:
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "TEST-PAUSED")
+    result = run_pipeline(protocol, EXAMPLE, ctx, auto_approve=False, search_fn=_fake_search)
+    assert result.status == "paused"
+
+    report = run_audit(ctx.run_dir)
+    final_gate = next(c for c in report.checks if c.check_id == "final_gate")
+    assert final_gate.status == "FAIL"

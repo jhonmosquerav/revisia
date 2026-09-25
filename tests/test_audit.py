@@ -49,7 +49,16 @@ def _make_run(
                 "action": "approve",
                 "timestamp_utc": "2026-07-05T00:00:00+00:00",
             }
-        )
+        ),
+        json.dumps(
+            {
+                "stage": "reporte",
+                "actor": actor,
+                "autonomy": "A1",
+                "action": "approve",
+                "timestamp_utc": "2026-07-05T00:10:00+00:00",
+            }
+        ),
     ]
     (run / "decisions_ledger.jsonl").write_text("\n".join(ledger_lines) + "\n", encoding="utf-8")
     for name in (
@@ -90,6 +99,7 @@ def test_audit_corrida_completa_es_publicable(tmp_path) -> None:
     assert statuses["deliverable"] == "PASS"
     assert statuses["gold"] == "PASS"
     assert statuses["registration"] == "PASS"
+    assert statuses["final_gate"] == "PASS"
     markdown = render_audit_md(report)
     assert "APTA" in markdown
     assert "trAIce M8" in markdown
@@ -157,3 +167,42 @@ def test_audit_sin_manifiesto_no_duplica_fail_de_procedencia(tmp_path) -> None:
     (run / "manifest.yml").unlink()
     report = run_audit(run)
     assert "provenance" not in {c.check_id for c in report.checks}
+
+
+def test_audit_sin_decision_de_reporte_falla_gate_final(tmp_path) -> None:
+    run = _make_run(tmp_path)
+    ledger = run / "decisions_ledger.jsonl"
+    lines = [line for line in ledger.read_text(encoding="utf-8").splitlines() if line.strip()]
+    only_screening = [line for line in lines if json.loads(line)["stage"] != "reporte"]
+    ledger.write_text("\n".join(only_screening) + "\n", encoding="utf-8")
+
+    report = run_audit(run)
+    final_gate = next(c for c in report.checks if c.check_id == "final_gate")
+    assert final_gate.status == "FAIL"
+    assert "pausada o incompleta" in final_gate.detail
+    assert report.publishable is False
+
+
+def test_audit_reporte_rechazado_falla_gate_final(tmp_path) -> None:
+    run = _make_run(tmp_path)
+    ledger = run / "decisions_ledger.jsonl"
+    lines = [line for line in ledger.read_text(encoding="utf-8").splitlines() if line.strip()]
+    entries = [json.loads(line) for line in lines]
+    for entry in entries:
+        if entry["stage"] == "reporte":
+            entry["action"] = "reject"
+            entry["actor"] = "human:revisora"
+    ledger.write_text("\n".join(json.dumps(entry) for entry in entries) + "\n", encoding="utf-8")
+
+    report = run_audit(run)
+    final_gate = next(c for c in report.checks if c.check_id == "final_gate")
+    assert final_gate.status == "FAIL"
+    assert "rechazado" in final_gate.detail
+    assert "human:revisora" in final_gate.detail
+    assert report.publishable is False
+
+
+def test_audit_reporte_aprobado_pasa_gate_final(tmp_path) -> None:
+    report = run_audit(_make_run(tmp_path))
+    final_gate = next(c for c in report.checks if c.check_id == "final_gate")
+    assert final_gate.status == "PASS"
