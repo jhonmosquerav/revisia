@@ -14,6 +14,7 @@ import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+import yaml
 from pydantic import ValidationError
 
 from revisia import __version__
@@ -62,9 +63,44 @@ def _configured_models(protocol) -> list[str]:
     return sorted(models)
 
 
-def _cmd_validate(protocol_dir: str) -> int:
-    protocol = load_protocol(protocol_dir)
-    print(f"✓ Protocolo válido: {protocol.title}  [{protocol.slug}]")
+def _retired_model_problems(protocol, today: date) -> tuple[list[str], list[str]]:
+    """Modelos retirados del protocolo configurado: ``(errores, avisos)``.
+
+    Un modelo ya apagado es un error (bloquea `validate`/`run`); uno con
+    retiro futuro es solo un aviso. Función compartida por `_cmd_validate` y
+    por `run` en `main()` para que el quickstart (que llama a `revisia run`
+    directamente, sin pasar por `validate`) también se ataje aquí, antes del
+    404 a mitad de corrida (auditoría 2026-09-03, C4; revisión final, ítem 3).
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    for model in _configured_models(protocol):
+        retirement = retirement_for(model)
+        if retirement is None:
+            continue
+        fecha = retirement.shutdown.isoformat()
+        if retirement.is_past(today):
+            errors.append(
+                f"el modelo {model!r} fue retirado por su proveedor el {fecha}; "
+                "las llamadas fallarán. Cámbialo en protocol.yml."
+            )
+        else:
+            warnings.append(f"el modelo {model!r} se retira el {fecha}; planifica el cambio.")
+    return errors, warnings
+
+
+def _cmd_validate(protocol, protocol_dir: str) -> int:
+    # Modelos retirados (auditoría 2026-09-03, C4): calculados antes para no
+    # imprimir "✓ Protocolo válido" cuando el protocolo carga pero usaría un
+    # modelo que ya no responde (revisión final, ítem 4).
+    errors, avisos_retiro = _retired_model_problems(protocol, _today())
+    if errors:
+        print(
+            f"⚠ Protocolo carga, pero usa modelo(s) retirado(s): "
+            f"{protocol.title}  [{protocol.slug}]"
+        )
+    else:
+        print(f"✓ Protocolo válido: {protocol.title}  [{protocol.slug}]")
     print(f"  Pregunta ({protocol.question.framework.value}): {protocol.question.text}")
     print(f"  Bases: {', '.join(protocol.databases) or '(ninguna declarada)'}")
     print(f"  RoB tool: {protocol.rob_tool} · Extensión: {protocol.prisma_extension}")
@@ -86,25 +122,11 @@ def _cmd_validate(protocol_dir: str) -> int:
         print("  Advertencias (no bloquean la corrida):")
         for w in warns:
             print(f"    ⚠ {w}")
-    # Modelos retirados (auditoría 2026-09-03, C4): el quickstart debe fallar
-    # aquí con un mensaje, no con un 404 a mitad de corrida.
-    rc = 0
-    today = _today()
-    for model in _configured_models(protocol):
-        retirement = retirement_for(model)
-        if retirement is None:
-            continue
-        fecha = retirement.shutdown.isoformat()
-        if retirement.is_past(today):
-            print(
-                f"error: el modelo {model!r} fue retirado por su proveedor el {fecha}; "
-                "las llamadas fallarán. Cámbialo en protocol.yml.",
-                file=sys.stderr,
-            )
-            rc = 2
-        else:
-            print(f"  aviso: el modelo {model!r} se retira el {fecha}; planifica el cambio.")
-    return rc
+    for aviso in avisos_retiro:
+        print(f"  aviso: {aviso}")
+    for error in errors:
+        print(f"error: {error}", file=sys.stderr)
+    return 2 if errors else 0
 
 
 def _cmd_gold_template(args: argparse.Namespace) -> int:
@@ -462,18 +484,32 @@ def main(argv: list[str] | None = None) -> int:
     if not Path(protocol_dir).exists():
         print(f"error: la carpeta {protocol_dir!r} no existe.", file=sys.stderr)
         return 2
+    protocol = None
     if args.command in {"validate", "run"}:
-        # Un protocol.yml inválido (p. ej. A3 en una etapa de juicio) se informa
-        # como error de uso, no como traceback (auditoría 2026-09-03, C1).
+        # Un protocol.yml inválido (p. ej. A3 en una etapa de juicio) o con YAML
+        # roto se informa como error de uso, no como traceback (auditoría
+        # 2026-09-03, C1; revisión final, ítem 6 para el YAML roto).
         try:
-            load_protocol(protocol_dir)
-        except ValidationError as exc:
+            protocol = load_protocol(protocol_dir)
+        except (ValidationError, yaml.YAMLError) as exc:
             print(f"error: protocol.yml inválido en {protocol_dir}:\n{exc}", file=sys.stderr)
             return 2
     if args.command == "validate":
-        return _cmd_validate(protocol_dir)
+        return _cmd_validate(protocol, protocol_dir)
     if args.command == "run":
         from revisia.orchestration.hitl import DecisionFileError
+
+        # Modelos retirados (auditoría 2026-09-03, C4): el quickstart del README
+        # va directo a `run` sin pasar por `validate`, así que el 404 a mitad de
+        # corrida seguía ocurriendo. Se ataja aquí, antes de crear ninguna
+        # carpeta de corrida (revisión final, ítem 3).
+        errors, avisos_retiro = _retired_model_problems(protocol, _today())
+        if errors:
+            for error in errors:
+                print(f"error: {error}", file=sys.stderr)
+            return 2
+        for aviso in avisos_retiro:
+            print(f"aviso: {aviso}")
 
         try:
             return _cmd_run(args)

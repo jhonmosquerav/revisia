@@ -50,3 +50,38 @@ def test_check_usa_el_modelo_por_defecto_vigente() -> None:
 
     args = cli.build_parser().parse_args(["check", "manuscrito.md"])
     assert args.model == DEFAULT_MODEL
+
+
+def test_run_con_modelo_retirado_sale_2_y_no_ejecuta_run_review(
+    tmp_path: Path, capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """El quickstart (README) va directo a `run`: el 404 de un modelo retirado
+    (C4) debe atajarse aquí, no solo en `validate` (revisión final, ítem 3)."""
+
+    def _no_debe_correr(*_a, **_k):
+        raise AssertionError("run_review no debe llamarse con un modelo retirado")
+
+    monkeypatch.setattr("revisia.orchestration.flow.run_review", _no_debe_correr)
+    rc = cli.main(["run", str(_protocolo_con_modelo(tmp_path, "gemini-2.0-flash"))])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "gemini-2.0-flash" in err
+    assert "2026-06-01" in err
+
+
+def test_run_con_modelo_por_retirarse_avisa_y_ejecuta(
+    tmp_path: Path, capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from revisia.orchestration.pipeline import PipelineResult
+
+    run_dir = tmp_path / "runs" / "demo-T"
+    (run_dir / "deliverable").mkdir(parents=True)
+    monkeypatch.setattr(cli, "_today", lambda: date(2026, 9, 25))
+    monkeypatch.setattr(
+        "revisia.orchestration.flow.run_review",
+        lambda *_a, **_k: PipelineResult("completed", "ok", run_dir=run_dir),
+    )
+    rc = cli.main(["run", str(_protocolo_con_modelo(tmp_path, "gemini-2.5-flash"))])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "2026-10-16" in out
