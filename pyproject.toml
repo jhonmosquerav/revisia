@@ -64,6 +64,26 @@ revisia = "revisia.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["revisia"]
 
+# El sdist solo lleva lo que se versiona y sirve para reconstruir el paquete:
+# nada de corridas (`runs/`), ficheros de proceso (`.superpowers/`, `.claude/`),
+# cobertura ni un `dist/` previo (auditoría 2026-09-03, A14).
+[tool.hatch.build.targets.sdist]
+only-include = [
+    "revisia",
+    "docs",
+    "protocols/_TEMPLATE",
+    "tests",
+    "examples",
+    "assets",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "NOTICE",
+    "CITATION.cff",
+    "pyproject.toml",
+    "uv.lock",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py313"
