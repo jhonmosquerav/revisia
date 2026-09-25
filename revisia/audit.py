@@ -222,38 +222,62 @@ def run_audit(run_dir: str | Path) -> AuditReport:
             )
 
     # ── 3b · Decisión final sobre el reporte (gate de honestidad) ───────────
-    reporte_entries = [e for e in ledger if e.get("stage") == "reporte"]
-    if not reporte_entries:
-        add(
-            AuditCheck(
-                "final_gate",
-                "trAIce M8",
-                "FAIL",
-                "Sin decisión sobre el reporte final: la corrida está pausada o incompleta.",
-            )
-        )
-    else:
-        last_reporte = reporte_entries[-1]
-        action = last_reporte.get("action")
-        actor = last_reporte.get("actor", "desconocido")
-        if action in ("approve", "auto-proceed"):
-            add(
-                AuditCheck(
-                    "final_gate",
-                    "trAIce M8",
-                    "PASS",
-                    f"Reporte final aprobado ({action}) por {actor}.",
-                )
-            )
-        else:
+    # Sin ledger ya hay un FAIL de "ledger" arriba (§3): no lo dupliquemos,
+    # igual que "provenance" no duplica el FAIL de "manifest" ausente.
+    if ledger:
+        reporte_entries = [e for e in ledger if e.get("stage") == "reporte"]
+        if not reporte_entries:
             add(
                 AuditCheck(
                     "final_gate",
                     "trAIce M8",
                     "FAIL",
-                    f"El reporte final fue rechazado por {actor}.",
+                    "Sin decisión sobre el reporte final: la corrida está pausada o incompleta.",
                 )
             )
+        else:
+            last_reporte = reporte_entries[-1]
+            action = last_reporte.get("action")
+            actor = str(last_reporte.get("actor", "desconocido"))
+            if action == "approve" and actor.startswith("human"):
+                add(
+                    AuditCheck(
+                        "final_gate",
+                        "trAIce M8",
+                        "PASS",
+                        f"Reporte final aprobado por humano ({actor}).",
+                    )
+                )
+            elif action in ("approve", "auto-proceed"):
+                # Aprobación no humana: actor "auto-approve (demo)" (--auto-approve
+                # sin decision.yml) o "auto-proceed" (etapa reporte en A2/A3). Ninguno
+                # de los dos es la decisión humana que exige el gate de honestidad.
+                add(
+                    AuditCheck(
+                        "final_gate",
+                        "trAIce M8",
+                        "WARN",
+                        f"El reporte final no lo aprobó un humano: {actor}/{action}.",
+                    )
+                )
+            elif action == "reject":
+                add(
+                    AuditCheck(
+                        "final_gate",
+                        "trAIce M8",
+                        "FAIL",
+                        f"El reporte final fue rechazado por {actor}.",
+                    )
+                )
+            else:
+                add(
+                    AuditCheck(
+                        "final_gate",
+                        "trAIce M8",
+                        "FAIL",
+                        f"Acción desconocida {action} en la decisión final.",
+                    )
+                )
 
     # ── 4 · Entregables PRISMA completos ────────────────────────────────────
     deliverable = run / "deliverable"

@@ -206,3 +206,74 @@ def test_audit_reporte_aprobado_pasa_gate_final(tmp_path) -> None:
     report = run_audit(_make_run(tmp_path))
     final_gate = next(c for c in report.checks if c.check_id == "final_gate")
     assert final_gate.status == "PASS"
+
+
+def _set_ultima_decision_reporte(run, *, action: str, actor: str) -> None:
+    """Reescribe la última entrada `reporte` del ledger sintético de `_make_run`."""
+    ledger = run / "decisions_ledger.jsonl"
+    lines = [line for line in ledger.read_text(encoding="utf-8").splitlines() if line.strip()]
+    entries = [json.loads(line) for line in lines]
+    for entry in entries:
+        if entry["stage"] == "reporte":
+            entry["action"] = action
+            entry["actor"] = actor
+    ledger.write_text("\n".join(json.dumps(entry) for entry in entries) + "\n", encoding="utf-8")
+
+
+def test_audit_gate_final_auto_approve_no_es_humano_advierte(tmp_path) -> None:
+    # `--auto-approve` sin decision.yml deja actor "auto-approve (demo)": no es
+    # aprobación humana, así que no puede ser PASS (revisión final 2026-09-25).
+    run = _make_run(tmp_path)
+    _set_ultima_decision_reporte(run, action="approve", actor="auto-approve (demo)")
+
+    report = run_audit(run)
+    final_gate = next(c for c in report.checks if c.check_id == "final_gate")
+    assert final_gate.status == "WARN"
+    assert "no lo aprobó un humano" in final_gate.detail
+    assert "auto-approve (demo)" in final_gate.detail
+    assert report.publishable  # WARN no bloquea publicabilidad, a diferencia de FAIL
+
+
+def test_audit_gate_final_auto_proceed_advierte(tmp_path) -> None:
+    # `reporte` en A2/A3 se auto-ejecuta y notifica (agent:reporte): tampoco es
+    # una decisión humana.
+    run = _make_run(tmp_path)
+    _set_ultima_decision_reporte(run, action="auto-proceed", actor="agent:reporte")
+
+    report = run_audit(run)
+    final_gate = next(c for c in report.checks if c.check_id == "final_gate")
+    assert final_gate.status == "WARN"
+    assert "no lo aprobó un humano" in final_gate.detail
+    assert "agent:reporte" in final_gate.detail
+
+
+def test_audit_gate_final_accion_desconocida_falla(tmp_path) -> None:
+    run = _make_run(tmp_path)
+    _set_ultima_decision_reporte(run, action="otra-cosa", actor="human:revisor")
+
+    report = run_audit(run)
+    final_gate = next(c for c in report.checks if c.check_id == "final_gate")
+    assert final_gate.status == "FAIL"
+    assert "Acción desconocida" in final_gate.detail
+    assert "otra-cosa" in final_gate.detail
+
+
+def test_audit_sin_ledger_no_duplica_fail_de_final_gate(tmp_path) -> None:
+    # El ledger ausente ya produce un FAIL propio (§3); final_gate no debe
+    # añadir un segundo FAIL redundante (mismo criterio que "provenance" con
+    # manifest ausente).
+    run = _make_run(tmp_path)
+    (run / "decisions_ledger.jsonl").unlink()
+
+    report = run_audit(run)
+    assert "final_gate" not in {c.check_id for c in report.checks}
+    ledger_check = next(c for c in report.checks if c.check_id == "ledger")
+    assert ledger_check.status == "FAIL"
+
+
+def test_audit_ledger_vacio_no_duplica_fail_de_final_gate(tmp_path) -> None:
+    run = _make_run(tmp_path)
+    (run / "decisions_ledger.jsonl").write_text("", encoding="utf-8")
+
+    report = run_audit(run)
+    assert "final_gate" not in {c.check_id for c in report.checks}
