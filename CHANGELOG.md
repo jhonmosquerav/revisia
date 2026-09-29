@@ -6,6 +6,8 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.7.0] · 2026-09-28
+
 ### Added
 - **Ocho backends de fuentes abiertas, sin API key** (triage verificado en vivo,
   `docs/fuentes-triage.md`): **ERIC** (educación), **DOAJ** (revistas OA),
@@ -438,5 +440,9 @@ borradores de revisiones sistemáticas bajo PRISMA 2020 + PRISMA-S + PRISMA-trAI
 - El driver de referencia de Claude Code (subagentes `.md`) llega en una versión
   posterior; el núcleo no lo requiere.
 
-[Unreleased]: https://github.com/jhonmosquerav/prisma-loop/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jhonmosquerav/revisia/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/jhonmosquerav/revisia/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/jhonmosquerav/revisia/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/jhonmosquerav/revisia/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/jhonmosquerav/revisia/releases/tag/v0.4.0
 [0.1.0]: https://github.com/jhonmosquerav/prisma-loop/releases/tag/v0.1.0
