@@ -210,4 +210,35 @@ Aplicado en la misma rama del PR #7 tras la auditoría:
 - **C3, parte documental** (commit `91954c2`): aviso de procedencia en `docs/benchmark-cribado.md` que marca las cifras del artículo fundacional como ilustrativas hasta regenerar el benchmark con el pipeline real.
 - Higiene: `.coverage*`, `coverage.xml` y `htmlcov/` ignorados.
 
-Todo lo demás sigue abierto y está ordenado en §8.
+### Ola 0 · cerrada el 2026-09-25 (PRs #8, #9 y #10)
+
+Diseño, decisiones y desviaciones en
+[`docs/superpowers/specs/2026-09-25-ola-0-remediacion-design.md`](../superpowers/specs/2026-09-25-ola-0-remediacion-design.md);
+detalle de cambios en `CHANGELOG.md`.
+
+| Hallazgo | Estado | Qué se hizo |
+|---|---|---|
+| **C4** · modelo por defecto apagado | Cerrado | Default `gemini-3.5-flash-lite`; `revisia validate` y `run` rechazan modelos ya apagados según la página oficial de deprecaciones. |
+| **A1** · inyección de comandos en Windows | Cerrado | Patrón en `ProviderConfig.model` y guardia fail-closed ante shims `.cmd`/`.bat`. |
+| **A2** · lectura arbitraria en el export | Cerrado | Imágenes confinadas a `deliverable/`; rutas absolutas y UNC rechazadas antes de tocar el sistema de ficheros. |
+| **M1** · HTML sin sanear, fetcher del PDF | Cerrado | Allowlist de `nh3` en el Markdown convertido; WeasyPrint solo resuelve `data:` (verificado en CI con WeasyPrint real). |
+| **A14** · sdist con residuos | Cerrado | `only-include` en el sdist; `.superpowers/` ignorado. |
+| **M10** · corrección de continuidad | Cerrado | +0.5 solo con celdas en cero. |
+| **C1** · checkpoint humano | Parcial | Hecho: autonomía validada al cargar, `decision.yml` estricto, un rechazo final es `rejected`, check `final_gate` en el auditor. Queda (Ola 1): decisión por registro, `revisia run --resume`, `request_sha256`. |
+| **C3** · corrida de referencia | Parcial | Hecho: `provenance: pipeline` en todo manifiesto y FAIL del auditor sin él; la corrida de referencia local se marcó como reconstrucción y ya audita "no publicable". Queda: validación de esquemas y aritmética en el auditor (Ola 1) y regenerar el benchmark (Ola 2). |
+| **A11** · auditor por existencia | Parcial | Hecho: κ/MCC indefinidos son `None` y el check `gold` da WARN si no informan. Queda (Ola 1): umbrales `kappa_min`/`recall_target`. |
+| **M23** · negaciones de `runs/` en `.gitignore` | Documentado | Comentado como inoperante; decidir qué se versiona de una corrida es Ola 1. |
+
+También se cerraron varios hallazgos bajos: `decision.yml` vacío o con raíz de
+lista, MCC/κ en 0.0 cuando son indefinidos, tracebacks del CLI en `validate`,
+`run` y `check`, y la tabla de versiones de `SECURITY.md`.
+
+*Corrección posterior (2026-09-28):* la tabla de modelos retirados de la Ola 0
+incluía `gemini-2.5-flash`/`-pro`/`-flash-lite` con fecha 2026-10-16, tomada de
+una fuente secundaria. La página oficial de la Gemini API no les da fecha
+(ese anuncio se retiró), así que se quitaron: habrían bloqueado protocolos
+válidos desde el 16 de octubre.
+
+Siguen abiertos, en el orden de §8: el resto de la Ola 1 (HITL por registro y
+auditor exigente) y la Ola 2 (rigor y honestidad de las afirmaciones, incluido
+el verificador anti-alucinación C2).

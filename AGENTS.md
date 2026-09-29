@@ -16,7 +16,9 @@ etapas de juicio; la decisión final es siempre humana (Cochrane/JBI 2025).
 
 La autonomía se configura **por etapa** en `protocol.yml` (`autonomy:`) con una
 regla no negociable cableada en el diseño: `screening`, `extraccion` y `rob`
-**nunca superan A1**.
+**nunca superan A1**. Se valida al cargar el protocolo: un `protocol.yml` que la
+incumpla (o con una etapa o nivel desconocidos) no carga, y `revisia validate` y
+`revisia run` salen con un error.
 
 ## El equipo (una etapa, un agente)
 
@@ -49,9 +51,11 @@ Tipos: ⚙️ determinista (sin LLM, reproducible bit a bit) · 🤖 LLM
    recomienda en zona gris → el humano valida → κ/recall del sistema contra ese
    gold (nunca "accuracy").
 4. **Auditor post-corrida** — `revisia audit runs/<slug>-<fecha>` verifica
-   manifest, prompts hash-eados, supervisión humana, exclusiones IA/humano
-   separadas (trAIce R1), gold, grounding, ventana de búsqueda y registro;
-   emite `audit.md` con veredicto de publicabilidad.
+   manifest, procedencia de la corrida (`provenance: pipeline`), prompts
+   hash-eados, supervisión humana, decisión humana sobre el reporte final,
+   exclusiones IA/humano separadas (trAIce R1), gold (WARN si κ/MCC no son
+   informativos), grounding, ventana de búsqueda y registro; emite `audit.md`
+   con veredicto de publicabilidad.
 5. **Manifiesto reproducible** — `manifest.yml` con modelo/versión/seed/hash de
    prompt por llamada: reproducibilidad "a nivel decisión" cuando el proveedor
    no garantiza determinismo a nivel token.

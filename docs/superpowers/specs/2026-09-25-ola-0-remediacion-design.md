@@ -35,7 +35,7 @@ por las negaciones inoperantes del `.gitignore` (M23), que el ítem 6 corta.
 |---|---|---|
 | D1 | Entrega en **tres PRs temáticas secuenciales** sobre `main` | El ítem 5 es el único que cambia comportamiento observable y merece revisión aislada; mezclarlo con empaquetado hace que un rollback arrastre lo que no debe. Secuenciales y no en paralelo porque PR-B y PR-C tocan ambas `audit.py`. |
 | D2 | El validador de `autonomy` es **error duro al cargar** | C1 es exactamente que un `A3` apaga el HITL en silencio; un aviso por stdout es el mismo fallo con más letras (y M8 documenta que stdout se rompe en Windows redirigido). Es además el principio no negociable de `AGENTS.md`: `screening`, `extraccion` y `rob` nunca superan A1. |
-| D3 | Modelo por defecto: **`gemini-3.5-flash-lite`** | `gemini-2.0-flash` se apagó el 2026-06-01 y `gemini-2.5-flash` se retira el 2026-10-16 (fuentes: changelog y página de deprecations de la Gemini API, consultadas 2026-09-08). El default sirve al quickstart, no al juicio metodológico: una corrida de cribado son ~1.400 llamadas, y quien publique elige modelo en su `protocol.yml`. |
+| D3 | Modelo por defecto: **`gemini-3.5-flash-lite`** | `gemini-2.0-flash` se apagó el 2026-06-01 (página de deprecations de la Gemini API). *Corrección 2026-09-28:* el retiro de `gemini-2.5-flash` el 2026-10-16 que se citaba aquí venía de una fuente secundaria; la página oficial no le da fecha (ver §10, S5). El default sirve al quickstart, no al juicio metodológico: una corrida de cribado son ~1.400 llamadas, y quien publique elige modelo en su `protocol.yml`. |
 | D4 | Saneado del HTML con **`nh3` en el núcleo**, sobre el HTML ya convertido | El exportador inyecta HTML propio (`figure` con la imagen en base64, tablas del flujo PRISMA) *antes* de convertir; escapar el markdown de entrada escaparía también lo nuestro. Sanear la salida con allowlist evita reordenar `_embed_md_images` y `replace_mermaid_blocks`. `nh3` es un wheel precompilado sin dependencias transitivas. |
 | D5 | Ítem 7: **marca en el manifiesto + guardia en `audit.py`** | Es la única variante que impide que el auditor vuelva a decir APTA sobre el artefacto reconstruido: el aviso en Markdown no lo lee el motor. ~30 líneas, sin invadir el rework del auditor de la Ola 1. |
 | D6 | MCC/WMCC/κ indefinidos → **`float \| None`** en funciones y esquema | Mientras `0.0` sea un valor válido, cualquier umbral `kappa_min` se compara contra un número inventado (A11: hoy el auditor da PASS a `gold` con κ=0.0). Propuesta de Claude aceptada con el diseño; revocable. |
@@ -266,7 +266,7 @@ fecha de apagado), `Retirement` y `retirement_for(model)`, poblada con lo verifi
 |---|---|
 | `gemini-2.0-flash`, `gemini-2.0-flash-001` | 2026-06-01 |
 | `gemini-2.0-flash-lite`, `gemini-2.0-flash-lite-001` | 2026-06-01 |
-| `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.5-flash-lite` | 2026-10-16 |
+| ~~`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.5-flash-lite`~~ | ~~2026-10-16~~ — retirado de la tabla el 2026-09-28: sin fecha oficial (§10, S5) |
 | `gemini-3.1-flash-lite-preview` | 2026-05-25 |
 
 `_cmd_validate` recorre los proveedores del protocolo, imprime una línea de
@@ -409,3 +409,4 @@ Seguimientos, resueltos después de abrir las PRs (2026-09-25):
 | S2 | Traceback de `revisia check` con `--model`/`--provider` inválidos | Validación previa con `available_providers()` y `ProviderConfig`; código 2 y mensaje. | C |
 | S3 | `<img>` sin `src` (imagen remota con título, de estilo referencia o HTML crudo) | Tras el saneado, se degrada a su texto alternativo en cursiva. | A |
 | S4 | La prueba real del `URLFetcher` de WeasyPrint solo corría con el extra `pdf` | CI instala Pango y el extra `pdf` y falla si WeasyPrint no importa. Verificado además en Linux (WSL, WeasyPrint 70.0): suite completa sin omitidos y exportación PDF real de la corrida fundacional; con un HTML trampa, WeasyPrint pidió `file://` y `http://` pero solo abrió el `data:`. | A |
+| S5 | La tabla daba el 2026-10-16 como retiro de `gemini-2.5-flash`/`-pro`/`-flash-lite`: esa fecha salió de una fuente secundaria, se anunció en julio y luego se retiró de la página de la Gemini API (en Vertex AI es un "no antes de"). A partir de esa fecha, `validate`/`run` habrían rechazado protocolos válidos. | Tabla reconstruida con los ids literales de la página oficial (consultada 2026-09-28): fuera las 2.5 estables; dentro las preview ya apagadas y `gemini-3.1-flash-lite` (2027-05-07). Regla en la docstring: solo fechas publicadas en la fuente oficial. | post-Ola 0 |
