@@ -7,8 +7,13 @@ publicada recibe correcciones de seguridad.
 
 | Versión | Soportada |
 |---------|-----------|
-| 0.1.x   | ✅        |
-| < 0.1   | ❌        |
+| 0.6.x   | ✅        |
+| < 0.6   | ❌        |
+
+Las correcciones de seguridad de la Ola 0 de remediación (inyección de
+comandos en Windows, lectura arbitraria de ficheros y HTML sin sanear en
+`revisia export`) están en `main` y saldrán en la próxima versión publicada;
+ver `CHANGELOG.md` (sección *Security*).
 
 ## Reportar una vulnerabilidad
 

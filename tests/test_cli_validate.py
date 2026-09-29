@@ -36,9 +36,9 @@ def test_validate_avisa_retiro_futuro_sin_fallar(
     tmp_path: Path, capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(cli, "_today", lambda: date(2026, 9, 25))
-    rc = cli.main(["validate", str(_protocolo_con_modelo(tmp_path, "gemini-2.5-flash"))])
+    rc = cli.main(["validate", str(_protocolo_con_modelo(tmp_path, "gemini-3.1-flash-lite"))])
     assert rc == 0
-    assert "2026-10-16" in capsys.readouterr().out
+    assert "2027-05-07" in capsys.readouterr().out
 
 
 def test_validate_plantilla_pasa(capsys: pytest.CaptureFixture) -> None:
@@ -81,10 +81,10 @@ def test_run_con_modelo_por_retirarse_avisa_y_ejecuta(
         "revisia.orchestration.flow.run_review",
         lambda *_a, **_k: PipelineResult("completed", "ok", run_dir=run_dir),
     )
-    rc = cli.main(["run", str(_protocolo_con_modelo(tmp_path, "gemini-2.5-flash"))])
+    rc = cli.main(["run", str(_protocolo_con_modelo(tmp_path, "gemini-3.1-flash-lite"))])
     out = capsys.readouterr().out
     assert rc == 0
-    assert "2026-10-16" in out
+    assert "2027-05-07" in out
 
 
 def test_validate_detecta_retirado_con_prefijo_de_openrouter(

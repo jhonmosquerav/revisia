@@ -11,7 +11,7 @@
   <a href="https://doi.org/10.5281/zenodo.21215148"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.21215148.svg" alt="DOI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.13%2B-blue.svg" alt="Python 3.13+"></a>
-  <a href="tests/"><img src="https://img.shields.io/badge/tests-188%20passing-brightgreen.svg" alt="Tests"></a>
+  <a href="tests/"><img src="https://img.shields.io/badge/tests-317%20passing-brightgreen.svg" alt="Tests"></a>
   <a href="#fundamento-metodológico"><img src="https://img.shields.io/badge/PRISMA-2020%20%2B%20S%20%2B%20trAIce-8A2BE2.svg" alt="PRISMA 2020"></a>
 </p>
 
@@ -114,6 +114,30 @@ Y cuando el manuscrito esté escrito, pre-chequea su adherencia al checklist:
 uv run revisia check manuscrito.md          # 27 ítems: ✅/🟡/❌ + evidencia
 ```
 
+## Checkpoint humano (`decision.yml`)
+
+En cada etapa con autonomía A0/A1 el pipeline escribe
+`runs/<slug>-<fecha>/<etapa>/review_request.yml` con lo que debes revisar y se
+pausa. Tu decisión va en `<etapa>/decision.yml`:
+
+```yaml
+approved: true                          # booleano YAML, sin comillas
+actor: human:tu-nombre                  # queda en decisions_ledger.jsonl
+reason: revisé los 12 excluidos por IA  # opcional; los campos extra también se registran
+```
+
+Un `decision.yml` vacío, con YAML roto, sin `approved` o con `"false"` entre
+comillas detiene la corrida con un mensaje que dice qué corregir: no se toma
+como rechazo ni como aprobación. Con `approved: false` en el reporte final la
+corrida termina como `rejected` (código 1) y no se sedimenta en `--brain`.
+
+> **Limitación actual (Ola 1 del plan de remediación).** `revisia run` crea una
+> carpeta nueva en cada ejecución, así que aún no reanuda una corrida pausada
+> leyendo su `decision.yml`, y la decisión es por etapa, no registro a registro.
+> Mientras tanto, `--auto-approve` sirve para demostraciones: `revisia audit`
+> las marca con WARN en `hitl` y en `final_gate` porque ningún humano aprobó,
+> aunque todavía no las declara no publicables (eso también llega en la Ola 1).
+
 ## Exportar el artículo (HTML / PDF)
 
 Cada corrida deja su entregable en Markdown (`deliverable/`); `export` lo
@@ -168,8 +192,12 @@ Licencia Apache-2.0, `CITATION.cff` y `.zenodo.json` listos para depósito en Ze
 > se cumplen en el código**: la decisión humana registro a registro, el
 > verificador anti-alucinación en su modo por defecto, y la reproducibilidad de
 > la corrida de referencia. El plan de remediación en tres olas está en el
-> informe; hasta cerrar las olas 0 y 1, trata las salidas como borradores que
-> requieren revisión humana completa, no como evidencia publicable.
+> informe. **La Ola 0 se cerró el 2026-09-25** (PRs #8–#10): seguridad del motor
+> y del exportador, un reporte rechazado ya no figura como completado, el
+> auditor exige procedencia y decisión humana final, modelo por defecto vigente
+> y métricas indefinidas marcadas como tales (estado en §11 del informe). Hasta
+> cerrar la Ola 1, trata las salidas como borradores que requieren revisión
+> humana completa, no como evidencia publicable.
 
 ## Equipo de agentes, autonomías y auditorías
 

@@ -5,9 +5,14 @@ El quickstart de v0.6.0 se rompió en silencio: el modelo por defecto
 404 a mitad de corrida (auditoría 2026-09-03, C4). Esta tabla permite que
 ``revisia validate`` lo detecte ANTES de gastar una corrida.
 
-Se mantiene a mano: la fuente es la documentación oficial de cada proveedor.
-Gemini: https://ai.google.dev/gemini-api/docs/deprecations y
-https://ai.google.dev/gemini-api/docs/changelog (consultadas 2026-09-08).
+Se mantiene a mano y solo con fechas **publicadas** en la página oficial de
+deprecaciones del proveedor: un anuncio que luego se retiró o un "no antes de"
+no entra, porque ``validate`` y ``run`` rechazan con código 2 a partir de la
+fecha y bloquearían protocolos que funcionan. (El 2026-10-16 de
+``gemini-2.5-*`` entró por error en la Ola 0 desde una fuente secundaria: la
+página de la Gemini API lo había retirado.)
+Gemini: https://ai.google.dev/gemini-api/docs/deprecations (consultada
+2026-09-28; ids copiados literalmente de sus tablas de modelos de texto).
 La clave es el id canónico del proveedor; ``retirement_for`` también reconoce
 los prefijos de ruta (``models/``, ``google/``…) y las variantes ``:tag``.
 """
@@ -18,14 +23,23 @@ from dataclasses import dataclass
 from datetime import date
 
 RETIRED_MODELS: dict[str, date] = {
+    # Gemini 2.0
     "gemini-2.0-flash": date(2026, 6, 1),
     "gemini-2.0-flash-001": date(2026, 6, 1),
     "gemini-2.0-flash-lite": date(2026, 6, 1),
     "gemini-2.0-flash-lite-001": date(2026, 6, 1),
-    "gemini-2.5-flash": date(2026, 10, 16),
-    "gemini-2.5-flash-lite": date(2026, 10, 16),
-    "gemini-2.5-pro": date(2026, 10, 16),
+    "gemini-2.0-flash-lite-preview": date(2025, 12, 9),
+    "gemini-2.0-flash-lite-preview-02-05": date(2025, 12, 9),
+    # Gemini 2.5: solo las preview; las estables no tienen fecha anunciada.
+    "gemini-2.5-pro-preview-03-25": date(2025, 12, 2),
+    "gemini-2.5-pro-preview-05-06": date(2025, 12, 2),
+    "gemini-2.5-pro-preview-06-05": date(2025, 12, 2),
+    "gemini-2.5-flash-preview-05-20": date(2025, 11, 18),
+    "gemini-2.5-flash-preview-09-25": date(2026, 2, 17),
+    "gemini-2.5-flash-lite-preview-09-2025": date(2026, 3, 31),
+    # Gemini 3.x
     "gemini-3.1-flash-lite-preview": date(2026, 5, 25),
+    "gemini-3.1-flash-lite": date(2027, 5, 7),
 }
 
 

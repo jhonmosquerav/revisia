@@ -82,7 +82,10 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   proveedor Gemini y `revisia check`). Nueva tabla `revisia/llm/deprecations.py`
   con los modelos retirados (fuente y fecha de consulta): `revisia validate` y
   `revisia run` salen con código 2 si el protocolo usa uno ya apagado, y avisan
-  de los retiros anunciados (`gemini-2.5-*`, 2026-10-16).
+  de los retiros anunciados (p. ej. `gemini-3.1-flash-lite`, 2027-05-07). La
+  tabla solo recoge fechas publicadas en la página oficial de deprecaciones:
+  `gemini-2.5-flash`/`-pro`/`-flash-lite` no tienen fecha anunciada en la
+  Gemini API (el 2026-10-16 que circula se retiró de esa página).
 - **Métricas honestas (auditoría A11).** MCC, WMCC y kappa de Cohen devuelven
   `None` cuando están indefinidos (el gold o la IA asignan una sola clase), se
   persisten como `null` y se muestran como "no calculable". `revisia audit` da
