@@ -409,12 +409,12 @@ Si usas `RevisIA` en tu investigación, cítalo con el **DOI concept**
 siempre a la última versión) o los metadatos de [`CITATION.cff`](CITATION.cff):
 
 > Mosquera Vanegas, J. A. (2026). *RevisIA: sistema multiagéntico reproducible
-> para revisiones sistemáticas PRISMA* (v0.5.0). Zenodo.
+> para revisiones sistemáticas PRISMA* (v0.7.0). Zenodo.
 > https://doi.org/10.5281/zenodo.21215148
 
-Cada versión tiene además su propio DOI de versión (v0.4.0:
-`10.5281/zenodo.21215149`; el de v0.5.0 lo acuña Zenodo al publicar el release
-en GitHub). El DOI concept de arriba siempre resuelve a la última versión.
+Cada versión publicada tiene además su propio DOI de versión (v0.4.0:
+`10.5281/zenodo.21215149`; v0.6.0: `10.5281/zenodo.21326818`; el de v0.7.0 lo
+acuña Zenodo al publicar el release en GitHub). El DOI concept de arriba siempre resuelve a la última versión.
 
 ## Contribuir
 

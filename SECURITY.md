@@ -7,13 +7,13 @@ publicada recibe correcciones de seguridad.
 
 | Versión | Soportada |
 |---------|-----------|
-| 0.6.x   | ✅        |
-| < 0.6   | ❌        |
+| 0.7.x   | ✅        |
+| < 0.7   | ❌        |
 
-Las correcciones de seguridad de la Ola 0 de remediación (inyección de
-comandos en Windows, lectura arbitraria de ficheros y HTML sin sanear en
-`revisia export`) están en `main` y saldrán en la próxima versión publicada;
-ver `CHANGELOG.md` (sección *Security*).
+La 0.7.0 incluye las correcciones de seguridad de la Ola 0 de remediación
+(inyección de comandos en Windows, lectura arbitraria de ficheros y HTML sin
+sanear en `revisia export`); ver `CHANGELOG.md`, sección *Security*. Si usas
+una versión anterior, actualiza.
 
 ## Reportar una vulnerabilidad
 
