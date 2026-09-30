@@ -23,6 +23,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from dataclasses import replace
 from pathlib import Path
 from typing import TypeVar
@@ -183,17 +184,24 @@ class ClaudeCodeProvider:
         Raises:
             RuntimeError: si el CLI no está instalado, falla, agota el timeout
                 o devuelve un error de API. Siempre con mensaje accionable.
+
+        Corre en un directorio temporal vacío para que el ``CLAUDE.md`` y los hooks
+        de ``.claude/`` del proyecto que invoca no lleguen al prompt (regla
+        anti-sesgo). Límite conocido: la config a nivel de usuario (``~/.claude``)
+        sigue cargándose.
         """
         try:
-            proc = subprocess.run(
-                self._command(req),
-                input=req.prompt,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                timeout=self.timeout,
-                env=self._subprocess_env(),
-            )
+            with tempfile.TemporaryDirectory(prefix="revisia-claude-") as neutral_cwd:
+                proc = subprocess.run(
+                    self._command(req),
+                    input=req.prompt,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=self.timeout,
+                    env=self._subprocess_env(),
+                    cwd=neutral_cwd,  # sin CLAUDE.md ni hooks del proyecto que invoca
+                )
         except FileNotFoundError as exc:
             raise RuntimeError(
                 f"No se encontró el CLI {self.cli!r}. El proveedor 'claude_code' "

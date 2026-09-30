@@ -9,6 +9,7 @@ schema + reintento, el ``RunMeta`` (no determinista) y los errores accionables.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -49,7 +50,8 @@ def _fake_run_factory(stdouts, recorder=None):
 
     def _fake_run(cmd, **kwargs):
         if recorder is not None:
-            recorder.append({"cmd": cmd, "input": kwargs.get("input"), "env": kwargs.get("env")})
+            recorder.append({"cmd": cmd, "input": kwargs.get("input"), "env": kwargs.get("env"),
+                             "cwd": kwargs.get("cwd")})
         nxt = next(calls)
         if isinstance(nxt, BaseException):
             raise nxt
@@ -285,3 +287,18 @@ def test_sin_effort_no_se_envia_flag(monkeypatch) -> None:
     _provider().complete(LLMRequest(prompt="x"))
 
     assert "--effort" not in recorder[0]["cmd"]
+
+
+def test_claude_corre_en_cwd_neutro_sin_config_de_proyecto(monkeypatch, tmp_path) -> None:
+    """claude -p no debe heredar el cwd: evitaría cargar CLAUDE.md/hooks del proyecto."""
+    recorder: list[dict] = []
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "CLAUDE.md").write_text("memoria del proyecto", encoding="utf-8")
+    monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:in\claude.exe")
+    monkeypatch.setattr(cc.subprocess, "run", _fake_run_factory([_result_json("ok")], recorder))
+    _provider().complete(LLMRequest(prompt="x"))
+
+    cwd = recorder[0]["cwd"]
+    assert cwd is not None
+    assert Path(cwd).resolve() != tmp_path.resolve()
+    assert "revisia-claude-" in Path(cwd).name
