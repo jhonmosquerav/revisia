@@ -276,6 +276,32 @@ def test_command_desactiva_todas_las_herramientas(monkeypatch) -> None:
     assert "--allowedTools" not in cmd
 
 
+def test_command_aisla_config_de_usuario_con_safe_mode(monkeypatch) -> None:
+    """`--safe-mode` apaga CLAUDE.md, plugins y hooks del usuario sin tocar la auth.
+
+    No se usa `--bare`: obliga a autenticar con ANTHROPIC_API_KEY y rompe la
+    suscripción (OAuth) de la que depende este proveedor.
+    """
+    recorder: list[dict] = []
+    monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:\bin\claude.exe")
+    monkeypatch.setattr(cc.subprocess, "run", _fake_run_factory([_result_json("ok")], recorder))
+    _provider().complete(LLMRequest(prompt="x"))
+
+    cmd = recorder[0]["cmd"]
+    assert "--safe-mode" in cmd
+    assert "--bare" not in cmd
+
+
+def test_safe_mode_pasa_el_guard_del_shim_cmd(monkeypatch) -> None:
+    """El flag nuevo no contiene metacaracteres de cmd.exe: el shim .cmd lo acepta."""
+    recorder: list[dict] = []
+    monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:\bin\claude.CMD")
+    monkeypatch.setattr(cc.subprocess, "run", _fake_run_factory([_result_json("ok")], recorder))
+    _provider().complete(LLMRequest(prompt="x"))
+
+    assert "--safe-mode" in recorder[0]["cmd"]
+
+
 def test_effort_viaja_como_flag(monkeypatch) -> None:
     recorder: list[dict] = []
     monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:\bin\claude.exe")

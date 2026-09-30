@@ -128,6 +128,15 @@ class ClaudeCodeProvider:
             "--tools",
             "",  # razonamiento puro: desactiva todas las herramientas integradas
             "--strict-mcp-config",  # sin --mcp-config no carga servidores MCP (fugas, handles)
+            # Regla anti-sesgo: el cwd neutro no basta. La config de usuario
+            # (~/.claude/CLAUDE.md, plugins, sus hooks y skills) seguía llegando
+            # al prompt de cribado/extracción; y como el tmp cuelga del home, el
+            # recorrido hacia arriba recogía ~/.claude/CLAUDE.md incluso como
+            # memoria "de proyecto". --safe-mode apaga todas esas
+            # personalizaciones y deja intacta la auth (OAuth/suscripción).
+            # No se usa --bare: exige ANTHROPIC_API_KEY y rompe la suscripción.
+            # Verificado con sondas empíricas (CLI 2.1.285, 2026-09-30).
+            "--safe-mode",
         ]
         if self.effort:
             cmd += ["--effort", self.effort]
@@ -191,8 +200,10 @@ class ClaudeCodeProvider:
 
         Corre en un directorio temporal vacío para que el ``CLAUDE.md`` y los hooks
         de ``.claude/`` del proyecto que invoca no lleguen al prompt (regla
-        anti-sesgo). Límite conocido: la config a nivel de usuario (``~/.claude``)
-        sigue cargándose.
+        anti-sesgo). La config a nivel de usuario (``~/.claude/CLAUDE.md``,
+        plugins, hooks, skills) la apaga ``--safe-mode`` en :meth:`_command`.
+        Límite residual: la config administrada (policy) de la organización
+        sigue aplicando, por diseño del CLI.
         """
         try:
             with tempfile.TemporaryDirectory(
