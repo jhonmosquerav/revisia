@@ -253,3 +253,16 @@ def test_binario_nativo_no_activa_la_guardia(monkeypatch) -> None:
     resp = provider.complete(LLMRequest(prompt="x", system="usa el 100%"))
     assert resp.text == "ok"
     assert len(recorder) == 1
+
+
+def test_command_desactiva_todas_las_herramientas(monkeypatch) -> None:
+    """`--tools ""` deja al modelo sin herramientas; `--allowedTools` solo regula permisos."""
+    recorder: list[dict] = []
+    monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:\bin\claude.exe")
+    monkeypatch.setattr(cc.subprocess, "run", _fake_run_factory([_result_json("ok")], recorder))
+    _provider().complete(LLMRequest(prompt="x"))
+
+    cmd = recorder[0]["cmd"]
+    idx = cmd.index("--tools")
+    assert cmd[idx + 1] == ""
+    assert "--allowedTools" not in cmd

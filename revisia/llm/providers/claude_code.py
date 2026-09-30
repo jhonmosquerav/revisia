@@ -119,8 +119,8 @@ class ClaudeCodeProvider:
             "--model",
             self.model,
             "--no-session-persistence",  # no guarda la sesión en disco
-            "--allowedTools",
-            "",  # razonamiento puro: sin herramientas (ni prompts de permiso)
+            "--tools",
+            "",  # razonamiento puro: desactiva todas las herramientas integradas
         ]
         if req.system:
             cmd += ["--append-system-prompt", req.system]
