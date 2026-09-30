@@ -10,7 +10,7 @@ está instalado, el error es explícito y accionable.
 from __future__ import annotations
 
 import importlib
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
 
@@ -41,6 +41,12 @@ _BUILDERS: dict[str, tuple[str, str]] = {
 # a un flag del CLI (p. ej. `--dangerously-skip-permissions` o `-x`).
 MODEL_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$"
 
+# Nivel de esfuerzo de razonamiento (Claude Code: flag --effort). En los modelos
+# 5.5 sustituye a temperature como palanca de costo/calidad. Solo lo aceptan los
+# proveedores listados en _EFFORT_PROVIDERS; en el resto es un error de config.
+Effort = Literal["low", "medium", "high", "xhigh", "max"]
+_EFFORT_PROVIDERS = frozenset({"claude_code"})
+
 
 class ProviderConfig(BaseModel):
     """Config de proveedor para una etapa (subbloque ``llm`` de protocol.yml).
@@ -51,6 +57,7 @@ class ProviderConfig(BaseModel):
         temperature: temperatura por defecto de la etapa.
         top_p: nucleus sampling opcional.
         seed: semilla para reproducibilidad (si el proveedor la soporta).
+        effort: nivel de esfuerzo (solo claude_code); None = default del modelo.
     """
 
     provider: str
@@ -58,6 +65,7 @@ class ProviderConfig(BaseModel):
     temperature: float = 0.0
     top_p: float | None = None
     seed: int | None = None
+    effort: Effort | None = None
 
 
 def available_providers() -> list[str]:
@@ -69,13 +77,19 @@ def build_provider(cfg: ProviderConfig) -> LLMProvider:
     """Instancia el proveedor descrito por ``cfg`` (import perezoso).
 
     Raises:
-        ValueError: si el nombre de proveedor no está registrado.
+        ValueError: si el nombre de proveedor no está registrado, o si se pide
+            ``effort`` en un proveedor que no lo soporta.
         RuntimeError: si el SDK del proveedor no está instalado.
     """
     if cfg.provider not in _BUILDERS:
         raise ValueError(
             f"Proveedor desconocido: {cfg.provider!r}. "
             f"Disponibles: {', '.join(available_providers())}."
+        )
+    if cfg.effort is not None and cfg.provider not in _EFFORT_PROVIDERS:
+        raise ValueError(
+            f"effort={cfg.effort!r} no aplica al proveedor {cfg.provider!r}; "
+            f"solo lo aceptan: {', '.join(sorted(_EFFORT_PROVIDERS))}."
         )
     module_path, class_name = _BUILDERS[cfg.provider]
     try:
@@ -87,4 +101,7 @@ def build_provider(cfg: ProviderConfig) -> LLMProvider:
             f"Detalle: {exc}"
         ) from exc
     provider_cls = getattr(module, class_name)
-    return provider_cls(model=cfg.model)
+    kwargs: dict[str, object] = {"model": cfg.model}
+    if cfg.effort is not None:
+        kwargs["effort"] = cfg.effort
+    return provider_cls(**kwargs)

@@ -6,6 +6,29 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **`effort` por etapa** en el bloque `llm` de `protocol.yml` (`low`, `medium`,
+  `high`, `xhigh`, `max`): en los modelos 5.5 sustituye a `temperature` como
+  palanca de costo/calidad. Solo lo acepta `claude_code` (viaja como
+  `--effort`); pedirlo en otro proveedor es un error de config.
+
+### Fixed
+- **`claude_code` corre sin herramientas de verdad**: `--tools ""` sustituye a
+  `--allowedTools ""`, que solo regulaba permisos y dejaba las herramientas
+  activas (auditoría 2026-09-03, hallazgo A10).
+- **`claude_code` no carga servidores MCP** (`--strict-mcp-config` sin
+  `--mcp-config`): evita fugas de contexto y handles abiertos.
+- **`claude_code` corre en un cwd temporal neutro** (limpieza tolerante en
+  Windows): el `CLAUDE.md` y los hooks del proyecto que invoca ya no llegan a las
+  etapas de juicio (regla anti-sesgo; A10, herencia de `cwd`).
+- **`claude_code` aísla la config de usuario con `--safe-mode`**:
+  `~/.claude/CLAUDE.md`, plugins, sus hooks y skills dejaban de ser neutrales
+  para el cribado y la extracción. Verificado con sondas empíricas: sin el flag
+  el modelo reconoce las instrucciones globales del usuario; con él, no, y la
+  autenticación por suscripción (OAuth) sigue funcionando. No se usa `--bare`
+  porque exige `ANTHROPIC_API_KEY`.
+- El `effort` de `claude_code` se valida al construir el proveedor.
+
 ## [0.7.0] · 2026-09-28
 
 ### Added

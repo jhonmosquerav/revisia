@@ -9,6 +9,7 @@ schema + reintento, el ``RunMeta`` (no determinista) y los errores accionables.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -49,7 +50,14 @@ def _fake_run_factory(stdouts, recorder=None):
 
     def _fake_run(cmd, **kwargs):
         if recorder is not None:
-            recorder.append({"cmd": cmd, "input": kwargs.get("input"), "env": kwargs.get("env")})
+            recorder.append(
+                {
+                    "cmd": cmd,
+                    "input": kwargs.get("input"),
+                    "env": kwargs.get("env"),
+                    "cwd": kwargs.get("cwd"),
+                }
+            )
         nxt = next(calls)
         if isinstance(nxt, BaseException):
             raise nxt
@@ -253,3 +261,92 @@ def test_binario_nativo_no_activa_la_guardia(monkeypatch) -> None:
     resp = provider.complete(LLMRequest(prompt="x", system="usa el 100%"))
     assert resp.text == "ok"
     assert len(recorder) == 1
+
+
+def test_command_desactiva_todas_las_herramientas(monkeypatch) -> None:
+    """`--tools ""` deja al modelo sin herramientas; `--allowedTools` solo regula permisos."""
+    recorder: list[dict] = []
+    monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:\bin\claude.exe")
+    monkeypatch.setattr(cc.subprocess, "run", _fake_run_factory([_result_json("ok")], recorder))
+    _provider().complete(LLMRequest(prompt="x"))
+
+    cmd = recorder[0]["cmd"]
+    idx = cmd.index("--tools")
+    assert cmd[idx + 1] == ""
+    assert "--allowedTools" not in cmd
+
+
+def test_command_aisla_config_de_usuario_con_safe_mode(monkeypatch) -> None:
+    """`--safe-mode` apaga CLAUDE.md, plugins y hooks del usuario sin tocar la auth.
+
+    No se usa `--bare`: obliga a autenticar con ANTHROPIC_API_KEY y rompe la
+    suscripción (OAuth) de la que depende este proveedor.
+    """
+    recorder: list[dict] = []
+    monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:\bin\claude.exe")
+    monkeypatch.setattr(cc.subprocess, "run", _fake_run_factory([_result_json("ok")], recorder))
+    _provider().complete(LLMRequest(prompt="x"))
+
+    cmd = recorder[0]["cmd"]
+    assert "--safe-mode" in cmd
+    assert "--bare" not in cmd
+
+
+def test_safe_mode_pasa_el_guard_del_shim_cmd(monkeypatch) -> None:
+    """El flag nuevo no contiene metacaracteres de cmd.exe: el shim .cmd lo acepta."""
+    recorder: list[dict] = []
+    monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:\bin\claude.CMD")
+    monkeypatch.setattr(cc.subprocess, "run", _fake_run_factory([_result_json("ok")], recorder))
+    _provider().complete(LLMRequest(prompt="x"))
+
+    assert "--safe-mode" in recorder[0]["cmd"]
+
+
+def test_effort_viaja_como_flag(monkeypatch) -> None:
+    recorder: list[dict] = []
+    monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:\bin\claude.exe")
+    monkeypatch.setattr(cc.subprocess, "run", _fake_run_factory([_result_json("ok")], recorder))
+    cc.ClaudeCodeProvider(model="sonnet", effort="low").complete(LLMRequest(prompt="x"))
+
+    cmd = recorder[0]["cmd"]
+    assert cmd[cmd.index("--effort") + 1] == "low"
+
+
+def test_sin_effort_no_se_envia_flag(monkeypatch) -> None:
+    recorder: list[dict] = []
+    monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:\bin\claude.exe")
+    monkeypatch.setattr(cc.subprocess, "run", _fake_run_factory([_result_json("ok")], recorder))
+    _provider().complete(LLMRequest(prompt="x"))
+
+    assert "--effort" not in recorder[0]["cmd"]
+
+
+def test_claude_corre_en_cwd_neutro_sin_config_de_proyecto(monkeypatch, tmp_path) -> None:
+    """claude -p no debe heredar el cwd: evitaría cargar CLAUDE.md/hooks del proyecto."""
+    recorder: list[dict] = []
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "CLAUDE.md").write_text("memoria del proyecto", encoding="utf-8")
+    monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:\bin\claude.exe")
+    monkeypatch.setattr(cc.subprocess, "run", _fake_run_factory([_result_json("ok")], recorder))
+    _provider().complete(LLMRequest(prompt="x"))
+
+    cwd = recorder[0]["cwd"]
+    assert cwd is not None
+    assert Path(cwd).resolve() != tmp_path.resolve()
+    assert "revisia-claude-" in Path(cwd).name
+
+
+def test_timeout_se_reporta_como_runtime_error(monkeypatch) -> None:
+    monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:\bin\claude.exe")
+    monkeypatch.setattr(
+        cc.subprocess,
+        "run",
+        _fake_run_factory([cc.subprocess.TimeoutExpired(cmd="claude", timeout=1)]),
+    )
+    with pytest.raises(RuntimeError, match="no respondió"):
+        _provider().complete(LLMRequest(prompt="x"))
+
+
+def test_effort_invalido_se_rechaza_en_el_proveedor() -> None:
+    with pytest.raises(ValueError, match="effort"):
+        cc.ClaudeCodeProvider("opus", effort="altisimo")

@@ -44,6 +44,14 @@ def _template_raw() -> dict:
     return raw
 
 
+def test_effort_por_etapa_se_carga_desde_protocolo() -> None:
+    raw = _template_raw()
+    raw["llm"]["screening_ta"] = {"provider": "claude_code", "model": "sonnet", "effort": "low"}
+    protocol = ReviewProtocol.model_validate(raw)
+    assert protocol.provider_for("screening_ta").effort == "low"
+    assert protocol.provider_for("busqueda").effort is None
+
+
 @pytest.mark.parametrize("stage", ["screening_ta", "screening_ft", "extraccion", "rob"])
 @pytest.mark.parametrize("level", ["A2", "A3"])
 def test_autonomy_a3_in_judgement_stage_rejected(stage: str, level: str) -> None:

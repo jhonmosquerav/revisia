@@ -23,13 +23,15 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from dataclasses import replace
 from pathlib import Path
-from typing import TypeVar
+from typing import TypeVar, get_args
 
 from pydantic import BaseModel, ValidationError
 
 from revisia.llm.base import LLMRequest, LLMResponse
+from revisia.llm.registry import Effort
 from revisia.provenance.runmeta import RunMeta, sha256_text
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
@@ -72,8 +74,12 @@ class ClaudeCodeProvider:
         timeout: int = _DEFAULT_TIMEOUT,
         max_retries: int = _DEFAULT_RETRIES,
         clean_env: bool | None = None,
+        effort: str | None = None,
     ) -> None:
+        if effort is not None and effort not in get_args(Effort):
+            raise ValueError(f"effort={effort!r} inválido; usa uno de {get_args(Effort)}.")
         self.model = model
+        self.effort = effort
         self.cli = cli
         self.timeout = timeout
         self.max_retries = max_retries
@@ -119,9 +125,21 @@ class ClaudeCodeProvider:
             "--model",
             self.model,
             "--no-session-persistence",  # no guarda la sesión en disco
-            "--allowedTools",
-            "",  # razonamiento puro: sin herramientas (ni prompts de permiso)
+            "--tools",
+            "",  # razonamiento puro: desactiva todas las herramientas integradas
+            "--strict-mcp-config",  # sin --mcp-config no carga servidores MCP (fugas, handles)
+            # Regla anti-sesgo: el cwd neutro no basta. La config de usuario
+            # (~/.claude/CLAUDE.md, plugins, sus hooks y skills) seguía llegando
+            # al prompt de cribado/extracción; y como el tmp cuelga del home, el
+            # recorrido hacia arriba recogía ~/.claude/CLAUDE.md incluso como
+            # memoria "de proyecto". --safe-mode apaga todas esas
+            # personalizaciones y deja intacta la auth (OAuth/suscripción).
+            # No se usa --bare: exige ANTHROPIC_API_KEY y rompe la suscripción.
+            # Verificado con sondas empíricas (CLI 2.1.285, 2026-09-30).
+            "--safe-mode",
         ]
+        if self.effort:
+            cmd += ["--effort", self.effort]
         if req.system:
             cmd += ["--append-system-prompt", req.system]
         self._guard_cmd_shim(cmd)
@@ -179,17 +197,28 @@ class ClaudeCodeProvider:
         Raises:
             RuntimeError: si el CLI no está instalado, falla, agota el timeout
                 o devuelve un error de API. Siempre con mensaje accionable.
+
+        Corre en un directorio temporal vacío para que el ``CLAUDE.md`` y los hooks
+        de ``.claude/`` del proyecto que invoca no lleguen al prompt (regla
+        anti-sesgo). La config a nivel de usuario (``~/.claude/CLAUDE.md``,
+        plugins, hooks, skills) la apaga ``--safe-mode`` en :meth:`_command`.
+        Límite residual: la config administrada (policy) de la organización
+        sigue aplicando, por diseño del CLI.
         """
         try:
-            proc = subprocess.run(
-                self._command(req),
-                input=req.prompt,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                timeout=self.timeout,
-                env=self._subprocess_env(),
-            )
+            with tempfile.TemporaryDirectory(
+                prefix="revisia-claude-", ignore_cleanup_errors=True
+            ) as neutral_cwd:
+                proc = subprocess.run(
+                    self._command(req),
+                    input=req.prompt,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=self.timeout,
+                    env=self._subprocess_env(),
+                    cwd=neutral_cwd,  # sin CLAUDE.md ni hooks del proyecto que invoca
+                )
         except FileNotFoundError as exc:
             raise RuntimeError(
                 f"No se encontró el CLI {self.cli!r}. El proveedor 'claude_code' "
