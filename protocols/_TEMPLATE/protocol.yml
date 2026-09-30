@@ -80,6 +80,7 @@ llm:
 #     provider: claude_code
 #     model: sonnet          # screening masivo: rápido/barato; sube a 'opus' para más juicio
 #     temperature: 0.0
+#     # effort: low         # opcional (solo claude_code): low|medium|high|xhigh|max
 #   sintesis:
 #     provider: claude_code
 #     model: opus            # la síntesis narrativa agradece el modelo más fuerte

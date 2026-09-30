@@ -266,3 +266,22 @@ def test_command_desactiva_todas_las_herramientas(monkeypatch) -> None:
     idx = cmd.index("--tools")
     assert cmd[idx + 1] == ""
     assert "--allowedTools" not in cmd
+
+
+def test_effort_viaja_como_flag(monkeypatch) -> None:
+    recorder: list[dict] = []
+    monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:\bin\claude.exe")
+    monkeypatch.setattr(cc.subprocess, "run", _fake_run_factory([_result_json("ok")], recorder))
+    cc.ClaudeCodeProvider(model="sonnet", effort="low").complete(LLMRequest(prompt="x"))
+
+    cmd = recorder[0]["cmd"]
+    assert cmd[cmd.index("--effort") + 1] == "low"
+
+
+def test_sin_effort_no_se_envia_flag(monkeypatch) -> None:
+    recorder: list[dict] = []
+    monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:\bin\claude.exe")
+    monkeypatch.setattr(cc.subprocess, "run", _fake_run_factory([_result_json("ok")], recorder))
+    _provider().complete(LLMRequest(prompt="x"))
+
+    assert "--effort" not in recorder[0]["cmd"]

@@ -124,3 +124,18 @@ def test_provider_model_rejects_injection(bad: str) -> None:
 )
 def test_provider_model_accepts_real_ids(ok: str) -> None:
     assert ProviderConfig(provider="gemini", model=ok).model == ok
+
+
+def test_effort_se_propaga_a_claude_code() -> None:
+    provider = build_provider(ProviderConfig(provider="claude_code", model="opus", effort="high"))
+    assert provider.effort == "high"
+
+
+def test_effort_invalido_se_rechaza() -> None:
+    with pytest.raises(ValueError):
+        ProviderConfig(provider="claude_code", model="opus", effort="altisimo")
+
+
+def test_effort_en_proveedor_sin_soporte_falla_con_mensaje() -> None:
+    with pytest.raises(ValueError, match="effort"):
+        build_provider(ProviderConfig(provider="gemini", model="m", effort="low"))

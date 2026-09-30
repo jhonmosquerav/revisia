@@ -72,8 +72,10 @@ class ClaudeCodeProvider:
         timeout: int = _DEFAULT_TIMEOUT,
         max_retries: int = _DEFAULT_RETRIES,
         clean_env: bool | None = None,
+        effort: str | None = None,
     ) -> None:
         self.model = model
+        self.effort = effort
         self.cli = cli
         self.timeout = timeout
         self.max_retries = max_retries
@@ -122,6 +124,8 @@ class ClaudeCodeProvider:
             "--tools",
             "",  # razonamiento puro: desactiva todas las herramientas integradas
         ]
+        if self.effort:
+            cmd += ["--effort", self.effort]
         if req.system:
             cmd += ["--append-system-prompt", req.system]
         self._guard_cmd_shim(cmd)
