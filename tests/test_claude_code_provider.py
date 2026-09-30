@@ -50,8 +50,14 @@ def _fake_run_factory(stdouts, recorder=None):
 
     def _fake_run(cmd, **kwargs):
         if recorder is not None:
-            recorder.append({"cmd": cmd, "input": kwargs.get("input"), "env": kwargs.get("env"),
-                             "cwd": kwargs.get("cwd")})
+            recorder.append(
+                {
+                    "cmd": cmd,
+                    "input": kwargs.get("input"),
+                    "env": kwargs.get("env"),
+                    "cwd": kwargs.get("cwd"),
+                }
+            )
         nxt = next(calls)
         if isinstance(nxt, BaseException):
             raise nxt
@@ -294,7 +300,7 @@ def test_claude_corre_en_cwd_neutro_sin_config_de_proyecto(monkeypatch, tmp_path
     recorder: list[dict] = []
     monkeypatch.chdir(tmp_path)
     (tmp_path / "CLAUDE.md").write_text("memoria del proyecto", encoding="utf-8")
-    monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:in\claude.exe")
+    monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:\bin\claude.exe")
     monkeypatch.setattr(cc.subprocess, "run", _fake_run_factory([_result_json("ok")], recorder))
     _provider().complete(LLMRequest(prompt="x"))
 
@@ -302,3 +308,19 @@ def test_claude_corre_en_cwd_neutro_sin_config_de_proyecto(monkeypatch, tmp_path
     assert cwd is not None
     assert Path(cwd).resolve() != tmp_path.resolve()
     assert "revisia-claude-" in Path(cwd).name
+
+
+def test_timeout_se_reporta_como_runtime_error(monkeypatch) -> None:
+    monkeypatch.setattr(cc.shutil, "which", lambda _name: r"C:\bin\claude.exe")
+    monkeypatch.setattr(
+        cc.subprocess,
+        "run",
+        _fake_run_factory([cc.subprocess.TimeoutExpired(cmd="claude", timeout=1)]),
+    )
+    with pytest.raises(RuntimeError, match="no respondió"):
+        _provider().complete(LLMRequest(prompt="x"))
+
+
+def test_effort_invalido_se_rechaza_en_el_proveedor() -> None:
+    with pytest.raises(ValueError, match="effort"):
+        cc.ClaudeCodeProvider("opus", effort="altisimo")

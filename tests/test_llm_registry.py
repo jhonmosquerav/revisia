@@ -136,6 +136,10 @@ def test_effort_invalido_se_rechaza() -> None:
         ProviderConfig(provider="claude_code", model="opus", effort="altisimo")
 
 
-def test_effort_en_proveedor_sin_soporte_falla_con_mensaje() -> None:
+def test_effort_en_proveedor_sin_soporte_falla_con_mensaje(monkeypatch) -> None:
+    def _no_debe_importar(_name):
+        raise ImportError("la validación de effort debe ocurrir antes del import")
+
+    monkeypatch.setattr("revisia.llm.registry.importlib.import_module", _no_debe_importar)
     with pytest.raises(ValueError, match="effort"):
         build_provider(ProviderConfig(provider="gemini", model="m", effort="low"))

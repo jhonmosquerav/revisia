@@ -26,11 +26,12 @@ import subprocess
 import tempfile
 from dataclasses import replace
 from pathlib import Path
-from typing import TypeVar
+from typing import TypeVar, get_args
 
 from pydantic import BaseModel, ValidationError
 
 from revisia.llm.base import LLMRequest, LLMResponse
+from revisia.llm.registry import Effort
 from revisia.provenance.runmeta import RunMeta, sha256_text
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
@@ -75,6 +76,8 @@ class ClaudeCodeProvider:
         clean_env: bool | None = None,
         effort: str | None = None,
     ) -> None:
+        if effort is not None and effort not in get_args(Effort):
+            raise ValueError(f"effort={effort!r} inválido; usa uno de {get_args(Effort)}.")
         self.model = model
         self.effort = effort
         self.cli = cli
@@ -124,6 +127,7 @@ class ClaudeCodeProvider:
             "--no-session-persistence",  # no guarda la sesión en disco
             "--tools",
             "",  # razonamiento puro: desactiva todas las herramientas integradas
+            "--strict-mcp-config",  # sin --mcp-config no carga servidores MCP (fugas, handles)
         ]
         if self.effort:
             cmd += ["--effort", self.effort]
@@ -191,7 +195,9 @@ class ClaudeCodeProvider:
         sigue cargándose.
         """
         try:
-            with tempfile.TemporaryDirectory(prefix="revisia-claude-") as neutral_cwd:
+            with tempfile.TemporaryDirectory(
+                prefix="revisia-claude-", ignore_cleanup_errors=True
+            ) as neutral_cwd:
                 proc = subprocess.run(
                     self._command(req),
                     input=req.prompt,
