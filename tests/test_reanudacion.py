@@ -7,11 +7,12 @@ import json
 import os
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 from fakes import ScriptedProvider, fetch_disponible, fetch_no_disponible
-from hitl_helpers import correr_hasta, responder_gate
+from hitl_helpers import correr_hasta, leer_solicitud, responder_gate
 
 from revisia.agent_driver import run_review_with_agent
 from revisia.agents.fulltext import FullText
@@ -25,7 +26,7 @@ from revisia.orchestration.journal import JournalError
 from revisia.orchestration.pipeline import run_pipeline
 from revisia.orchestration.run_context import RunContext, RunInterrupted
 from revisia.orchestration.snapshot import read_run_info
-from revisia.provenance.runmeta import sha256_text
+from revisia.provenance.runmeta import canonical_sha256, sha256_text
 from revisia.schemas.artifacts import GATED_STAGES, JournalEntry, LLMCall
 from revisia.schemas.records import SearchRecord
 
@@ -696,3 +697,144 @@ def test_payloads_estables_entre_reanudaciones_y_sin_rutas_absolutas(
     for texto in antes.values():
         assert str(tmp_path) not in texto
         assert tmp_path.as_posix() not in texto
+
+
+# ── Salidas del diario que ya no validan y clave de la extracción (revisión de B8, B13) ──
+
+
+@pytest.mark.parametrize(
+    ("etapa", "diario", "campo", "valor", "modelo"),
+    [
+        pytest.param(
+            "screening_ta",
+            "03_screening/journal.jsonl",
+            "ensemble_label",
+            "quizá",
+            "ScreeningDecision",
+            id="cribado_ta",
+        ),
+        pytest.param(
+            "screening_ft",
+            "04_fulltext/journal.jsonl",
+            "ensemble_label",
+            "quizá",
+            "ScreeningDecision",
+            id="cribado_ft",
+        ),
+        pytest.param(
+            "screening_ft",
+            "04_fulltext/retrieval.jsonl",
+            "reason",
+            "motivo_inventado",
+            "RetrievalOutcome",
+            id="recuperacion",
+        ),
+    ],
+)
+def test_salida_invalida_del_diario_es_error_del_diario_y_no_una_caida(
+    tmp_path: Path, etapa: str, diario: str, campo: str, valor: str, modelo: str
+) -> None:
+    # Un diario editado a mano (o un modelo que cambió) dejaba una salida que ya no
+    # valida: el ValidationError caía en el `except` genérico, salía como RunInterrupted
+    # (rc 3) y cada reanudación fallaba igual. Es un error del diario (rc 2).
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    pausa = correr_hasta(
+        protocol, EXAMPLE, ctx, search_fn=_busqueda, fetch_fn=fetch_disponible, parar_en=etapa
+    )
+    assert (pausa.status, pausa.stage) == ("paused", etapa)
+    ruta = ctx.run_dir / diario
+    lineas = ruta.read_text("utf-8").split("\n")
+    entrada = json.loads(lineas[0])
+    entrada["output"][campo] = valor
+    lineas[0] = json.dumps(entrada, ensure_ascii=False)
+    ruta.write_text("\n".join(lineas), encoding="utf-8", newline="\n")
+    antes = read_run_info(ctx.run_dir)
+
+    with pytest.raises(JournalError, match=r"ya no es fiable") as exc:
+        run_pipeline(protocol, EXAMPLE, RunContext.open(ctx.run_dir), fetch_fn=fetch_disponible)
+
+    mensaje = str(exc.value)
+    assert diario.replace("/", os.sep) in mensaje  # nombra el diario
+    assert "'rec-1'" in mensaje  # y el registro
+    assert modelo in mensaje
+    assert "empieza una nueva" in mensaje
+    info = read_run_info(ctx.run_dir)
+    assert (info.status, info.stage) == ("paused", etapa)
+    assert info.interruptions == antes.interruptions == []  # no es una caída
+
+
+def test_el_hash_del_gate_ft_cambia_al_resolverse_un_transitorio(tmp_path: Path) -> None:
+    # Contrato vigente (§14 del spec): un fallo transitorio de red no se congela, así que
+    # el gate de FT de la primera invocación (rec-1 «no recuperado») y el de la
+    # reanudación (rec-1 con texto) tienen payloads distintos y, por tanto, otro
+    # `request_sha256`: una decisión escrita contra el primero no vale para el segundo.
+    llamadas: dict[str, int] = {}
+
+    def fetch(record: SearchRecord) -> FullText:
+        llamadas[record.record_id] = llamadas.get(record.record_id, 0) + 1
+        if record.record_id == "rec-1" and llamadas["rec-1"] == 1:
+            return FullText(text="", available=False, reason="error_http", detail="sin red")
+        return fetch_disponible(record)
+
+    protocol, ctx = _pausar_en_ft(tmp_path, fetch)
+    primera = leer_solicitud(ctx.run_dir, "screening_ft")
+    assert primera["n_no_recuperados"] == 1
+
+    run_pipeline(protocol, EXAMPLE, RunContext.open(ctx.run_dir), fetch_fn=fetch)
+
+    segunda = leer_solicitud(ctx.run_dir, "screening_ft")
+    assert segunda["n_no_recuperados"] == 0
+    assert segunda["request_sha256"] != primera["request_sha256"]
+
+
+def test_clave_de_extraccion_ve_titulo_y_resumen() -> None:
+    # `extraccion.extract_record` manda a la IA `record.title` y `record.abstract`: si
+    # cambian, la clave del diario tiene que cambiar (y la de RoB, que la hereda).
+    cfg = load_protocol(EXAMPLE).provider_for("extraccion")
+    run = SimpleNamespace(form_fields=[{"name": "tecnica"}])
+    base = SearchRecord(record_id="r", title="Título", abstract="Resumen", source_db="OpenAlex")
+    variantes = [
+        base,
+        base.model_copy(update={"abstract": "Otro resumen"}),
+        base.model_copy(update={"title": "Otro título"}),
+    ]
+    claves = {
+        canonical_sha256(pipeline_mod._extraction_inputs(run, r, {"r": "texto"}, cfg))
+        for r in variantes
+    }
+    assert len(claves) == 3
+    # El hash del texto sigue en la clave.
+    con_otro_texto = pipeline_mod._extraction_inputs(run, base, {"r": "otro texto"}, cfg)
+    assert canonical_sha256(con_otro_texto) not in claves
+
+
+@pytest.mark.parametrize(
+    ("etapa", "marca", "esperadas"),
+    [
+        # 2 primarias + 1 de la doble extracción (rec-1) + 2 al recalcular rec-1 en ambos.
+        pytest.param("extraccion", "extractor de datos", 5, id="extraccion"),
+        pytest.param("rob", "RIESGO DE SESGO", 3, id="rob"),
+    ],
+)
+def test_resumen_cambiado_al_reanudar_recalcula_extraccion_y_rob(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, etapa: str, marca: str, esperadas: int
+) -> None:
+    proveedor = ScriptedProvider()
+    monkeypatch.setattr(pipeline_mod, "build_provider", lambda _cfg: proveedor)
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    pausa = correr_hasta(
+        protocol, EXAMPLE, ctx, search_fn=_busqueda, fetch_fn=fetch_disponible, parar_en=etapa
+    )
+    assert pausa.stage == etapa
+    antes = _llamadas(proveedor, marca)
+    registros = ctx.run_dir / "02_dedup" / "records.json"
+    datos = json.loads(registros.read_text("utf-8"))
+    datos[0]["abstract"] = "Resumen corregido tras reindexar."
+    registros.write_text(json.dumps(datos, ensure_ascii=False), encoding="utf-8")
+
+    run_pipeline(protocol, EXAMPLE, RunContext.open(ctx.run_dir), fetch_fn=fetch_disponible)
+
+    # Sin `title`/`abstract` en la clave el diario devolvía la extracción vieja.
+    assert _llamadas(proveedor, marca) == esperadas > antes

@@ -121,6 +121,29 @@ class StageJournal:
         self._entries.setdefault((entry.record_id, entry.input_sha256), entry)
 
 
+def entry_output(  # noqa: UP047
+    entry: JournalEntry, model: type[ModelT], *, source: Path | str
+) -> ModelT:
+    """``entry.output`` validado como ``model``; si ya no valida, ``JournalError``.
+
+    Un diario editado a mano, o un modelo que cambió entre versiones, deja una
+    salida que ya no valida. Dejar pasar el ``ValidationError`` lo convertía en
+    ``RunInterrupted`` (rc 3) y cada reanudación fallaba igual, un bucle sin
+    salida (revisión de la Tarea 8): es un error del diario (rc 2), como la caché
+    alterada. ``source`` nombra el diario para que el mensaje diga dónde mirar.
+    """
+    try:
+        return model.model_validate(entry.output)
+    except ValidationError as exc:
+        error = exc.errors()[0]
+        donde = ".".join(str(parte) for parte in error["loc"]) or model.__name__
+        raise JournalError(
+            f"{source}: la salida de {entry.record_id!r} ya no valida como {model.__name__} "
+            f"({donde}: {error['msg']}); el diario se editó a mano o el modelo cambió: "
+            "la corrida ya no es fiable, empieza una nueva."
+        ) from exc
+
+
 def journaled(  # noqa: UP047
     journal: StageJournal,
     *,
@@ -144,7 +167,7 @@ def journaled(  # noqa: UP047
     input_sha256 = canonical_sha256(inputs)
     entry = journal.lookup(record_id, input_sha256)
     if entry is not None:
-        return model.model_validate(entry.output)
+        return entry_output(entry, model, source=journal.path)
     value, metas = compute()
     calls = [
         run_ctx.record_meta(

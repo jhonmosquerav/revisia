@@ -87,7 +87,10 @@ class ResearchBrain:
         if not path.exists():
             return []
         events: list[dict[str, Any]] = []
-        for line in path.read_text(encoding="utf-8").splitlines():
+        # Se parte por el salto de línea y no con `splitlines()`: `json.dumps` con
+        # `ensure_ascii=False` escribe U+2028/U+2029/U+0085 crudos dentro de las cadenas
+        # y `splitlines()` partiría el evento por la mitad.
+        for line in path.read_text(encoding="utf-8").split("\n"):
             if line.strip():
                 events.append(json.loads(line))
         return events

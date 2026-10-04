@@ -116,6 +116,37 @@ def test_recall_y_delta_living_review(tmp_path) -> None:
     assert "[c]" in episode
 
 
+def test_el_cerebro_sobrevive_a_separadores_unicode_en_el_evento(tmp_path) -> None:
+    # `json.dumps(ensure_ascii=False)` escribe U+2028/U+2029/U+0085 crudos y
+    # `splitlines()` partía el evento por la mitad (JSONDecodeError al leer).
+    brain = ResearchBrain(tmp_path / "cerebro")
+    pregunta = "¿a\u0085b\u2028c\u2029d?"
+    brain.record_review(
+        slug="rev",
+        timestamp="t1",
+        question=pregunta,
+        counts={},
+        included_ids=["a"],
+        narrative="n",
+        models=[],
+    )
+    brain.record_review(
+        slug="rev",
+        timestamp="t2",
+        question=pregunta,
+        counts={},
+        included_ids=["a"],
+        narrative="n",
+        models=[],
+    )
+    eventos = tmp_path / "cerebro" / "genome" / "events.jsonl"
+    assert "\u0085" in eventos.read_text(encoding="utf-8")  # va crudo
+    recall = brain.recall("rev")
+    assert recall is not None and recall.n_runs == 2
+    assert brain.has_run("rev", "t1") and brain.has_run("rev", "t2")
+    assert [r.slug for r in brain.summary()] == ["rev"]
+
+
 def test_paginas_wiki_llevan_frontmatter(tmp_path) -> None:
     brain = ResearchBrain(tmp_path / "cerebro")
     brain.record_review(

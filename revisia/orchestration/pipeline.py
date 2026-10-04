@@ -69,7 +69,7 @@ from revisia.llm.registry import ProviderConfig, build_provider
 from revisia.meta_analysis import MetaAnalysisResult, meta_analyze
 from revisia.metrics import ScreeningMetrics, compute_screening_metrics
 from revisia.orchestration.hitl import DecisionFileError, GateResult, review_gate
-from revisia.orchestration.journal import JournalError, StageJournal, journaled
+from revisia.orchestration.journal import JournalError, StageJournal, entry_output, journaled
 from revisia.orchestration.run_context import (
     LegacyRunError,
     RunContext,
@@ -536,10 +536,13 @@ def _retrieve(
         )
         entry = journal.lookup(record.record_id, input_sha256)
         if entry is not None:
-            outcome = RetrievalOutcome.model_validate(entry.output)
+            outcome = entry_output(entry, RetrievalOutcome, source=journal.path)
         else:
-            # El texto va a la caché antes que la entrada al diario: una caída entre
-            # medias deja un texto huérfano (inocuo), nunca una entrada sin texto.
+            # No usa `journaled`, que escribe siempre la salida de `compute`: aquí los
+            # motivos transitorios (`_TRANSIENT_FULLTEXT_REASONS`) no se escriben, para
+            # reintentarlos al reanudar, y el texto se cachea antes del `append` (una
+            # caída entre medias deja un texto huérfano, inocuo, nunca una entrada sin
+            # texto).
             outcome = _fetch_one(run, fetch, record)
             if outcome.reason not in _TRANSIENT_FULLTEXT_REASONS:
                 journal.append(
@@ -643,10 +646,18 @@ def _fulltext(run: _Run, passed_ta: list[SearchRecord], fetch_fn: FetchFn | None
 def _extraction_inputs(
     run: _Run, record: SearchRecord, fulltexts: dict[str, str], cfg: ProviderConfig
 ) -> dict:
-    """``inputs`` del diario de extracción (spec §7): registro, texto, formulario y proveedor."""
+    """``inputs`` del diario de extracción: registro, texto, formulario y proveedor.
+
+    Incluye ``title`` y ``abstract`` porque ``extraccion.extract_record`` los manda a la
+    IA junto con el texto: si el registro cambia, el diario no puede devolver la
+    extracción vieja (revisión de la Tarea 13). Desvía la tabla del §7 del spec, que
+    solo pedía el hash del texto; la de RoB la hereda (``_assess_rob``).
+    """
     text = fulltexts.get(record.record_id)
     return {
         "record_id": record.record_id,
+        "title": record.title,
+        "abstract": record.abstract,
         "text_sha256": sha256_text(text) if text is not None else None,
         "form_fields": run.form_fields,
         "proveedor": [f"{cfg.provider}:{cfg.model}", cfg.temperature, cfg.seed],
