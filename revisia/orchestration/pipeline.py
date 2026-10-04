@@ -880,13 +880,15 @@ def _run_stages(
         meta_display=meta_display,
     )
 
-    # Checkpoint final del reporte (A1).
+    # Checkpoint final del reporte (A1). La solicitud no lleva rutas absolutas (su
+    # hash tiene que ser estable entre reanudaciones): el documento va por su hash.
+    documento = (deliverable / "documento.md").read_text(encoding="utf-8")
     final_gate = run.gate(
         "reporte",
         {
             "included": len(included),
             "hallucination_flagged": verification.hallucination_flagged,
-            "deliverable": str(deliverable),
+            "documento_sha256": sha256_text(documento),
         },
     )
     # Un reporte rechazado ya no se informa como "completed" (auditoría

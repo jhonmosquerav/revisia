@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 import yaml
 from fakes import ScriptedProvider, fetch_disponible, fetch_no_disponible
+from hitl_helpers import correr_hasta
 
 from revisia.audit import run_audit
 from revisia.config import load_protocol
@@ -132,14 +133,24 @@ def test_pipeline_ensemble_y_metricas(tmp_path) -> None:
 
 
 def test_rejected_final_gate_is_not_completed(tmp_path) -> None:
+    # Desde la Ola 1 una decisión.yml lleva el request_sha256 de su solicitud, así
+    # que no se puede escribir antes de correr: el humano responde a cada pausa
+    # (aprueba los gates de juicio) y rechaza el reporte final.
     protocol = load_protocol(EXAMPLE)
     ctx = RunContext(protocol.slug, tmp_path, "TEST")
-    (ctx.stage_dir("reporte") / "decision.yml").write_text(
-        "approved: false\nactor: human:revisora\nreason: síntesis sin respaldo\n",
-        encoding="utf-8",
-    )
-    result = run_pipeline(
-        protocol, EXAMPLE, ctx, max_results=10, auto_approve=True, search_fn=_fake_search
+
+    def rechazar_el_reporte(stage: str, _solicitud: dict) -> dict | None:
+        if stage == "reporte":
+            return {"approved": False, "reason": "síntesis sin respaldo"}
+        return None
+
+    result = correr_hasta(
+        protocol,
+        EXAMPLE,
+        ctx,
+        search_fn=_fake_search,
+        fetch_fn=fetch_disponible,
+        etiquetar=rechazar_el_reporte,
     )
     assert result.status == "rejected"  # antes: "completed"
     assert "rechazado por human:revisora" in result.message
@@ -156,16 +167,21 @@ def test_rejected_final_gate_is_not_completed(tmp_path) -> None:
 
 def test_paused_run_final_gate_falla_en_auditoria(tmp_path) -> None:
     # Aprueba en humano las etapas de juicio previas al reporte (screening_ta,
-    # screening_ft, extraccion, rob) para que, sin auto-approve, la corrida
-    # llegue viva hasta el checkpoint final y pause justo ahí (A1): es ese gate
-    # el que queremos ver fallar en la auditoría, no uno anterior.
+    # screening_ft, extraccion, rob), respondiendo a cada pausa con el
+    # request_sha256 de su solicitud, para que la corrida llegue viva hasta el
+    # checkpoint final y pause justo ahí (A1): es ese gate el que queremos ver
+    # fallar en la auditoría, no uno anterior.
     protocol = load_protocol(EXAMPLE)
     ctx = RunContext(protocol.slug, tmp_path, "TEST-PAUSED")
-    decision_humana = "approved: true\nactor: human:revisora\n"
-    for stage in ("screening_ta", "screening_ft", "extraccion", "rob"):
-        (ctx.stage_dir(stage) / "decision.yml").write_text(decision_humana, encoding="utf-8")
 
-    result = run_pipeline(protocol, EXAMPLE, ctx, auto_approve=False, search_fn=_fake_search)
+    result = correr_hasta(
+        protocol,
+        EXAMPLE,
+        ctx,
+        search_fn=_fake_search,
+        fetch_fn=fetch_disponible,
+        parar_en="reporte",
+    )
     assert result.status == "paused"
     assert "reporte" in result.message
     assert (ctx.run_dir / "reporte" / "review_request.yml").exists()
