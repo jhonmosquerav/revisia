@@ -54,7 +54,10 @@ _PRISMA_2020_ITEMS: list[tuple[str, int, str]] = [
 _AUTO_EVIDENCE: dict[int, str] = {
     7: "Cadenas en protocols/<slug>/search_strings/ (PRISMA-S).",
     8: "Decisiones de screening en runs/.../decisions_ledger.jsonl.",
-    16: "Diagrama de flujo PRISMA en deliverable/prisma_flow.md.",
+    16: (
+        "Diagrama de flujo PRISMA en deliverable/prisma_flow.md (16a); informes "
+        "excluidos con su razón en deliverable/excluidos_texto_completo.md (16b)."
+    ),
     24: "Registro declarado en protocol.yml (registration).",
     27: "Datos y manifiesto reproducibles en runs/<slug>-<fecha>/.",
 }

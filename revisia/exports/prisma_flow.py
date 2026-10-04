@@ -21,7 +21,12 @@ renderiza como Mermaid (portable, versionable) + tabla Markdown.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pydantic import BaseModel, Field, model_validator
+
+if TYPE_CHECKING:
+    from revisia.schemas.artifacts import ExcludedReport
 
 _FOOTER = (
     "\n> Estructura de cajas según la plantilla oficial PRISMA 2020 (CC BY 4.0). "
@@ -274,3 +279,39 @@ def render_flow_markdown(counts: PrismaCounts) -> str:
     lines = ["| Etapa | n |", "|---|---|"]
     lines += [f"| {label} | {value} |" for label, value in rows]
     return "\n".join(lines)
+
+
+_ORIGEN = {"human": "humano", "ai": "IA"}
+
+
+def _md_cell(value: object) -> str:
+    """Celda de tabla Markdown: una sola línea y con ``|`` escapado."""
+    return " ".join(str(value).split()).replace("|", "\\|")
+
+
+def render_excluded_reports(reports: list[ExcludedReport]) -> str:
+    """Informes excluidos en elegibilidad con su razón (PRISMA 2020, ítem 16b).
+
+    Va a ``deliverable/excluidos_texto_completo.md``. Cada fila dice si la razón
+    la dio un humano o la IA (PRISMA-trAIce R1): una exclusión de la IA que
+    nadie revisó no se presenta como juicio humano.
+    """
+    lines = [
+        "# Informes excluidos tras evaluar el texto completo",
+        "",
+        "PRISMA 2020, ítem 16b: informes evaluados para elegibilidad y excluidos, "
+        "con su razón y quién la dio (PRISMA-trAIce R1).",
+        "",
+    ]
+    if not reports:
+        lines.append("_(ningún informe excluido en la evaluación de elegibilidad)_")
+        return "\n".join(lines) + "\n"
+    lines += ["| Informe | Año | DOI | Razón | Origen |", "|---|---|---|---|---|"]
+    for rep in reports:
+        year = "—" if rep.year is None else str(rep.year)
+        doi = _md_cell(rep.doi) if rep.doi else "—"
+        lines.append(
+            f"| {_md_cell(rep.title)} (`{_md_cell(rep.record_id)}`) | {year} | {doi} "
+            f"| {_md_cell(rep.reason)} | {_ORIGEN[rep.reason_source]} |"
+        )
+    return "\n".join(lines) + "\n"
