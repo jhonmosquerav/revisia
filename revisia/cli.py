@@ -502,6 +502,7 @@ def _cmd_check(args: argparse.Namespace) -> int:
 def _cmd_audit(args: argparse.Namespace) -> int:
     """Audita una corrida terminada contra PRISMA 2020 / PRISMA-S / trAIce."""
     from revisia.audit import render_audit_md, run_audit
+    from revisia.audit.model import STATUS_ICON
 
     run_dir = Path(args.run_dir)
     if not run_dir.exists():
@@ -512,8 +513,8 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     out = run_dir / "audit.md"
     out.write_text(markdown, encoding="utf-8")
     for check in report.checks:
-        icon = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌"}.get(check.status, "•")
-        print(f"{icon} {check.status:<4} {check.check_id:<13} [{check.item_ref}] {check.detail}")
+        icon = STATUS_ICON.get(check.status, "•")
+        print(f"{icon} {check.status:<4} {check.check_id:<17} [{check.item_ref}] {check.detail}")
     verdict = "APTA para preparar publicación" if report.publishable else "NO publicable tal cual"
     print(
         f"\n{'✅' if report.publishable else '❌'} {verdict} · "

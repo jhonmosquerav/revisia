@@ -92,9 +92,12 @@ def test_audit_procedencia_pipeline_pasa(corrida) -> None:
 
 
 def test_audit_sin_manifiesto_no_duplica_fail_de_procedencia(corrida) -> None:
+    # Una fila por check, siempre: la de procedencia sale N/A (su raíz, el
+    # manifiesto, ya dio FAIL) en vez de omitirse o duplicar el FAIL.
     (corrida / "manifest.yml").unlink()
     report = auditar(corrida)
-    assert "provenance" not in {c.check_id for c in report.checks}
+    assert fila(report, "manifest").status == "FAIL"
+    assert fila(report, "provenance").status == "N/A"
 
 
 def _sin_reporte(entries: list[dict]) -> list[dict]:
@@ -172,14 +175,15 @@ def test_audit_sin_ledger_no_duplica_fail_de_final_gate(corrida) -> None:
     # manifest ausente).
     (corrida / "decisions_ledger.jsonl").unlink()
     report = auditar(corrida)
-    assert "final_gate" not in {c.check_id for c in report.checks}
+    assert fila(report, "final_gate").status == "N/A"
     assert fila(report, "ledger").status == "FAIL"
 
 
 def test_audit_ledger_vacio_no_duplica_fail_de_final_gate(corrida) -> None:
     (corrida / "decisions_ledger.jsonl").write_text("", encoding="utf-8")
     report = auditar(corrida)
-    assert "final_gate" not in {c.check_id for c in report.checks}
+    assert fila(report, "final_gate").status == "N/A"
+    assert fila(report, "ledger").status == "FAIL"
 
 
 def _escribir_metricas(run, metrics: dict) -> None:
