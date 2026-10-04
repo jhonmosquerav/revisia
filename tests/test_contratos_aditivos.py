@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from revisia.config import KNOWN_THRESHOLDS, load_protocol
 from revisia.exports import PrismaCounts
 from revisia.schemas.screening import ScreeningDecision
@@ -25,6 +28,12 @@ def test_screening_decision_campos_nuevos_opcionales() -> None:
         record_id="b", phase="fulltext", fulltext_status="not_retrieved"
     )
     assert no_recuperado.votes == [] and no_recuperado.ensemble_label is None
+
+
+def test_screening_decision_rechaza_fulltext_status_fuera_del_literal() -> None:
+    # Solo "retrieved" y "not_retrieved" (spec §4.3): un valor libre no entra al contrato.
+    with pytest.raises(ValidationError):
+        ScreeningDecision(record_id="r", fulltext_status="fetched")
 
 
 def test_prisma_counts_campos_nuevos_valen_cero() -> None:

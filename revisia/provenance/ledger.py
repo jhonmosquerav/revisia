@@ -17,6 +17,8 @@ from pydantic import BaseModel, Field
 
 from revisia.provenance.runmeta import utc_now_iso
 
+# Import diferido: `schemas.artifacts` importa `provenance.runmeta`, y el paquete
+# `provenance` importa este módulo; un import real aquí cerraría el ciclo.
 if TYPE_CHECKING:
     from revisia.schemas.artifacts import GateSummary
 
@@ -94,6 +96,7 @@ def summarize_gates(entries: Iterable[DecisionEntry]) -> dict[str, GateSummary]:
     métodos, M13) y el auditor, para que no se contradigan (auditoría
     2026-09-03, C3/M13). Las etapas sin decisión no aparecen en el resultado.
     """
+    # Import diferido: ver el comentario de `TYPE_CHECKING` arriba (evita el ciclo).
     from revisia.schemas.artifacts import GateSummary
 
     entries = list(entries)

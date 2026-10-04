@@ -56,7 +56,8 @@ class ScriptedProvider:
         model: modelo que declara en ``RunMeta.model``.
         fail_at: número de llamada (1, 2, …) que lanza
             ``RuntimeError("429 Too Many Requests")`` en vez de responder; las
-            demás responden con normalidad. ``None`` = nunca falla.
+            demás responden con normalidad. ``None`` = nunca falla; un valor
+            menor que 1 es un error (``ValueError``).
         calls: llamadas recibidas (``complete`` + ``structured``), incluida la
             que falla.
         prompts: prompt de cada llamada, en orden (para afirmar qué se cribó).
@@ -72,6 +73,10 @@ class ScriptedProvider:
         palabras: Mapping[str, ScreeningLabel] | None = None,
         criterio_exclusion: str = "fuera de alcance",
     ) -> None:
+        # Las llamadas se cuentan desde 1: con `fail_at=0` (o negativo) el 429 nunca
+        # se dispararía y el test pasaría sin haber probado la reanudación.
+        if fail_at is not None and fail_at < 1:
+            raise ValueError(f"fail_at cuenta llamadas desde 1; recibido {fail_at}")
         self.model = model
         self.fail_at = fail_at
         self.palabras: dict[str, ScreeningLabel] = dict(
@@ -147,6 +152,9 @@ def fetch_no_disponible(ids: Iterable[str]) -> Callable[[SearchRecord], FullText
     ``available=False``, como el fallback real de
     :func:`revisia.agents.fulltext.fetch_fulltext`.
     """
+    if isinstance(ids, str):
+        # `frozenset("10.1/b")` troceaba el id en caracteres y el registro salía disponible.
+        raise TypeError(f"ids debe ser una colección de ids (p. ej. ['{ids}']), no un str")
     sin_texto = frozenset(ids)
 
     def _fetch(record: SearchRecord) -> FullText:

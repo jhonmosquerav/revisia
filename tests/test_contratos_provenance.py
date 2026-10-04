@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from typing import get_args
 
 import pytest
 
@@ -16,6 +17,7 @@ from revisia.provenance.ledger import (
     summarize_gates,
 )
 from revisia.provenance.runmeta import canonical_json, canonical_sha256
+from revisia.schemas.artifacts import GateAction
 
 # ── canonical_json / canonical_sha256 ───────────────────────────────────
 
@@ -54,6 +56,13 @@ def test_constantes_del_ledger() -> None:
     assert not {"propose", "exclude", "verify"} & LEDGER_ACTIONS
 
 
+def test_gate_action_y_gate_decision_actions_van_atados() -> None:
+    # Dos fuentes de verdad (el Literal de `GateSummary.action` y el conjunto que
+    # usa el reductor): si una crece sin la otra, el reductor produciría un resumen
+    # que su propio modelo rechaza, o ignoraría una acción válida.
+    assert set(get_args(GateAction)) == GATE_DECISION_ACTIONS
+
+
 # ── summarize_gates ──────────────────────────────────────────────────────
 
 
@@ -82,7 +91,9 @@ def test_summarize_gates_ultima_decision_gana_tras_rechazo() -> None:
 def test_summarize_gates_cuenta_solo_etiquetas_de_la_decision_efectiva() -> None:
     resumen = summarize_gates(
         [
-            # Decisión anterior (rechazada, ya sin etiquetas) y una etiqueta huérfana.
+            # Decisión anterior, rechazada, con una etiqueta de su mismo hash ("viejo"). Tras
+            # el `approve` posterior queda como etiqueta huérfana: no cuenta, porque su
+            # `decision_sha256` no es el de la decisión efectiva ("nuevo").
             _e("screening_ft", "label", target="a", decision_sha256="viejo"),
             _e("screening_ft", "reject", decision_sha256="viejo"),
             # Decisión efectiva con dos etiquetas.
@@ -96,6 +107,35 @@ def test_summarize_gates_cuenta_solo_etiquetas_de_la_decision_efectiva() -> None
     assert resumen["screening_ft"].n_labels == 2
     assert resumen["screening_ft"].n_flag_reviews == 0
     assert "screening_ta" not in resumen  # sin approve/reject/auto-proceed
+
+
+def test_summarize_gates_reject_final_es_la_decision_efectiva() -> None:
+    resumen = summarize_gates(
+        [
+            _e("screening_ft", "label", target="a", decision_sha256="A"),
+            _e("screening_ft", "approve", decision_sha256="A", request_sha256="r"),
+            # Se rechaza después: la decisión efectiva es el `reject` (hash B) y la
+            # etiqueta del `approve` anterior (hash A) pasa a ser huérfana.
+            _e("screening_ft", "reject", decision_sha256="B", request_sha256="r"),
+        ]
+    )
+    ft = resumen["screening_ft"]
+    assert (ft.action, ft.decision_sha256, ft.n_labels) == ("reject", "B", 0)
+
+
+def test_summarize_gates_sin_hash_de_decision_no_cuenta_etiquetas_sin_hash() -> None:
+    # `auto-proceed` no lleva `decision_sha256`, y una etiqueta de la misma etapa
+    # tampoco: `None == None` no debe hacerlas coincidir. Sin la guarda
+    # `decision_sha is not None` de `summarize_gates`, `n_labels` saldría 1.
+    resumen = summarize_gates(
+        [
+            _e("extraccion", "label", target="a"),
+            _e("extraccion", "auto-proceed", actor="agent:extraccion", reason="autonomía A2"),
+        ]
+    )
+    extraccion = resumen["extraccion"]
+    assert extraccion.decision_sha256 is None
+    assert (extraccion.n_labels, extraccion.n_flag_reviews) == (0, 0)
 
 
 def test_summarize_gates_flag_reviews_y_forced_human() -> None:

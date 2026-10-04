@@ -16,14 +16,19 @@ from revisia.schemas.artifacts import (
     DedupReport,
     ExcludedReport,
     FulltextReason,
+    GateAction,
     GateSummary,
     JournalEntry,
     JournalStage,
     LLMCall,
     LLMStage,
+    QueryOrigin,
+    ReasonSource,
     RetrievalOutcome,
     RunInfo,
     RunStatus,
+    SearchEntryKind,
+    SearchEntryStatus,
     SearchLog,
     SearchLogEntry,
 )
@@ -65,21 +70,63 @@ def test_gated_stages_en_orden_canonico() -> None:
     assert posiciones == sorted(posiciones)
 
 
-def test_literales_del_contrato() -> None:
-    assert set(get_args(RunStatus)) == {
-        "running",
-        "paused",
-        "rejected",
-        "completed",
-        "interrupted",
-    }
-    assert set(get_args(FulltextReason)) == {
-        "sin_url_oa",
-        "sin_httpx",
-        "error_http",
-        "texto_vacio",
-        "no_disponible",
-    }
+# Miembros exactos de cada alias del contrato, escritos a mano desde la spec §4.3
+# (no derivados del módulo): ampliar o quitar un miembro es un cambio de contrato
+# y tiene que romper aquí, no en silencio aguas abajo (hallazgos Minor de A1-A3).
+@pytest.mark.parametrize(
+    ("alias", "esperado"),
+    [
+        pytest.param(
+            RunStatus,
+            ["running", "paused", "rejected", "completed", "interrupted"],
+            id="RunStatus",
+        ),
+        pytest.param(
+            LLMStage,
+            [
+                "screening_ta",
+                "screening_ft",
+                "extraccion",
+                "extraccion_2",
+                "rob",
+                "sintesis",
+                "verificacion",
+            ],
+            id="LLMStage",
+        ),
+        pytest.param(
+            JournalStage,
+            [
+                "screening_ta",
+                "fulltext_retrieval",
+                "screening_ft",
+                "extraccion",
+                "extraccion_2",
+                "rob",
+                "sintesis",
+                "verificacion",
+            ],
+            id="JournalStage",
+        ),
+        pytest.param(
+            FulltextReason,
+            ["sin_url_oa", "sin_httpx", "error_http", "texto_vacio", "no_disponible"],
+            id="FulltextReason",
+        ),
+        pytest.param(
+            SearchEntryKind, ["database", "manual_import", "injected"], id="SearchEntryKind"
+        ),
+        pytest.param(
+            SearchEntryStatus, ["ok", "failed", "manual_only", "unknown"], id="SearchEntryStatus"
+        ),
+        pytest.param(QueryOrigin, ["file", "question_fallback"], id="QueryOrigin"),
+        pytest.param(ReasonSource, ["human", "ai"], id="ReasonSource"),
+        pytest.param(GateAction, ["approve", "reject", "auto-proceed"], id="GateAction"),
+    ],
+)
+def test_literales_del_contrato(alias: object, esperado: list[str]) -> None:
+    # `sorted` y no `set`: además de los miembros, descarta un miembro repetido.
+    assert sorted(get_args(alias)) == sorted(esperado)
 
 
 def test_llm_call_hereda_runmeta_y_etiqueta() -> None:

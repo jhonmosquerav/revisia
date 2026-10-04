@@ -42,7 +42,34 @@ def test_etiqueta_por_palabra_clave_en_el_cribado(titulo: str, esperado: str) ->
     decision, metas = _cribar(ScriptedProvider(), _rec("r", titulo))
     assert decision.ensemble_label == esperado
     assert decision.votes[0].label == esperado
+    # Solo `exclude` declara criterio violado (el `criterio_exclusion` por defecto).
+    criterios = ["fuera de alcance"] if esperado == "exclude" else []
+    assert decision.votes[0].criteria_violated == criterios
     assert len(metas) == 1
+
+
+def test_precedencia_es_el_orden_del_dict_no_la_posicion_en_el_prompt() -> None:
+    # "dudoso" aparece antes en el prompt, pero "irrelevante" va primero en
+    # `PALABRAS_POR_DEFECTO`: gana el orden del dict (regla vigente de `label_for`).
+    assert ScriptedProvider().label_for("dudoso pero irrelevante") == "exclude"
+    assert ScriptedProvider().label_for("irrelevante pero dudoso") == "exclude"
+
+
+def test_palabras_propias_sustituyen_a_las_de_por_defecto() -> None:
+    proveedor = ScriptedProvider(palabras={"Piloto": "unclear", "dudoso": "exclude"})
+    assert proveedor.label_for("Un ensayo PILOTO") == "unclear"  # sin distinguir mayúsculas
+    assert proveedor.label_for("caso dudoso") == "exclude"
+    # Las de por defecto ya no están: "irrelevante" solo no coincide con nada.
+    assert proveedor.label_for("estudio irrelevante") == "include"
+
+
+def test_fail_at_menor_que_uno_es_un_error() -> None:
+    # Cuenta desde 1: un 0 nunca dispararía el 429 y el test no probaría nada.
+    for invalido in (0, -1):
+        with pytest.raises(ValueError, match="desde 1"):
+            ScriptedProvider(fail_at=invalido)
+    assert ScriptedProvider(fail_at=1).fail_at == 1
+    assert ScriptedProvider().fail_at is None
 
 
 def test_exclusion_lleva_criterio_violado() -> None:
@@ -86,3 +113,10 @@ def test_fetch_disponible_y_no_disponible() -> None:
     assert fetch(a).available is True
     no = fetch(b)
     assert (no.available, no.text) == (False, "resumen B")
+
+
+def test_fetch_no_disponible_rechaza_una_cadena_suelta() -> None:
+    # Un `str` es iterable: sin la guarda, "10.1/b" se troceaba en caracteres y el
+    # registro salía disponible sin avisar.
+    with pytest.raises(TypeError, match="colección de ids"):
+        fetch_no_disponible("10.1/b")
