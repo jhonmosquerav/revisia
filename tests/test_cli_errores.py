@@ -8,12 +8,22 @@ from pathlib import Path
 import pytest
 import yaml
 
+from revisia import cli
 from revisia.cli import main
+from revisia.llm import preflight as preflight_mod
 from revisia.orchestration.hitl import DecisionFileError
 
 ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE_DIR = ROOT / "protocols" / "_TEMPLATE"
 EXAMPLE = ROOT / "examples" / "demo-mini-review"
+
+
+@pytest.fixture()
+def httpx_instalado(monkeypatch: pytest.MonkeyPatch) -> None:
+    """El demo (proveedor fake + OpenAlex) solo necesita httpx para pasar el
+    preflight (M6); el venv de pruebas no lo instala. Sin .env real."""
+    monkeypatch.setattr(cli, "_load_dotenv", lambda: None)
+    monkeypatch.setattr(preflight_mod, "_default_find_spec", lambda _name: object())
 
 
 def _protocolo_con_autonomia(tmp_path: Path, stage: str, level: str) -> Path:
@@ -48,7 +58,7 @@ def test_cli_run_protocolo_con_a3_no_arranca(
 
 
 def test_cli_run_decision_invalida_sale_2(
-    capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch
+    capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch, httpx_instalado: None
 ) -> None:
     def _falla(*_a, **_k):
         raise DecisionFileError("runs/x/reporte/decision.yml: está vacío.")
@@ -75,7 +85,10 @@ def test_cli_validate_yaml_roto_sale_2_sin_traceback(
 
 
 def test_cli_run_rechazado_sale_1_y_no_sedimenta(
-    tmp_path: Path, capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_instalado: None,
 ) -> None:
     from revisia.orchestration.pipeline import PipelineResult
 

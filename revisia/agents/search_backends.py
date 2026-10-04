@@ -204,7 +204,9 @@ BACKENDS: dict[str, SearchFn] = {
 # Bases sin API abierta de búsqueda: se ingestan por importación manual (RIS/BibTeX).
 # Redalyc/Dialnet/SciELO solo ofrecen cosecha OAI-PMH (sin texto libre); Google
 # Scholar no tiene API; Mendeley/DynaMed/Lens exigen credenciales por usuario;
-# PEDro solo HTML.
+# PEDro solo HTML. Las de suscripción (CINAHL, Cochrane/CENTRAL, ProQuest, EconLit,
+# JSTOR, IEEE Xplore, ACM, ScienceDirect, EBSCO, Ovid) también: sin ellas aquí, el
+# preflight las daría por "base desconocida" (auditoría 2026-09-03, M6; D10).
 MANUAL_ONLY = {
     "scopus",
     "webofscience",
@@ -220,6 +222,18 @@ MANUAL_ONLY = {
     "dynamed",
     "lens",
     "pedro",
+    "cinahl",
+    "cochrane",
+    "cochranelibrary",
+    "central",
+    "proquest",
+    "econlit",
+    "jstor",
+    "ieeexplore",
+    "acm",
+    "sciencedirect",
+    "ebsco",
+    "ovid",
 }
 
 
