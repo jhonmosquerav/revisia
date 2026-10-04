@@ -380,6 +380,8 @@ def _bomba_de_alias(niveles: int = 10) -> str:
             "PASS",
             id="registration-anidada",
         ),
+        # Tarea 5: `schemas` valida `models_used` y informa sin expandir la bomba.
+        pytest.param("models_used: [*a9]\n", "schemas", "FAIL", id="models_used-schemas"),
     ],
 )
 def test_bomba_de_alias_no_cuelga_el_auditor_ni_llena_el_detalle(

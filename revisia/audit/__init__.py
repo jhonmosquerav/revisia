@@ -68,6 +68,7 @@ class CheckSpec:
 CHECKS: tuple[CheckSpec, ...] = (
     CheckSpec("manifest", "PRISMA 27 / trAIce M2", "reporte", checks_provenance.check_manifest),
     CheckSpec("provenance", "PRISMA 27 / trAIce M2", "reporte", checks_provenance.check_provenance),
+    CheckSpec("schemas", "PRISMA 27 / trAIce M5", None, checks_provenance.check_schemas),
     CheckSpec("prompts", "trAIce M6", "reporte", checks_provenance.check_prompts),
     CheckSpec("ledger", "trAIce M8 / PRISMA 8", None, checks_hitl.check_ledger),
     CheckSpec("hitl", "trAIce M8/R1 / PRISMA 8", None, checks_hitl.check_hitl),
