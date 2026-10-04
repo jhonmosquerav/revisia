@@ -21,13 +21,15 @@ import yaml
 from revisia.orchestration.journal import append_jsonl, read_jsonl
 from revisia.provenance.ledger import DecisionLedger
 from revisia.provenance.runmeta import RunMeta, utc_now_iso
-from revisia.schemas.artifacts import LLMCall, LLMStage
+from revisia.schemas.artifacts import LLMCall, LLMStage, RunInfo
 
 # Procedencia que el motor escribe en todo manifiesto que produce (auditoría
 # 2026-09-03, C3): distingue una corrida real de una reconstrucción a mano.
 PROVENANCE_PIPELINE = "pipeline"
 # Llamadas a IA de la corrida, una línea `LLMCall` por llamada (spec §4.2).
 LLM_CALLS_FILE = "llm_calls.jsonl"
+# Identidad, parámetros, huellas, historia y estado de la corrida (spec §4.3).
+RUN_INFO_FILE = "run.json"
 
 
 class RunDirExistsError(FileExistsError):
@@ -35,6 +37,14 @@ class RunDirExistsError(FileExistsError):
 
     Con diarios, dos ``revisia run`` en el mismo segundo compartirían carpeta y
     el segundo reanudaría en silencio la corrida del primero.
+    """
+
+
+class LegacyRunError(ValueError):
+    """La carpeta no tiene ``run.json``: corrida anterior a la Ola 1 (D13).
+
+    Sin instantánea del protocolo ni de la búsqueda, reanudarla obligaría a
+    repetir la búsqueda con resultados distintos de los que ya se cribaron.
     """
 
 
@@ -70,6 +80,28 @@ class RunContext:
             )
         run_dir.mkdir(parents=True, exist_ok=True)
         self._setup(slug, timestamp, run_dir)
+
+    @classmethod
+    def open(cls, run_dir: str | Path) -> RunContext:
+        """Reabre una corrida existente para reanudarla (slug y fecha de ``run.json``).
+
+        Raises:
+            FileNotFoundError: si la carpeta no existe.
+            LegacyRunError: si no tiene ``run.json`` (corrida anterior a la Ola 1).
+        """
+        run_dir = Path(run_dir)
+        if not run_dir.is_dir():
+            raise FileNotFoundError(f"la carpeta {run_dir} no existe.")
+        info_path = run_dir / RUN_INFO_FILE
+        if not info_path.exists():
+            raise LegacyRunError(
+                f"{run_dir}: corrida anterior a la Ola 1 (sin run.json); no se puede reanudar. "
+                "Empieza una nueva con `revisia run <protocolo>`."
+            )
+        info = RunInfo.model_validate_json(info_path.read_text(encoding="utf-8"))
+        ctx = cls.__new__(cls)
+        ctx._setup(info.slug, info.timestamp, run_dir)
+        return ctx
 
     def _setup(self, slug: str, timestamp: str, run_dir: Path) -> None:
         self.slug = slug
@@ -133,9 +165,21 @@ class RunContext:
         ``llm_calls`` sale de ``llm_calls.jsonl`` (todas las líneas, en orden),
         no de memoria: una corrida reanudada incluye las llamadas de todas sus
         invocaciones. Bloques de la Ola 1 (spec §4.3): ``autonomy_effective``
-        (autonomía con la que se aplicó cada gate) y ``final_gate``.
+        (autonomía con la que se aplicó cada gate) y ``final_gate``, más ``run``
+        (de ``run.json``) si la corrida lo tiene.
         """
         calls = read_jsonl(self.llm_calls_path, LLMCall)
+        run_block: dict = {}
+        info_path = self.run_dir / RUN_INFO_FILE
+        if info_path.exists():
+            info = RunInfo.model_validate_json(info_path.read_text(encoding="utf-8"))
+            run_block["run"] = {
+                "started_utc": info.started_utc,
+                "resumes": list(info.resumes),
+                "engine_version": info.engine_version,
+                "python_version": info.python_version,
+                "status": info.status,
+            }
         manifest = {
             "slug": self.slug,
             "created_utc": utc_now_iso(),
@@ -146,6 +190,7 @@ class RunContext:
             "llm_calls": [c.model_dump(mode="json") for c in calls],
             "models_used": sorted({f"{c.provider}:{c.model}" for c in calls}),
             "deterministic_token_level": (all(c.deterministic for c in calls) if calls else True),
+            **run_block,
             "autonomy_effective": dict(autonomy_effective or {}),
             "final_gate": dict(final_gate or {"forced_human": False, "reason": None}),
             **(extra or {}),

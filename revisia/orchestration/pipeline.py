@@ -64,6 +64,7 @@ from revisia.meta_analysis import MetaAnalysisResult, meta_analyze
 from revisia.metrics import ScreeningMetrics, compute_screening_metrics
 from revisia.orchestration.hitl import GateResult, review_gate
 from revisia.orchestration.run_context import RunContext
+from revisia.orchestration.snapshot import ensure_snapshot
 from revisia.provenance.runmeta import sha256_text
 from revisia.rag.embed import Embedder, HashEmbedder
 from revisia.schemas.artifacts import GATED_STAGES, ExcludedReport, RetrievalOutcome
@@ -172,11 +173,15 @@ class _Run:
     Las funciones por etapa lo reciben en vez de una docena de argumentos.
     ``gate`` aplica el checkpoint de una etapa con la autonomía del protocolo y
     ``stop`` traduce un gate no aprobado en el ``PipelineResult`` con el que la
-    corrida se detiene (antes, cinco bloques casi iguales).
+    corrida se detiene (antes, cinco bloques casi iguales). ``snapshot_dir`` es
+    ``00_protocol/``, la única fuente de criterios, formulario, efectos, gold y
+    cadenas; ``source_dir`` es el protocolo original (``None`` al reanudar sin
+    él).
     """
 
     protocol: ReviewProtocol
-    protocol_dir: Path
+    snapshot_dir: Path
+    source_dir: Path | None
     ctx: RunContext
     question: str
     criteria: str
@@ -222,7 +227,7 @@ def _search(run: _Run, *, max_results: int, search_fn: SearchFn | None) -> list[
     if search_fn is not None:
         return search_fn(run.question, max_results)
     raw_records, failures = _multi_database_search(
-        run.protocol, run.protocol_dir, run.question, max_results, run.mailto
+        run.protocol, run.source_dir or run.snapshot_dir, run.question, max_results, run.mailto
     )
     if failures:
         run.ctx.write_json("01_search/failures.json", failures)
@@ -240,12 +245,12 @@ def _dedup(run: _Run, raw_records: list[SearchRecord]) -> tuple[list[SearchRecor
 
 
 def _load_gold(run: _Run, gold_labels: dict[str, bool] | None) -> dict[str, bool]:
-    """Gold standard humano: ``gold.yml`` del protocolo + etiquetas por código.
+    """Gold standard humano: ``00_protocol/gold.yml`` + etiquetas por código.
 
     Las pasadas por código tienen prioridad sobre las del fichero.
     """
     gold: dict[str, bool] = {}
-    gold_file = _load_yaml(run.protocol_dir / "gold.yml")
+    gold_file = _load_yaml(run.snapshot_dir / "gold.yml")
     for rid, val in (gold_file.get("gold", gold_file) or {}).items():
         gold[rid] = bool(val)
     if gold_labels:
@@ -443,7 +448,7 @@ def _meta_analysis(run: _Run) -> tuple[MetaAnalysisResult | None, str]:
     (efectos fijos + aleatorios, I²/τ², Egger); si no, solo síntesis narrativa.
     Devuelve el resultado y el modo de presentación del forest.
     """
-    effects_cfg = _load_yaml(run.protocol_dir / "effects.yml")
+    effects_cfg = _load_yaml(run.snapshot_dir / "effects.yml")
     meta_display = effects_cfg.get("display", "raw")  # "proportion" → forest en 0–1
     raw_effects = effects_cfg.get("effects", [])
     if not raw_effects:
@@ -642,7 +647,7 @@ def _write_deliverables(
 
 def run_pipeline(
     protocol: ReviewProtocol,
-    protocol_dir: str | Path,
+    protocol_dir: str | Path | None,
     run_ctx: RunContext,
     *,
     max_results: int = 25,
@@ -653,13 +658,23 @@ def run_pipeline(
     embedder: Embedder | None = None,
     gold_labels: dict[str, bool] | None = None,
 ) -> PipelineResult:
-    """Ejecuta el tracer bullet end-to-end y devuelve su resultado."""
-    protocol_dir = Path(protocol_dir)
-    ie = _load_yaml(protocol_dir / "inclusion_exclusion.yml")
-    form = _load_yaml(protocol_dir / "extraction_form.yml")
+    """Ejecuta el tracer bullet end-to-end y devuelve su resultado.
+
+    Una corrida nueva copia el protocolo a ``00_protocol/`` y escribe
+    ``run.json``; una que se reanuda (``run.json`` ya existe) verifica su
+    instantánea y toma ``max_results`` de ``run.json``. ``protocol_dir`` puede
+    ser ``None`` al reanudar.
+    """
+    snapshot_dir, run_info = ensure_snapshot(
+        protocol_dir, run_ctx, max_results=max_results, mailto=mailto
+    )
+    max_results = run_info.max_results
+    ie = _load_yaml(snapshot_dir / "inclusion_exclusion.yml")
+    form = _load_yaml(snapshot_dir / "extraction_form.yml")
     run = _Run(
         protocol=protocol,
-        protocol_dir=protocol_dir,
+        snapshot_dir=snapshot_dir,
+        source_dir=Path(protocol_dir) if protocol_dir is not None else None,
         ctx=run_ctx,
         question=protocol.question.text,
         criteria=_criteria_to_text(ie),

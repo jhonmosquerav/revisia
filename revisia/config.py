@@ -145,11 +145,14 @@ class ReviewProtocol(BaseModel):
         return [self.provider_for(stage)]
 
 
-def load_protocol(protocol_dir: str | Path) -> ReviewProtocol:
+def load_protocol(protocol_dir: str | Path, *, default_slug: str | None = None) -> ReviewProtocol:
     """Carga y valida ``protocol.yml`` desde una carpeta de protocolo.
 
     Args:
         protocol_dir: carpeta que contiene ``protocol.yml``.
+        default_slug: slug si el protocolo no lo declara; por defecto, el
+            nombre de la carpeta. Al reanudar se pasa el de ``run.json``: la
+            instantánea vive en ``00_protocol/`` y ese nombre no es el slug.
 
     Raises:
         FileNotFoundError: si no existe ``protocol.yml``.
@@ -159,5 +162,5 @@ def load_protocol(protocol_dir: str | Path) -> ReviewProtocol:
     if not protocol_file.exists():
         raise FileNotFoundError(f"No se encontró {protocol_file}.")
     raw = yaml.safe_load(protocol_file.read_text(encoding="utf-8")) or {}
-    raw.setdefault("slug", base.name)
+    raw.setdefault("slug", default_slug or base.name)
     return ReviewProtocol.model_validate(raw)
