@@ -959,3 +959,7 @@ redactar.
 
 | # | Dónde | Cambio | Origen |
 |---|---|---|---|
+| 1 | §4.5 `artifacts.py` | Además de los nombres de §4.5: `RunInterruption`, `DedupDuplicate` y `DedupRename` (tipan las listas que §4.3 describe como `{…}`), los alias `SearchEntryKind`, `SearchEntryStatus`, `QueryOrigin`, `ReasonSource` y `GateAction`, y `LLMCall.from_meta(meta, *, stage, record_id=None, role=None)` | Plan PR-0 |
+| 2 | §4.5 `GateSummary` | Campos: `stage`, `action`, `actor`, `autonomy`, `request_sha256`, `decision_sha256`, `n_labels`, `n_flag_reviews`, `forced_human`, `timestamp_utc`. `n_labels` y `n_flag_reviews` se cuentan en el ledger (misma etapa y mismo `decision_sha256`), no se leen del `detail`, para que el auditor pueda contrastarlos | Plan PR-0 |
+| 3 | §4.5 `ledger.py` | `GATE_DECISION_ACTIONS = {approve, reject, auto-proceed}` además de `LEDGER_ACTIONS`; ambas `frozenset`, y un test las ata a `GateAction` | Plan PR-0 + revisión |
+| 4 | §4.5 `tests/fakes.py` | `ScriptedProvider` registra además `prompts` y admite `palabras` y `criterio_exclusion`; `fail_at` cuenta desde 1, solo falla esa llamada y rechaza valores `< 1`; `fetch_no_disponible` rechaza una cadena suelta (exige una colección de ids) | Plan PR-0 + revisión |
