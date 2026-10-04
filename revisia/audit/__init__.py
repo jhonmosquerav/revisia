@@ -22,45 +22,16 @@ no opina.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
+from revisia.audit.model import AuditCheck, AuditReport
+from revisia.audit.render import render_audit_md
 from revisia.config import JUDGMENT_STAGES
 from revisia.orchestration.run_context import PROVENANCE_PIPELINE
 
-_STATUS_ICON = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌"}
-
-
-@dataclass(frozen=True)
-class AuditCheck:
-    """Resultado de una verificación puntual de la auditoría."""
-
-    check_id: str
-    item_ref: str  # ítem PRISMA / trAIce que respalda la verificación
-    status: str  # PASS | WARN | FAIL
-    detail: str
-
-
-@dataclass(frozen=True)
-class AuditReport:
-    """Informe completo de auditoría de una corrida."""
-
-    run_dir: Path
-    checks: list[AuditCheck]
-
-    @property
-    def n_fail(self) -> int:
-        return sum(1 for c in self.checks if c.status == "FAIL")
-
-    @property
-    def n_warn(self) -> int:
-        return sum(1 for c in self.checks if c.status == "WARN")
-
-    @property
-    def publishable(self) -> bool:
-        return self.n_fail == 0
+__all__ = ["AuditCheck", "AuditReport", "render_audit_md", "run_audit"]
 
 
 def _load_manifest(run_dir: Path) -> dict | None:
@@ -473,33 +444,3 @@ def run_audit(run_dir: str | Path) -> AuditReport:
             )
 
     return AuditReport(run_dir=run, checks=checks)
-
-
-def render_audit_md(report: AuditReport) -> str:
-    """Renderiza el informe de auditoría como Markdown."""
-    verdict = (
-        "**APTA para preparar publicación** (sin FAIL; resuelve los WARN y decláralos)."
-        if report.publishable
-        else "**NO publicable tal cual** (hay verificaciones FAIL)."
-    )
-    lines = [
-        "# Auditoría de corrida · revisia",
-        "",
-        f"- Corrida: `{report.run_dir}`",
-        f"- Resultado: {verdict}",
-        f"- Verificaciones: {len(report.checks)} · FAIL={report.n_fail} · WARN={report.n_warn}",
-        "",
-        "| Verificación | Ítem de reporte | Estado | Evidencia |",
-        "|---|---|---|---|",
-    ]
-    for check in report.checks:
-        icon = _STATUS_ICON.get(check.status, "•")
-        lines.append(
-            f"| {check.check_id} | {check.item_ref} | {icon} {check.status} | {check.detail} |"
-        )
-    lines += [
-        "",
-        "> El auditor es determinista: verifica artefactos en disco contra PRISMA 2020, "
-        "PRISMA-S y PRISMA-trAIce. Un PASS no sustituye el juicio del revisor humano.",
-    ]
-    return "\n".join(lines)
