@@ -92,13 +92,26 @@ def edit_ledger(run_dir: Path, fn: Callable[[list[dict]], Any]) -> None:
 def editar_protocolo(run_dir: Path, fn: Callable[[dict], Any]) -> None:
     """Edita el protocolo registrado: ``manifest.protocol`` y, si existe, la
     instantánea ``00_protocol/protocol.yml`` (Ola 1), para que el test no
-    dependa de qué fuente lea el auditor."""
+    dependa de qué fuente lea el auditor.
+
+    Convención: ``fn`` **muta el protocolo en sitio** y su valor devuelto se
+    ignora (revisión de C3). A diferencia de :func:`edit_yaml`, aquí un mapa
+    devuelto nunca sustituye nada: ``lambda p: p.pop("registration")`` o
+    ``p.setdefault(...)`` devuelven el mapa *extraído*, no un protocolo nuevo, y
+    tomarlo como documento de reemplazo pisaba ``manifest.yml`` entero (o dejaba
+    el protocolo reducido a ese mapa). Para sustituir el protocolo completo:
+    ``p.clear(); p.update(nuevo)``.
+    """
+
+    def _en_sitio(protocolo: dict) -> None:
+        fn(protocolo)
+
     manifest = run_dir / "manifest.yml"
     if manifest.exists():
-        edit_yaml(manifest, lambda m: fn(m["protocol"]))
+        edit_yaml(manifest, lambda m: _en_sitio(m["protocol"]))
     snapshot = run_dir / "00_protocol" / "protocol.yml"
     if snapshot.exists():
-        edit_yaml(snapshot, fn)
+        edit_yaml(snapshot, _en_sitio)
 
 
 def _llamadas(run_dir: Path) -> list[dict]:

@@ -6,9 +6,7 @@ pipeline con decisiones humanas, copiada a ``tmp_path`` en cada test.
 
 from __future__ import annotations
 
-import json
-
-from audit_fixtures import auditar, edit_ledger, edit_yaml, fila
+from audit_fixtures import auditar, edit_ledger, edit_yaml, escribir_metricas, fila
 
 from revisia.audit import render_audit_md
 
@@ -186,12 +184,8 @@ def test_audit_ledger_vacio_no_duplica_fail_de_final_gate(corrida) -> None:
     assert fila(report, "ledger").status == "FAIL"
 
 
-def _escribir_metricas(run, metrics: dict) -> None:
-    (run / "03_screening" / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
-
-
 def test_audit_gold_kappa_no_calculable_advierte(corrida) -> None:
-    _escribir_metricas(corrida, {"recall": 1.0, "cohen_kappa": None})
+    escribir_metricas(corrida, {"recall": 1.0, "cohen_kappa": None})
     gold = fila(auditar(corrida), "gold")
     assert gold.status == "WARN"  # antes: PASS con κ inventado
     assert "no calculable" in gold.detail
@@ -201,7 +195,7 @@ def test_audit_gold_matriz_con_valor_null_advierte(corrida) -> None:
     """``tp``/``fp``/``fn``/``tn`` presentes pero con algún valor ``null`` (no
     numérico): la matriz debe tratarse como ilegible en vez de romper la
     auditoría con un TypeError al sumar ``None`` con ``int``."""
-    _escribir_metricas(
+    escribir_metricas(
         corrida,
         {"recall": 1.0, "cohen_kappa": 0.5, "mcc": 0.4, "tp": None, "fp": 2, "fn": 0, "tn": 0},
     )
@@ -215,7 +209,7 @@ def test_audit_ia_una_sola_clase_con_gold_mixto_advierte(corrida) -> None:
     mixto (3 relevantes, 2 irrelevantes) pero la IA asignó una sola clase
     (siempre "relevante": fn+tn=0) — kappa=0.0 (no None) y mcc=None no debe
     pasar como PASS; hay que mirar mcc y la matriz, no solo κ."""
-    _escribir_metricas(
+    escribir_metricas(
         corrida,
         {"recall": 1.0, "cohen_kappa": 0.0, "mcc": None, "tp": 3, "fp": 2, "fn": 0, "tn": 0},
     )
@@ -229,7 +223,7 @@ def test_audit_gold_una_sola_clase_con_matriz_advierte(corrida) -> None:
     ``gold_una_sola_clase`` sobre la matriz debe advertir igual, porque un
     gold sin la clase "irrelevante" no es informativo aunque mcc/kappa den
     un número."""
-    _escribir_metricas(
+    escribir_metricas(
         corrida,
         {"recall": 1.0, "cohen_kappa": 0.0, "mcc": 0.0, "tp": 3, "fp": 0, "fn": 2, "tn": 0},
     )
@@ -241,12 +235,12 @@ def test_audit_gold_mcc_none_formato_antiguo_sin_matriz_advierte(corrida) -> Non
     puede evaluar si el gold o la IA son de una sola clase, así que la
     decisión se apoya solo en que mcc esté explícitamente en null; sigue
     siendo WARN."""
-    _escribir_metricas(corrida, {"recall": 1.0, "cohen_kappa": 0.42, "mcc": None})
+    escribir_metricas(corrida, {"recall": 1.0, "cohen_kappa": 0.42, "mcc": None})
     assert fila(auditar(corrida), "gold").status == "WARN"
 
 
 def test_audit_gold_sano_con_matriz_completa_pasa(corrida) -> None:
-    _escribir_metricas(
+    escribir_metricas(
         corrida,
         {"recall": 0.8, "cohen_kappa": 0.75, "mcc": 0.6, "tp": 4, "fp": 1, "fn": 1, "tn": 4},
     )
