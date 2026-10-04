@@ -95,11 +95,14 @@ uv sync --extra demo
 
 # 2. Configurar credenciales (solo tu proveedor)
 cp .env.example .env   # edita .env y pon tu API key (default: Gemini, tier gratis)
+#    revisia lee ese .env (desde la carpeta actual hacia arriba) sin pisar variables ya exportadas.
 #    ¿Usas Claude Code? No necesitas API key: ver "Usar Claude Code" más abajo.
 
 # 3. Crear tu revisión (scaffold completo: protocol.yml + PRISMA-P + gold + cadenas)
 uv run revisia new mi-revision
 #     edita protocols/mi-revision/protocol.yml y preregistra (PRISMA-P)
+uv run revisia validate protocols/mi-revision
+#     preflight sin red: proveedor, SDK, API key, bases y modelos (código 2 si algo falla)
 
 # 4. Ejecutar el pipeline (se pausa en cada checkpoint humano)
 uv run revisia run protocols/mi-revision --brain cerebro
@@ -346,6 +349,7 @@ una RS no repita las limitaciones clásicas de una revisión rápida:
 |---|---|
 | Pocas bases | **5 bases abiertas** por defecto (incl. PubMed vía NCBI + Europe PMC) + **9 opt-in por área** (ERIC, DOAJ, UNESDOC, BVS/LILACS, GIM, AGROSAVIA, CLACSO, Banco Mundial OKR, DOAB); `validate` avisa si hay <3. Scopus/WoS por import RIS/BibTeX. Una base caída no aborta la corrida: queda en `01_search/failures.json` |
 | Un solo cribador / sin kappa | `ensemble` en `screening_ta`; `gold.yml` plantilla + `revisia gold-template`; `validate` avisa si falta gold o ensemble |
+| Corrida que falla a mitad por configuración | `validate` y `run` hacen un **preflight sin red** (proveedor, SDK, API key, binario `claude`, etapas sin proveedor, bases desconocidas, cadenas ausentes, modelos retirados, `httpx`) y salen con código 2 antes de crear la carpeta de la corrida |
 | Volumen bajo | `--max` por defecto **50** por base |
 | Sesgo de idioma | cadenas de ejemplo **EN/ES/PT** + `grounding: agent` (verificación cross-lingual) |
 | Sesgo de modelo IA | `grounding: agent` (juicio cross-lingual) + ensemble multi-modelo + verificador |
