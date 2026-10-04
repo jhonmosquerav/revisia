@@ -20,11 +20,13 @@ corrida ya no es fiable.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from revisia.provenance.runmeta import RunMeta, canonical_sha256
 from revisia.schemas.artifacts import JOURNAL_PATHS, JournalEntry, JournalStage
 
 if TYPE_CHECKING:
@@ -117,3 +119,49 @@ class StageJournal:
             raise ValueError(f"entrada de {entry.stage!r} en el diario de {self.stage!r}")
         append_jsonl(self.path, entry)
         self._entries.setdefault((entry.record_id, entry.input_sha256), entry)
+
+
+def journaled(  # noqa: UP047
+    journal: StageJournal,
+    *,
+    record_id: str,
+    inputs: object,
+    model: type[ModelT],
+    compute: Callable[[], tuple[ModelT, list[RunMeta]]],
+    run_ctx: RunContext,
+    role_of: Callable[[int], str] | None = None,
+) -> ModelT:
+    """Salida de ``record_id`` desde el diario o, si falta, calculada y registrada.
+
+    ``inputs`` es todo lo que determina el resultado; su ``canonical_sha256`` es
+    la clave junto con ``record_id``. Si no hay entrada: ``compute()`` (devuelve
+    ``(salida, metas)``), después ``run_ctx.record_meta`` por cada llamada y
+    **después** ``journal.append``. Una caída entre medias deja llamadas
+    huérfanas (reales y válidas), nunca una decisión sin sus llamadas (spec
+    2026-10-04 §7). ``role_of(i)`` etiqueta la llamada ``i`` (``member:<i>``
+    en el ensemble de T/A).
+    """
+    input_sha256 = canonical_sha256(inputs)
+    entry = journal.lookup(record_id, input_sha256)
+    if entry is not None:
+        return model.model_validate(entry.output)
+    value, metas = compute()
+    calls = [
+        run_ctx.record_meta(
+            meta,
+            stage=journal.stage,
+            record_id=record_id,
+            role=role_of(i) if role_of is not None else None,
+        )
+        for i, meta in enumerate(metas)
+    ]
+    journal.append(
+        JournalEntry(
+            stage=journal.stage,
+            record_id=record_id,
+            input_sha256=input_sha256,
+            output=value.model_dump(mode="json"),
+            metas=calls,
+        )
+    )
+    return value
