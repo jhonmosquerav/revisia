@@ -73,7 +73,11 @@ Seis hallazgos de la exploración condicionan el diseño:
 ## 3. Decisiones tomadas
 
 D1–D3 las tomó el arquitecto el 2026-10-04 entre alternativas presentadas. D4–D14
-son supuestos propuestos con el diseño y aceptados con él; son revocables.
+son supuestos propuestos con el diseño y aceptados con él; son revocables. A
+pedido del arquitecto, D7, D8 y D13 se revisaron ese mismo día en una segunda
+pasada. D7 y D8 cambiaron (umbrales según lo que mide cada métrica; las citas
+marcadas se adjudican en vez de dar FAIL incondicional) y D13 se confirmó con
+precisiones.
 
 | # | Decisión | Razón |
 |---|---|---|
@@ -83,13 +87,13 @@ son supuestos propuestos con el diseño y aceptados con él; son revocables.
 | D4 | `decision.yml` gana `request_sha256` (obligatorio en gates humanos) y `records: {id: {label, reason}}` (solo en cribado). Junto a cada solicitud se escribe `decision.template.yml` con `approved:` nulo (inválido hasta rellenarlo) y la propuesta IA en comentarios, con saltos de línea saneados. | Aprobar tiene que ser un acto deliberado. Un `rationale` del LLM con `\n` dentro de un comentario YAML inyectaría claves (`approved: true`). |
 | D5 | `human_label` se escribe **solo** ante una etiqueta explícita. La aprobación en bloque de A1 deja la exclusión como "IA avalada" (`human_label = None`). | Si la aprobación en bloque convirtiera las exclusiones IA en humanas, el desglose trAIce R1 dejaría de significar algo. |
 | D6 | Las métricas miden la **propuesta IA** (`ensemble_label`) contra el gold, siempre. El gold efectivo (fichero + `gold_labels=`) se guarda en `03_screening/gold.json`. | κ y recall evalúan el sistema, no al humano que lo corrige. Persistir el gold permite al auditor recalcular. |
-| D7 | Umbrales del protocolo: **FAIL** si la métrica medida queda por debajo del umbral declarado (la igualdad pasa). WARN si el umbral no es medible (sin gold, κ `None`), si no hay ningún umbral declarado o si hay claves desconocidas (`kapa_min`). | El protocolo los declara a priori como criterio de aceptación (trAIce M9). No aportar gold evita el FAIL: el WARN lo nombra como desviación a declarar. |
-| D8 | `auto-approve (demo)` o `auto-proceed` en un gate de juicio o en el final → **FAIL** (antes WARN). `hallucination_flagged` → **FAIL** en el auditor **y** obliga a que el gate final lo resuelva un humano: ignora `--auto-approve` y la autonomía A2/A3 de `reporte`. | Es literal de la auditoría §8: "`publishable` exige sin `auto-approve` y sin `hallucination_flagged`". Lo segundo hace verdadera la promesa de `AGENTS.md`: "bloquea la aprobación silenciosa". |
+| D7 | Umbrales del protocolo, tratados según lo que miden. **`recall_target`** (evidencia perdida): un recall IA por debajo del umbral es **FAIL** mientras quede alguna exclusión IA de T/A sin etiqueta humana explícita. Si el humano etiquetó todas las exclusiones IA, baja a WARN. El remedio no exige corrida nueva: se etiquetan esas exclusiones en `screening_ta/decision.yml` y se reanuda (D14). **`kappa_min`** (acuerdo humano-IA): por debajo da **WARN** "desviación del protocolo: declárala" (PRISMA 24c). **Potencia del gold:** un recall que alcanza el umbral con menos de ⌈1/(1−umbral)⌉ positivos en el gold (20 para 0,95) da WARN, no PASS, porque con tan pocos positivos un solo fallo ya baja del umbral. Un recall por debajo nunca se excusa por gold pequeño. El detalle informa siempre el intervalo de Wilson al 95 %. También WARN: umbral no medible (sin gold, κ `None`), ningún umbral declarado, clave desconocida (`kapa_min`). | La primera versión daba FAIL a cualquier métrica bajo umbral, y eso confundía dos cosas. Un recall bajo significa que la IA dejó fuera estudios relevantes, y solo amenaza la validez si nadie revisó esas exclusiones. Un κ bajo con recall alto es sobreinclusión: más trabajo en FT, ningún estudio perdido (la plantilla lo define como "acuerdo mínimo humano-IA"). El caso de A11 (κ = 0,0 con PASS) deja de pasar en limpio. |
+| D8 | `auto-approve (demo)` o `auto-proceed` en un gate de juicio o en el final → **FAIL** (antes WARN). Con `hallucination_flagged`: (a) el gate final exige humano e ignora `--auto-approve` y la autonomía A2/A3 de `reporte`; (b) para **aprobar**, `reporte/decision.yml` debe adjudicar **cada** cita marcada en `flags: {<n>: {verdict: false_positive, reason}}`, con razón obligatoria. Si alguna marca es real, el camino es `approved: false`, porque no existe un veredicto "aceptar el riesgo". (c) El auditor da **FAIL** si queda alguna marca sin adjudicar por un humano y **WARN** si todas lo están ("k citas marcadas, adjudicadas como falsos positivos por <actor>: decláralo"). | Con FAIL incondicional, el humano no tenía forma de resolver un falso positivo, y hoy los hay: el patrón de citas (`verificador.py:30`) toma `[2019]` o `[1]` como ids, que salen "no está en el corpus" en cualquier modo. Así se mantiene lo que pide la auditoría §8 (nada de aprobación silenciosa con la bandera puesta) sin bloquear corridas por un defecto conocido del verificador (C2, Ola 2). Cada adjudicación queda en el ledger con actor y razón, y el auditor la expone. |
 | D9 | `--auto-approve` aprueba con las etiquetas de la IA (actor no humano, como hoy), salvo que haya `unclear` en FT: entonces pausa. No exige la completitud A0. | Sigue sirviendo para demostraciones; el auditor la marca FAIL (D8). Un `unclear` en FT no tiene etiqueta IA que adoptar. |
 | D10 | **Preflight sin red** (M6) antes de crear la carpeta de la corrida: proveedor conocido, SDK importable, key en el entorno, binario `claude`, `effort` solo en `claude_code`, etapa sin proveedor, base desconocida, modelo retirado, `httpx` ausente con bases con backend. Cualquier error da `rc 2` en `validate` y en `run`. `main` carga `.env` (`override=False`). `MANUAL_ONLY` se amplía para que las bases de suscripción comunes no den error. | Cierra M6 y el hueco de `.env`. Ampliar `MANUAL_ONLY` evita que el error de "base desconocida" bloquee CINAHL, Cochrane o ProQuest. |
 | D11 | **M23:** las corridas no se versionan en el repo del motor. `runs/` se ignora entero, con un comentario que lo diga. | Principio motor↔config (README): una corrida pertenece a la revisión, no al motor. Se deposita en OSF/Zenodo o junto al protocolo. |
 | D12 | M13 va en la pista del pipeline (PR-D): el checklist trAIce y `metodologia.md` los escribe el pipeline con hechos de la ejecución. El reductor del ledger (`summarize_gates`) es uno solo y lo usan pipeline y auditor, para que no se contradigan. | El auditor lee artefactos y no reescribe el entregable. |
-| D13 | Una corrida anterior a la Ola 1 (sin `run.json`) **no se puede reanudar** (`rc 2`) y **no es publicable** (FAIL "anterior a la Ola 1"). Cambio incompatible: la siguiente versión es 0.8.0, y publicarla lo decide el arquitecto. | No tiene instantánea, ni log de búsqueda, ni decisiones por registro: el auditor no puede verificar lo que la Ola 1 exige. |
+| D13 | Una corrida anterior a la Ola 1 (sin `run.json`) **no se puede reanudar** (`rc 2`: "corrida anterior a la Ola 1; empieza una nueva con `revisia run <protocolo>`") y **no es publicable**: FAIL en `protocol_snapshot` con el mensaje "anterior a la Ola 1 (motor < 0.8): sin instantánea ni decisiones por registro; regenera la corrida con el motor actual". Sigue siendo **exportable** (`revisia export`, gracias al validador de `PrismaCounts` para manifiestos antiguos) y **auditable como diagnóstico** (se aplican las relaciones aritméticas v0.7). Versión: los cambios incompatibles de §13.4 suben la minor según SemVer 0.x, de **0.7.0 a 0.8.0**. El CHANGELOG los lista bajo "Cambios incompatibles", y cuándo publicar lo decide el arquitecto, igual que con la v0.7.0. | Revisado y confirmado. Reanudar sin instantánea obligaría a repetir la búsqueda, con resultados distintos de los que ya se cribaron. Auditar con las reglas v0.7 devolvería el veredicto que la auditoría declaró inválido (C1, C3). En la práctica el coste es casi nulo: la única corrida existente es la reconstrucción local, que ya audita "no publicable" desde la Ola 0. |
 | D14 | Se puede reanudar después de un `reject`: la decisión efectiva de una etapa es la última del ledger y todas quedan registradas. No hay lock de concurrencia (se documenta: no reanudes la misma corrida en dos procesos). Una corrida interrumpida por error sale con `rc 3` e imprime cómo reanudar; `paused` sigue saliendo con `rc 0`. | Cambiar de opinión es legítimo si queda rastro. El lock deja ficheros huérfanos tras un `kill -9` y protege un caso raro. Cambiar el `rc` de `paused` rompería scripts y queda fuera. |
 
 ## 4. Contratos de artefactos (PR-0)
@@ -243,32 +247,34 @@ horas (el hash tiene que ser estable entre reanudaciones). Claves comunes:
 
 | Gate | Claves propias |
 |---|---|
-| `screening_ta` | `mode: exceptions \| label_all`; `n_screened`, `n_proposed_pass`, `n_proposed_exclude`; `records[]` ordenado por id: `{record_id, title, year, doi, source_db, proposal, votes[{model, label, confidence, rationale, criteria_violated}]}`; `must_label: [ids]` (vacío en A1) |
+| `screening_ta` | `mode: exceptions \| label_all`; `n_screened`, `n_proposed_pass`, `n_proposed_exclude`; `records[]` ordenado por id: `{record_id, title, year, doi, source_db, proposal, votes[{model, label, confidence, rationale, criteria_violated}]}`; `must_label: [ids]` (vacío en A1); `quality{recall, recall_target, kappa, kappa_min, gold_positives, recall_meets_target} \| null` (null sin gold) y `ai_excluded: [ids]` (D7: qué etiquetar para que un recall bajo no bloquee la publicación) |
 | `screening_ft` | `mode`; `n_sought`, `n_retrieved`, `n_not_retrieved`; `records[]`: `{record_id, title, year, doi, fulltext, fulltext_reason, fulltext_source_url, proposal \| null, confidence \| null, rationale \| null, criteria_violated}`; `must_label` (A0: todos los recuperados; A1: solo `unclear`); `must_resolve` (los `unclear`); `rescuable` (no recuperados) |
 | `extraccion` | `n_studies`; `studies[{record_id, title, fields{key: {value, source_quote, status, confidence}}}]`; `second_extraction{n_studies, n_field_pairs, value_agreement, presence_kappa} \| null`; `artifact_sha256` = `canonical_sha256` de `extractions.json` |
 | `rob` | `tool`, `n_studies`; `studies[{record_id, title, overall, domains[{domain, judgment, rationale, support_quote}]}]`; `artifact_sha256` de `assessments.json` |
-| `reporte` | `forced_human`, `forced_reason`; `n_included`; `included: [ids]`; `verification{mode, n_checks, n_flagged, hallucination_flagged, flagged[{cited_id, claim (≤ 300 car.)}]}`; `documento_sha256` = `sha256_text` de `documento.md` |
+| `reporte` | `forced_human`, `forced_reason`; `n_included`; `included: [ids]`; `verification{mode, n_checks, n_flagged, hallucination_flagged, flagged[{index, cited_id, claim (≤ 300 car.), note}]}` (`index` = posición en `verification.json.checks`); `must_adjudicate: [index]` (todas las marcadas); `documento_sha256` = `sha256_text` de `documento.md` |
 
 **`decision.yml`** (`HumanDecision`, `extra="allow"` como hoy):
 - `request_sha256: str`, obligatorio en gates humanos;
 - `approved: StrictBool`;
 - `actor: str = "human:desconocido"`, `reason: str | None`;
-- `records: dict[str, RecordLabel]`, solo en `screening_*`, con `RecordLabel(label: Literal["include","exclude"] | None, reason: str | None)` (`extra="forbid"`; `label: null` cuenta como "no etiquetado", para que la plantilla pueda listar todos los registros).
+- `records: dict[str, RecordLabel]`, solo en `screening_*`, con `RecordLabel(label: Literal["include","exclude"] | None, reason: str | None)` (`extra="forbid"`; `label: null` cuenta como "no etiquetado", para que la plantilla pueda listar todos los registros);
+- `flags: dict[str, FlagReview]`, solo en `reporte`, con clave = `index` de la cita marcada (entre comillas) y `FlagReview(verdict: Literal["false_positive"] | None, reason: str | None)` (`extra="forbid"`; `verdict: null` cuenta como "sin adjudicar"). Con `approved: true`, toda cita de `must_adjudicate` necesita `verdict: false_positive` y `reason` no vacía (D8). Con `approved: false`, `flags` se ignora.
 
 **Ledger.** El esquema de `DecisionEntry` no cambia; cambian las convenciones
 de `detail` y aparece la acción `label`.
-`LEDGER_ACTIONS = {"approve", "reject", "auto-proceed", "label"}`.
+`LEDGER_ACTIONS = {"approve", "reject", "auto-proceed", "label", "flag_review"}`.
 
 | Acción | Contenido |
 |---|---|
 | `label` | stage `screening_ta \| screening_ft`, `target = record_id`, actor = el de `decision.yml`, `detail{from: label \| null, to, reason, rescue: bool, request_sha256, decision_sha256}` |
 | `approve` / `reject` | `detail{request_sha256, decision_sha256, n_labels, forced_human, reason?, **extras de decision.yml}` |
+| `flag_review` | stage `reporte`, `target = "flag:<index>"`, actor = el de `decision.yml`, `detail{cited_id, claim, verdict, reason, request_sha256, decision_sha256}` |
 | `auto-proceed` | `actor = "agent:<stage>"`, `detail{reason, request_sha256}` |
 | aprobación por `--auto-approve` | `actor = "auto-approve (demo)"`, `action = approve`, `n_labels = 0` |
 
 `decision_sha256 = canonical_sha256(decision.model_dump(mode="json"))`. Las
-`label` de una decisión se escriben antes de su `approve`, en orden de id;
-nunca acompañan a un `reject`. La tupla `(stage, action, target,
+`label` y `flag_review` de una decisión se escriben antes de su `approve`, en
+orden de id o de índice; nunca acompañan a un `reject`. La tupla `(stage, action, target,
 request_sha256, decision_sha256)` es única. La **decisión efectiva** de una
 etapa es su última entrada `approve`, `reject` o `auto-proceed`
 (`summarize_gates`).
@@ -307,15 +313,15 @@ pipeline. Cada una tiene su test en el lado que la produce.
 
 14. `run.json.started_utc ≤` toda marca de `llm_calls`, ledger y log de búsqueda `≤ manifest.created_utc` (tolerancia 2 s); `resumes` ascendente; `protocol_sha256 ==` huella recalculada de `00_protocol/`.
 15. `request_sha256 == canonical_sha256(yaml.safe_load(review_request.yml) sin request_sha256)`, y es el que llevan la `decision.yml` y las entradas `approve`/`reject`/`label` de la decisión efectiva. `artifact_sha256`/`documento_sha256` coinciden con el disco.
-16. Las `label` van antes de su `approve`; no hay `label` con `reject`; la tupla de §4.3 es única.
-17. `manifest.final_gate.forced_human` ⇒ la decisión efectiva de `reporte` es humana (`approve`/`reject` con `forced_human: true`), nunca `auto-approve` ni `auto-proceed`.
+16. Las `label` y `flag_review` van antes de su `approve`; no acompañan a un `reject`; la tupla de §4.3 es única.
+17. `manifest.final_gate.forced_human` ⇔ `verification.hallucination_flagged`, y en ese caso la decisión efectiva de `reporte` es humana (`approve`/`reject` con `forced_human: true`), nunca `auto-approve` ni `auto-proceed`. Si es `approve`, cada índice de `must_adjudicate` tiene una `flag_review` con `verdict: false_positive`, razón, el mismo actor y el `decision_sha256` de ese `approve`.
 18. `run.json.status == "completed"` ⇒ la decisión efectiva de `reporte` es `approve`.
 
 ### 4.5 Qué contiene PR-0 en código
 
 - `revisia/schemas/artifacts.py`: `ARTIFACT_SCHEMA_VERSION`, `RunInfo`, `LLMCall`, `JournalEntry`, `SearchLog`, `SearchLogEntry`, `DedupReport`, `RetrievalOutcome`, `ExcludedReport`, `GateSummary`, `JournalStage`, `LLMStage`, `FulltextReason`, `RunStatus`, `JOURNAL_PATHS`, `GATED_STAGES`.
 - `revisia/provenance/runmeta.py`: `canonical_json`, `canonical_sha256`.
-- `revisia/provenance/ledger.py`: `LEDGER_ACTIONS`, `HUMAN_ACTOR_PREFIX = "human:"`, `AUTO_APPROVE_ACTOR = "auto-approve (demo)"`, `summarize_gates(entries) -> dict[str, GateSummary]` (decisión efectiva por etapa, actor, `request_sha256`, número de etiquetas).
+- `revisia/provenance/ledger.py`: `LEDGER_ACTIONS`, `HUMAN_ACTOR_PREFIX = "human:"`, `AUTO_APPROVE_ACTOR = "auto-approve (demo)"`, `summarize_gates(entries) -> dict[str, GateSummary]` (decisión efectiva por etapa, actor, `request_sha256`, número de etiquetas y de marcas adjudicadas).
 - `revisia/config.py`: `KNOWN_THRESHOLDS = {"kappa_min", "recall_target", "wmcc_fn_weight"}`.
 - Campos opcionales de `ScreeningDecision` y campos nuevos de `PrismaCounts` (aditivos, sin cambiar comportamiento).
 - `tests/fakes.py`: infraestructura de test compartida por todas las pistas. `ScriptedProvider` (etiqueta por palabra clave, `fail_at=k` para simular un 429, contador de llamadas; conserva `provider="fake"` y `deterministic=True`) y los `fetch_fn` de prueba (`fetch_disponible`, `fetch_no_disponible(ids)`).
@@ -603,26 +609,38 @@ def correr_hasta(protocol, protocol_dir, ctx, *, search_fn, fetch_fn=None,
 
 ```python
 class RecordLabel(BaseModel): ...            # §4.3, extra="forbid"
-class HumanDecision(BaseModel):              # + request_sha256, records
+class FlagReview(BaseModel): ...             # §4.3, extra="forbid"
+class HumanDecision(BaseModel):              # + request_sha256, records, flags
 @dataclass(frozen=True, slots=True)
 class RecordPolicy:
     hints: tuple[RecordHint, ...]; must_label: frozenset[str]; must_resolve: frozenset[str]
     rescue_ids: frozenset[str]; reason_on_exclude: bool
+@dataclass(frozen=True, slots=True)
+class FlagPolicy:
+    flagged: tuple[FlaggedClaim, ...]       # index, cited_id, claim, note
 @dataclass(slots=True)
 class GateResult:
     status: GateStatus; message: str; request_sha256: str | None = None
     actor: str | None = None; labels: dict[str, RecordLabel] = field(default_factory=dict)
+    flag_reviews: dict[str, FlagReview] = field(default_factory=dict)
 def review_gate(*, stage, autonomy, run_ctx, review_payload, auto_approve,
-                records: RecordPolicy | None = None, force_human: bool = False) -> GateResult
-def render_decision_template(*, stage, autonomy, request_sha256, records) -> str
+                records: RecordPolicy | None = None, flags: FlagPolicy | None = None,
+                force_human: bool = False) -> GateResult
+def render_decision_template(*, stage, autonomy, request_sha256, records, flags) -> str
 ```
 
 Validación de `decision.yml` cuando su hash coincide:
-- `records` en un gate sin `RecordPolicy` → `DecisionFileError`;
-- id que no está en la solicitud → error con el id;
+- `records` en un gate sin `RecordPolicy`, o `flags` en un gate sin `FlagPolicy` → `DecisionFileError`;
+- id o índice que no está en la solicitud → error que lo nombra;
 - `exclude` sin `reason` cuando `reason_on_exclude` (FT) → error;
 - etiqueta sobre un id de `rescue_ids` sin `reason` → error;
-- con `approved: true`, ids de `must_label` o de `must_resolve` sin etiqueta → un único error que lista hasta 20 ids y el total.
+- con `approved: true`: ids de `must_label` o de `must_resolve` sin etiqueta, o índices de `must_adjudicate` sin `verdict: false_positive` y razón → un único error que lista hasta 20 y el total (D8);
+- con `approved: false`, `flags` se ignora: rechazar no exige adjudicar.
+
+La plantilla del gate `reporte` lista cada cita marcada como
+`"<index>": {verdict: null, reason: null}`, con la afirmación y el motivo de
+la marca en comentarios saneados. Su cabecera dice que, si alguna marca es
+una alucinación real, hay que rechazar.
 
 Con `--auto-approve` y sin `decision.yml`: si `must_resolve` no está vacío,
 pausa (D9); si no, decisión sintética `auto-approve (demo)`. Con
@@ -632,7 +650,8 @@ pausa (D9); si no, decisión sintética `auto-approve (demo)`. Con
 - Tras cada gate de cribado aprobado, `apply_labels` escribe `human_label`, `human_reason`, `human_actor` y `final_label` en `decisions.json` (D5: solo las etiquetas explícitas).
 - FT: un `unclear` nunca pasa sin etiqueta humana; un rescate entra como evaluado por humano; `excluded_ft_human`/`excluded_ft_ai` y la razón humana llegan a 16b y a `ft_exclusion_reasons`.
 - Métricas: siempre sobre `ensemble_label` (D6); `metrics.py:130` deja de usar `final_label`.
-- M5: si `verification.hallucination_flagged`, el gate `reporte` se llama con `force_human=True` y el manifiesto registra `final_gate.forced_human`.
+- M5: si `verification.hallucination_flagged`, el gate `reporte` se llama con `force_human=True` y con `FlagPolicy` (las citas marcadas de `verification.json`). El ledger recibe una `flag_review` por adjudicación antes del `approve`, y el manifiesto registra `final_gate.forced_human`.
+- D7: el pipeline no aplica umbrales (lo hace el auditor), pero `screening_ta/review_request.yml` incluye `recall_target`, el recall medido y la lista de exclusiones IA. Así el revisor sabe, antes de aprobar, si para que la corrida sea publicable tiene que etiquetar esas exclusiones.
 
 **M13: `exports/checklist.py` y `exports/methods.py`.**
 `render_traice_checklist(..., gates: dict[str, GateSummary], autonomy_effective,
@@ -664,6 +683,12 @@ checklist se escribe antes del gate final, así que ese gate figura como
 `test_review_request_ta_lista_votos_por_miembro`,
 `test_extraccion_y_rob_payload_con_tabla_y_hash_del_artefacto`,
 `test_gate_final_forzado_a_humano_si_hallucination_flagged` (M5: `reporte` en A2 y `--auto-approve` → pausa),
+`test_aprobar_con_citas_marcadas_exige_adjudicar_cada_una` (D8: lista los índices sin adjudicar),
+`test_adjudicacion_sin_razon_es_error`,
+`test_rechazar_con_citas_marcadas_no_exige_adjudicar`,
+`test_flags_en_gate_sin_marcas_es_error`,
+`test_flag_review_en_el_ledger_antes_del_approve`,
+`test_review_request_ta_informa_recall_y_exclusiones_ia` (D7),
 `test_traice_autonomia_efectiva_y_actores_reales` (M13),
 `test_methods_sin_texto_fijo_de_validacion_humana` (M13).
 
@@ -699,7 +724,7 @@ Reglas:
 - **Una fila por check, siempre:** la forma del informe es estable y comparable entre corridas.
 - **Fail-closed:** `_run_one` envuelve cada check; si revienta, la fila es FAIL ("error interno del auditor (Tipo): … — la corrida no se considera verificada") y el resto sigue.
 - **Carga robusta:** los loaders capturan `OSError`, `UnicodeDecodeError`, `JSONDecodeError`, `YAMLError`, `ValidationError` y `RecursionError`, y comprueban que la raíz sea mapa o lista según corresponda (hoy `_load_manifest`, `audit.py:66`, no lo hace). Usan `yaml.CSafeLoader` si está disponible: un manifiesto con miles de `llm_calls` tarda segundos con el loader puro.
-- **Constantes importadas, no duplicadas:** `STAGES`, `JUDGMENT_STAGES`, `KNOWN_THRESHOLDS`, `GATED_STAGES`, `LEDGER_ACTIONS`, `summarize_gates`, `recall_biased_label`, `compute_exclusion_breakdown` y las funciones de `metrics.py` (con un `kappa_from_matrix` público).
+- **Constantes importadas, no duplicadas:** `STAGES`, `JUDGMENT_STAGES`, `KNOWN_THRESHOLDS`, `GATED_STAGES`, `LEDGER_ACTIONS`, `summarize_gates`, `recall_biased_label`, `compute_exclusion_breakdown` y las funciones de `metrics.py` (con dos públicas nuevas: `kappa_from_matrix` y `wilson_interval(k, n, z=1.96)` para el detalle de `thresholds`).
 - **CLI:** `_cmd_audit` (`cli.py:306-326`) solo gana el icono de `N/A` (➖) y el ancho de columna. Los códigos 0/1/2 se mantienen.
 
 ### 9.2 Estado de la corrida y `N/A`
@@ -743,8 +768,8 @@ La columna "Etapa" es la que gobierna el `N/A` (— = siempre aplica). F1/F2 = f
 | 13 | `exclusions` | trAIce R1 | screening_ft | coincide con el recálculo | — | ausente o inválido en etapa alcanzada; distinto de `compute_exclusion_breakdown(TA+FT)`; `excluded_ta_human/ai` distintos del recálculo solo T/A | 1 |
 | 14 | `deliverable` | PRISMA 16/16b/17/18/27 | reporte | completo | — | falta o está vacío alguno: los 8 de hoy + `checklist_s.md` + `checklist_abstracts.md` + `excluidos_texto_completo.md` (F2) + `meta_analisis.md` si hubo meta-análisis + `interop/prisma2020_flow.csv` | 1+2 |
 | 15 | `gold` | trAIce M9/R2 | screening_ta | como hoy, sobre `ScreeningMetrics` validado | sin gold; κ o MCC `None`; gold o IA de una sola clase | — (la matriz ilegible la da `schemas`) | 1 |
-| 16 | `thresholds` | trAIce M9/R2 / PRISMA 8 | screening_ta | "recall 0.97 ≥ 0.95; κ 0.71 ≥ 0.60" | umbral no medible; clave desconocida; ningún umbral declarado | métrica medida bajo su umbral (D7) | 1 |
-| 17 | `grounding` | trAIce M8/M9 | sintesis | k citas; n/m incluidos citados | `checks: []` con incluidos > 0 | `hallucination_flagged` (D8); bandera distinta de recalcularla (`recompute_flag`); cita fuera de los incluidos | 1 |
+| 16 | `thresholds` | trAIce M9/R2 / PRISMA 8, 24c | screening_ta | "recall 0.97 [IC95 0.90–0.99] ≥ 0.95 con 34 positivos; κ 0.71 ≥ 0.60" | κ bajo `kappa_min` (desviación a declarar); recall bajo umbral con **todas** las exclusiones IA de T/A etiquetadas por humano; recall que alcanza el umbral con menos de ⌈1/(1−umbral)⌉ positivos; umbral no medible; clave desconocida; ningún umbral declarado | recall bajo `recall_target` con alguna exclusión IA de T/A sin etiqueta humana (D7; el detalle lista cuántas y cómo remediarlo) | 1+2 |
+| 17 | `grounding` | trAIce M8/M9 | sintesis | k citas, ninguna marcada; n/m incluidos citados | `checks: []` con incluidos > 0; citas marcadas, **todas** adjudicadas como falso positivo por un humano ("k citas marcadas, adjudicadas por <actor>: decláralo") | cita marcada sin `flag_review` humana en la decisión efectiva de `reporte` (D8); bandera distinta de recalcularla (`recompute_flag`); `exists_in_corpus: true` para un id que no está entre los incluidos | 1+2 |
 | 18 | `search_log` | PRISMA-S 1/8/13/15 | busqueda | una entrada `ok` por base con cadena coincidente | `failed`; `question_fallback`; `n_returned == max_results` (resultados truncados); `manual_only` sin registros importados; `injected` | `log.json` ausente; base declarada sin entrada; `status: unknown`; relaciones 1-3 rotas; cadena distinta de `00_protocol/search_strings/<key>.txt` | 2 |
 | 19 | `search_window` | PRISMA-S 9/13 | busqueda | fecha del motor (mínimo `started_utc` del log) y `from`/`to` declarados | `from`/`to` ausentes; `executed` tecleada distinta de la del motor; sin log, "fecha tecleada, no registrada por el motor" | — | 1+2 |
 | 20 | `registration` | PRISMA 24a | — | como hoy, leyendo la instantánea si existe | como hoy | — | 1 |
@@ -828,8 +853,8 @@ de edición (`edit_json`, `edit_yaml`, `edit_ledger`).
 - *`hitl`/`exclusions`:* auto-approve en cada uno de los 5 gates; `excluded_human` sin etiquetas (C3); exclusiones distintas del recálculo; actor desconocido → WARN; fase 2: `human_label` sin `label`, `from` distinto de la IA, `decision.yml` vs ledger, FT sin etiquetar, `unclear` sin resolver, no recuperado cribado por IA, corrida v0.7 sin etiquetas.
 - *`request_hash` (F2):* solicitud editada; decisión de otra solicitud; etiqueta fuera de la solicitud; artefacto aprobado modificado.
 - *Estado:* pausa en `screening_ft` (`final_gate` FAIL "en pausa en `screening_ft`", `hitl` PASS en T/A, posteriores en `N/A`); interrumpida.
-- *`thresholds`:* recall bajo umbral; **κ 0.0 bajo `kappa_min`** (el caso exacto de A11); igual al umbral pasa; declarado sin gold; clave desconocida; sin umbrales.
-- *`grounding`:* bandera → FAIL; sin citas → WARN; bandera inconsistente; cita fuera de los incluidos.
+- *`thresholds`:* recall bajo umbral con exclusiones IA sin revisar → FAIL; el mismo recall con todas las exclusiones IA etiquetadas → WARN (F2); **κ 0.0 bajo `kappa_min` → WARN, nunca PASS** (el caso exacto de A11); recall igual al umbral con gold suficiente → PASS; recall 1.0 con 5 positivos → WARN (gold sin potencia); recall bajo con gold pequeño → sigue FAIL; el detalle incluye el intervalo de Wilson; declarado sin gold; clave desconocida; sin umbrales.
+- *`grounding`:* marca sin adjudicar → FAIL; todas adjudicadas por humano → WARN (F2); adjudicación de un actor no humano → FAIL; sin citas → WARN; bandera inconsistente; `exists_in_corpus` falso positivo del fichero (id fuera de los incluidos marcado como existente) → FAIL.
 - *`search_*` (F2):* log ausente; base sin entrada; cadena distinta de la instantánea; `query_sha256` falso; tope de `max_results`; base caída; fallback a la pregunta; búsqueda inyectada; fecha tecleada distinta.
 - *`protocol_snapshot` (F2):* hash alterado; instantánea distinta del manifiesto.
 - *`deliverable`:* exige `checklist_s.md` y `checklist_abstracts.md`; exige 16b (F2); exige `meta_analisis.md` si hubo efectos.
@@ -910,10 +935,19 @@ falsificada) → **NO publicable** por al menos siete checks independientes.
 1. **Gates que no convergen.** Cualquier no determinismo en un payload deja la corrida pausada para siempre. Mitigación: `test_payloads_estables_entre_reanudaciones_y_sin_rutas_absolutas` sobre los cinco gates; solo `documento.md` entra en el hash de `reporte`.
 2. **Código que cambia entre pausa y reanudación.** Se verifican las plantillas de prompt; parsers y resto del código, no. `engine_version` y `resumes` quedan registrados.
 3. **El demo cambia de comportamiento.** Sin texto completo en abierto, un registro ya no llega a extracción (D2). Los tests inyectan `fetch_fn`; CHANGELOG y README lo explican.
-4. **Cambios incompatibles (0.8.0):** `decision.yml` exige hash; desaparece `fulltext_abstract_only`; `RunContext` sobre una carpeta existente da error; las corridas anteriores no se reanudan ni son publicables (D13); `float | None` y el resto de la API de la Ola 0 siguen como estaban.
+4. **Cambios incompatibles (0.8.0):**
+   - `decision.yml` exige `request_sha256`;
+   - desaparece `PrismaCounts.fulltext_abstract_only`;
+   - `RunContext` sobre una carpeta existente da error;
+   - `revisia validate` y `run` salen con `2` ante problemas de preflight que antes se descubrían a mitad de corrida;
+   - los no recuperados ya no llegan a extracción (D2);
+   - el auditor es más estricto: auto-approve, recall bajo umbral sin revisión y citas marcadas sin adjudicar pasan de WARN a FAIL;
+   - las corridas anteriores no se reanudan ni son publicables (D13).
+
+   El tipo `float | None` de las métricas y el resto de la API de la Ola 0 no cambian.
 5. **Preflight más estricto.** Puede bloquear protocolos con bases fuera de las listas; se mitiga ampliando `MANUAL_ONLY` y con un mensaje que dice cómo declararla como manual.
 6. **Falsos positivos de `timing`.** Tolerancia de 2 s; las heurísticas solo dan WARN. Si un día el pipeline lanza más de 50 llamadas concurrentes, hay que revisar el umbral de 5 ms.
-7. **`hallucination_flagged` → FAIL con el grounding aún roto (C2).** En modo `existence`, un `[2019]` tomado como id se marca como cita inexistente y la corrida deja de ser publicable hasta la Ola 2. Se acepta: es un falso positivo visible, no una aprobación silenciosa.
+7. **Adjudicación de citas marcadas con el verificador aún roto (C2).** El patrón de citas (`verificador.py:30`) toma `[2019]` o `[1]` como ids, que salen marcados en cualquier modo. D8 le da al humano una salida: adjudicarlos uno a uno como falsos positivos con razón, que el auditor deja en WARN. El riesgo pasa a ser el contrario, que el humano adjudique sin leer. Se mitiga con la razón obligatoria por cita, el actor en el ledger y el WARN visible en `audit.md`. En el otro sentido, el modo `embedder` por defecto casi nunca marca nada (C2), así que una síntesis sin marcas **no** prueba que esté fundamentada: lo resuelve la Ola 2.
 8. **Usabilidad.** Las razones humanas libres multiplican las cajas "Reason n" del diagrama; la plantilla sugiere los criterios de `inclusion_exclusion.yml`. Un `review_request.yml` de miles de registros pesa.
 9. **Inmutabilidad del protocolo.** Añadir `gold.yml` o `effects.yml` a mitad de corrida exige una corrida nueva. Es intencional (reproducible) y se documenta.
 10. **El auditor no es una firma.** Quien replique toda la lógica puede fabricar una corrida coherente.
