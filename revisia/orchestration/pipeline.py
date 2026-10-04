@@ -715,28 +715,67 @@ def _extract(
     return extractions, extraction_agreement
 
 
+def _rob_one(
+    run: _Run,
+    provider: LLMProvider,
+    cfg: ProviderConfig,
+    record: SearchRecord,
+    extraction: ExtractionRecord | None,
+    text: str | None,
+) -> tuple[RoBAssessment, list[RunMeta]]:
+    """Riesgo de sesgo de un estudio (``compute`` de su diario)."""
+    assessment, meta = rob_agent.assess_rob(
+        provider,
+        tool=run.protocol.rob_tool,
+        record=record,
+        extraction=extraction,
+        text=text,
+        temperature=cfg.temperature,
+        seed=cfg.seed,
+    )
+    return assessment, [meta]
+
+
 def _assess_rob(
     run: _Run,
     included: list[SearchRecord],
     extractions: dict[str, ExtractionRecord],
     fulltexts: dict[str, str],
 ) -> dict[str, RoBAssessment]:
-    """Riesgo de sesgo (A0) con la herramienta del protocolo."""
+    """Riesgo de sesgo (A0) con la herramienta del protocolo, con diario (``07_rob/``).
+
+    La entrada del diario cubre lo de la extracción más el hash de la extracción
+    del estudio y la herramienta (spec §7).
+    """
     rob_cfg = run.protocol.provider_for("rob")
     rob_provider = build_provider(rob_cfg)
+    journal = StageJournal(run.ctx, "rob")
     assessments: dict[str, RoBAssessment] = {}
     for record in included:
-        assessment, meta = rob_agent.assess_rob(
-            rob_provider,
-            tool=run.protocol.rob_tool,
-            record=record,
-            extraction=extractions.get(record.record_id),
-            text=fulltexts.get(record.record_id),
-            temperature=rob_cfg.temperature,
-            seed=rob_cfg.seed,
+        extraction = extractions.get(record.record_id)
+        extraction_sha256 = (
+            canonical_sha256(extraction.model_dump(mode="json")) if extraction is not None else None
         )
-        assessments[record.record_id] = assessment
-        run.ctx.record_meta(meta, stage="rob", record_id=record.record_id)
+        assessments[record.record_id] = journaled(
+            journal,
+            record_id=record.record_id,
+            inputs={
+                **_extraction_inputs(run, record, fulltexts, rob_cfg),
+                "extraction_sha256": extraction_sha256,
+                "tool": run.protocol.rob_tool,
+            },
+            model=RoBAssessment,
+            compute=partial(
+                _rob_one,
+                run,
+                rob_provider,
+                rob_cfg,
+                record,
+                extraction,
+                fulltexts.get(record.record_id),
+            ),
+            run_ctx=run.ctx,
+        )
     run.ctx.write_json(
         "07_rob/assessments.json",
         {k: v.model_dump() for k, v in assessments.items()},

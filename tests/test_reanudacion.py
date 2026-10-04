@@ -572,3 +572,20 @@ def test_extraccion_y_segundo_extractor_en_diario(
     assert [e.record_id for e in primero] == ["rec-1", "rec-2"]
     assert len(segundo) == 1
     assert {(m.stage, len(e.metas)) for e in segundo for m in e.metas} == {("extraccion_2", 1)}
+
+
+def test_rob_en_diario_no_se_repite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    proveedor = ScriptedProvider()
+    monkeypatch.setattr(pipeline_mod, "build_provider", lambda _cfg: proveedor)
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    correr_hasta(
+        protocol, EXAMPLE, ctx, search_fn=_busqueda, fetch_fn=fetch_disponible, parar_en="rob"
+    )
+    assert _llamadas(proveedor, "RIESGO DE SESGO") == 2
+
+    run_pipeline(protocol, EXAMPLE, RunContext.open(ctx.run_dir), fetch_fn=fetch_disponible)
+
+    assert _llamadas(proveedor, "RIESGO DE SESGO") == 2
+    entradas = _diario(ctx, "07_rob/journal.jsonl")
+    assert [(e.record_id, len(e.metas)) for e in entradas] == [("rec-1", 1), ("rec-2", 1)]
