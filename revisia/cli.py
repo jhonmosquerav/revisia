@@ -163,6 +163,10 @@ def _cmd_gold_template(args: argparse.Namespace) -> int:
 
 # `--max` por defecto en una corrida nueva (al reanudar manda run.json).
 DEFAULT_MAX_RESULTS = 50
+# `--runs-root` por defecto (al reanudar la corrida vive donde ya está).
+DEFAULT_RUNS_ROOT = "runs"
+# Recorte del error real que cita el aviso de un fichero dañado.
+_MAX_DETAIL_CHARS = 300
 
 
 def _run_guarded(command: Callable[[], int]) -> int:
@@ -204,10 +208,18 @@ def _run_guarded(command: Callable[[], int]) -> int:
         # Un `run.json` o un protocolo de `00_protocol/` truncado, vacío o editado a
         # mano llega aquí como el error crudo de pydantic/YAML, antes de que el
         # pipeline pueda convertirlo en `RunInterrupted`: es un error de uso, no un bug.
+        # Pero también puede venir de otro fichero (p. ej. `manifest.yml` al sedimentar en
+        # el cerebro tras completar la corrida): se cita el error real y el consejo de
+        # empezar una corrida nueva solo vale para los ficheros de estado.
+        from revisia.agents import _http
+
+        lineas = str(exc).splitlines()
+        # Redactar antes de recortar: un secreto cortado a medias ya no casaría con el patrón.
+        detalle = _http.redact_secrets(f"{type(exc).__name__}: {lineas[0] if lineas else ''}")
         print(
-            "error: un fichero de estado de la corrida está dañado o no es válido "
-            f"(run.json o 00_protocol/):\n{exc}\n"
-            "Si no puedes repararlo, empieza una corrida nueva con `revisia run <protocolo>`.",
+            f"error: un fichero está dañado o no es válido ({detalle[:_MAX_DETAIL_CHARS]}).\n"
+            "Si el fichero es run.json o está en 00_protocol/, la corrida no es reanudable: "
+            "empieza una nueva con `revisia run <protocolo>`.",
             file=sys.stderr,
         )
         return 2
@@ -224,9 +236,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from revisia.orchestration.flow import resume_review, run_review
     from revisia.orchestration.snapshot import read_run_info
 
+    info = None
     if args.resume is not None:
         info = read_run_info(args.resume)
         slug = info.slug if info is not None else None
+        if args.runs_root != DEFAULT_RUNS_ROOT:
+            print(f"⚠ --runs-root no aplica al reanudar: la corrida vive en {args.resume}.")
         if info is not None and args.max is not None and args.max != info.max_results:
             print(
                 f"⚠ --max {args.max} se ignora al reanudar: la corrida usa "
@@ -243,15 +258,25 @@ def _cmd_run(args: argparse.Namespace) -> int:
     else:
         slug = load_protocol(args.protocol_dir).slug
     prior = None
+    # Una sola vez y antes de correr: reanudar una corrida ya sedimentada no la registra de
+    # nuevo, y los dos mensajes (el de la memoria previa y el del cierre) tienen que coincidir.
+    ya_sedimentada = False
     if args.brain and slug:
         from revisia.memory import ResearchBrain
 
-        prior = ResearchBrain(args.brain).recall(slug)
+        brain = ResearchBrain(args.brain)
+        prior = brain.recall(slug)
+        if info is not None:
+            ya_sedimentada = brain.has_run(info.slug, info.timestamp)
         if prior:
+            destino = (
+                "Esta corrida ya estaba sedimentada: no se registrará de nuevo."
+                if ya_sedimentada
+                else "Esta corrida se registrará como actualización (living review)."
+            )
             print(
                 f"🧠 Memoria previa: {prior.n_runs} corrida(s), última {prior.last_timestamp}, "
-                f"{len(prior.last_included_ids)} incluidos. Esta corrida se registrará como "
-                "actualización (living review)."
+                f"{len(prior.last_included_ids)} incluidos. {destino}"
             )
     if args.resume is not None:
         result = resume_review(
@@ -289,8 +314,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
             from revisia.memory import ResearchBrain
 
             brain = ResearchBrain(args.brain)
-            info = read_run_info(result.run_dir)
-            ya_sedimentada = info is not None and brain.has_run(info.slug, info.timestamp)
             if ya_sedimentada:
                 # Reanudar una corrida ya completada no la sedimenta dos veces.
                 print(f"  Cerebro: esta corrida ya estaba sedimentada en {args.brain}/")
@@ -513,7 +536,11 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Máx. de registros a recuperar por base (default: {DEFAULT_MAX_RESULTS}; al "
         "reanudar manda el de run.json).",
     )
-    p_run.add_argument("--runs-root", default="runs", help="Raíz de salidas (default: runs/).")
+    p_run.add_argument(
+        "--runs-root",
+        default=DEFAULT_RUNS_ROOT,
+        help=f"Raíz de salidas (default: {DEFAULT_RUNS_ROOT}/; al reanudar se ignora).",
+    )
     p_run.add_argument("--mailto", default=None, help="Email para el polite pool de OpenAlex.")
     p_run.add_argument(
         "--auto-approve",

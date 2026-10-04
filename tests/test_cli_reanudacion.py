@@ -8,6 +8,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 from fakes import fetch_disponible
 
 from revisia import cli
@@ -301,3 +302,164 @@ def test_cli_resume_con_carpeta_de_protocolo_inexistente_sale_2(
     assert rc == 2
     assert "no existe" in capsys.readouterr().err
     assert read_run_info(run_dir).resumes == []
+
+
+# ── Pulido de la pista C: sin tracebacks ni mensajes engañosos (revisión de B15, B16, B17) ──
+
+
+@pytest.mark.parametrize("contenido", ["- a\n", "hola\n"], ids=["lista", "escalar"])
+@pytest.mark.parametrize("modo", ["validate", "run", "resume"])
+def test_protocol_yml_que_no_es_un_mapa_sale_2_sin_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture, modo: str, contenido: str
+) -> None:
+    # `load_protocol` hacía `raw.setdefault(...)` sobre una lista o un escalar y lanzaba
+    # AttributeError (traceback), también con `--resume`.
+    proto = tmp_path / "proto"
+    shutil.copytree(EXAMPLE, proto)
+    if modo == "resume":
+        run_dir = _corrida_en_pausa(tmp_path)
+        (run_dir / "00_protocol" / "protocol.yml").write_text(contenido, encoding="utf-8")
+        argv = ["run", "--resume", str(run_dir)]
+    else:
+        (proto / "protocol.yml").write_text(contenido, encoding="utf-8")
+        argv = [modo, str(proto)]
+
+    rc = cli.main(argv)
+
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "Traceback" not in err and "AttributeError" not in err
+    assert "ReviewProtocol" in err  # la ValidationError real, no un traceback
+
+
+def test_error_de_otro_fichero_no_se_atribuye_a_run_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # El handler decía siempre «(run.json o 00_protocol/)… empieza una corrida nueva», aunque
+    # el error viniera de otro sitio (p. ej. el manifiesto, al sedimentar en el cerebro con
+    # la corrida ya completada). Ahora cita el error real, recortado y sin secretos, y
+    # condiciona el consejo al fichero.
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+    run_pipeline(
+        protocol, EXAMPLE, ctx, auto_approve=True, search_fn=_busqueda, fetch_fn=fetch_disponible
+    )
+
+    def _manifiesto_roto(self, run_dir):
+        raise yaml.YAMLError("manifest.yml ilegible api_key=SECRETO123 " + "x" * 1000)
+
+    monkeypatch.setattr(ResearchBrain, "record_from_run", _manifiesto_roto)
+
+    rc = cli.main(["run", "--resume", str(ctx.run_dir), "--brain", str(tmp_path / "cerebro")])
+
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "YAMLError: manifest.yml ilegible" in err  # tipo y primera línea del error real
+    assert "SECRETO123" not in err and "api_key=<redacted>" in err
+    assert max(len(linea) for linea in err.splitlines()) < 400  # recortado a ~300
+    assert "Si el fichero es run.json o está en 00_protocol/, la corrida no es reanudable" in err
+    assert "(run.json o 00_protocol/)" not in err  # ya no lo afirma sin condición
+
+
+def test_error_de_run_json_nombra_el_modelo_que_no_valida(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    run_dir = _corrida_en_pausa(tmp_path)
+    (run_dir / "run.json").write_text("{}", encoding="utf-8")
+
+    assert cli.main(["run", "--resume", str(run_dir)]) == 2
+
+    err = capsys.readouterr().err
+    assert "ValidationError" in err and "RunInfo" in err
+    assert "la corrida no es reanudable: empieza una nueva con `revisia run <protocolo>`" in err
+
+
+def _excepciones_de_la_corrida(tmp_path: Path) -> list:
+    """Una instancia real de cada excepción que ``_run_guarded`` traduce, con su rc."""
+    from revisia.llm.preflight import PreflightError, PreflightIssue, PreflightReport
+    from revisia.orchestration.hitl import DecisionFileError
+    from revisia.orchestration.journal import JournalError
+    from revisia.orchestration.run_context import LegacyRunError, RunDirExistsError
+    from revisia.orchestration.snapshot import ProtocolMismatchError
+
+    informe = PreflightReport(issues=(PreflightIssue("error", "llm.default", "sin API key"),))
+    return [
+        (JournalError("diario corrupto"), 2),
+        (RunDirExistsError(f"{tmp_path} ya existe"), 2),
+        (ProtocolMismatchError("no coinciden", ["protocol.yml"]), 2),
+        (LegacyRunError(f"{tmp_path}: corrida anterior a la Ola 1"), 2),
+        (DecisionFileError("decision.yml ilegible"), 2),
+        (PreflightError(informe), 2),
+        (FileNotFoundError("No se encontró protocol.yml"), 2),
+        (RunInterrupted(tmp_path, "screening_ta", "RuntimeError: 429"), 3),
+        (KeyboardInterrupt(), 130),
+    ]
+
+
+@pytest.mark.parametrize("indice", range(9), ids=lambda i: f"caso{i}")
+def test_run_guarded_traduce_cada_excepcion_en_su_codigo(
+    tmp_path: Path, capsys: pytest.CaptureFixture, indice: int
+) -> None:
+    excepcion, esperado = _excepciones_de_la_corrida(tmp_path)[indice]
+
+    def _falla() -> int:
+        raise excepcion
+
+    assert cli._run_guarded(_falla) == esperado
+
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert err.strip()  # siempre dice algo
+
+
+def test_brain_ya_sedimentada_no_dice_que_se_registrara(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    # Reanudar una corrida ya sedimentada imprimía «se registrará como actualización» y
+    # después «ya estaba sedimentada»: dos mensajes contradictorios.
+    protocol = load_protocol(EXAMPLE)
+    cerebro = tmp_path / "cerebro"
+    for timestamp in ("A", "B"):
+        ctx = RunContext(protocol.slug, tmp_path / "runs", timestamp)
+        run_pipeline(
+            protocol,
+            EXAMPLE,
+            ctx,
+            auto_approve=True,
+            search_fn=_busqueda,
+            fetch_fn=fetch_disponible,
+        )
+    corrida_a = tmp_path / "runs" / "demo-mini-review-A"
+    corrida_b = tmp_path / "runs" / "demo-mini-review-B"
+    assert cli.main(["run", "--resume", str(corrida_a), "--brain", str(cerebro)]) == 0
+    capsys.readouterr()
+
+    # B es nueva para el cerebro, que ya conoce el slug: se registrará como actualización.
+    assert cli.main(["run", "--resume", str(corrida_b), "--brain", str(cerebro)]) == 0
+    primera = capsys.readouterr().out
+    assert "se registrará como actualización" in primera
+    assert "ya estaba sedimentada" not in primera
+
+    # Reanudar B otra vez: ya está sedimentada.
+    assert cli.main(["run", "--resume", str(corrida_b), "--brain", str(cerebro)]) == 0
+    segunda = capsys.readouterr().out
+    assert "ya estaba sedimentada" in segunda
+    assert "se registrará como actualización" not in segunda
+    assert "Memoria previa: 2 corrida(s)" in segunda
+
+
+def test_cli_resume_avisa_de_que_runs_root_no_aplica(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    run_dir = _corrida_en_pausa(tmp_path)
+
+    assert cli.main(["run", "--resume", str(run_dir), "--runs-root", str(tmp_path / "otra")]) == 0
+
+    out = capsys.readouterr().out
+    assert f"--runs-root no aplica al reanudar: la corrida vive en {run_dir}" in out
+    assert not (tmp_path / "otra").exists()  # y no se crea nada ahí
+
+    # Sin la opción, o con su valor por defecto, no hay aviso.
+    for extra in ([], ["--runs-root", "runs"]):
+        assert cli.main(["run", "--resume", str(run_dir), *extra]) == 0
+        assert "--runs-root" not in capsys.readouterr().out
