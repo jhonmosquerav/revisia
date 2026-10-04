@@ -23,7 +23,6 @@ from pathlib import Path
 
 import yaml
 
-from revisia.agents import _http, search_backends
 from revisia.agents import dedup as dedup_agent
 from revisia.agents import extraccion as extraccion_agent
 from revisia.agents import fulltext as fulltext_agent
@@ -58,13 +57,13 @@ from revisia.extraction_agreement import (
     compute_extraction_agreement,
     select_double_extraction_subset,
 )
-from revisia.ingest import import_directory
 from revisia.llm.registry import build_provider
 from revisia.meta_analysis import MetaAnalysisResult, meta_analyze
 from revisia.metrics import ScreeningMetrics, compute_screening_metrics
 from revisia.orchestration.hitl import GateResult, review_gate
 from revisia.orchestration.run_context import RunContext
-from revisia.orchestration.snapshot import ensure_snapshot
+from revisia.orchestration.search_stage import multi_database_search, run_search
+from revisia.orchestration.snapshot import SEARCH_STRINGS_DIR, ensure_snapshot
 from revisia.provenance.runmeta import sha256_text
 from revisia.rag.embed import Embedder, HashEmbedder
 from revisia.schemas.artifacts import GATED_STAGES, ExcludedReport, RetrievalOutcome
@@ -119,37 +118,23 @@ def _multi_database_search(
     max_results: int,
     mailto: str | None,
 ) -> tuple[list[SearchRecord], list[dict[str, str]]]:
-    """Busca en cada base declarada (con su cadena) + importación manual.
+    """Envoltorio de compatibilidad sobre ``search_stage.multi_database_search``.
 
-    Por cada base de ``protocol.databases`` lee su cadena en
-    ``search_strings/<base>.txt`` (cae a la pregunta) y despacha al backend; las
-    bases sin backend programático (Scopus/WoS) se cubren con los archivos
-    RIS/BibTeX de ``imported/``. Un backend que falle (red, 5xx, JSON inválido)
-    **no aborta la corrida**: se anota en ``failures`` para que quede en disco
-    (``01_search/failures.json``) y en PRISMA-S conste qué base no respondió.
-    La deduplicación posterior une los solapes.
+    Conserva la firma y la tupla ``(registros, fallos)`` de antes de la Ola 1
+    (la usan los tests de búsqueda multi-base). Lee las cadenas de
+    ``<protocol_dir>/search_strings/`` y los RIS/BibTeX de ``imported/``; los
+    fallos van redactados y una base sin backend no es un fallo (va por
+    ``imported/``).
     """
-    databases = protocol.databases or ["openalex"]
-    records: list[SearchRecord] = []
-    failures: list[dict[str, str]] = []
-    for db in databases:
-        string_file = protocol_dir / "search_strings" / f"{search_backends.db_key(db)}.txt"
-        query = question_text
-        if string_file.exists():
-            query = string_file.read_text(encoding="utf-8").strip() or question_text
-        if search_backends.db_key(db) not in search_backends.BACKENDS:
-            # Base sin backend (p. ej. Scopus): se incorpora vía imported/.
-            continue
-        try:
-            records += search_backends.search_database(db, query, max_results, mailto=mailto)
-        except Exception as exc:  # red, 5xx, JSON o validación: degradar, nunca abortar
-            # Cualquier fallo del backend (incluida una ValidationError de pydantic,
-            # que hereda de ValueError) queda registrado; el mensaje se redacta
-            # porque httpx incluye la URL con api_key/email en el texto del error.
-            error = _http.redact_secrets(f"{type(exc).__name__}: {exc}")
-            failures.append({"db": db, "error": error})
-            continue
-    records += import_directory(protocol_dir / "imported")
+    records, entries = multi_database_search(
+        protocol,
+        strings_dir=protocol_dir / "search_strings",
+        imported_dir=protocol_dir / "imported",
+        question=question_text,
+        max_results=max_results,
+        mailto=mailto,
+    )
+    failures = [{"db": e.database, "error": e.error or ""} for e in entries if e.status == "failed"]
     return records, failures
 
 
@@ -219,24 +204,23 @@ class _FullTextStage:
 
 
 def _search(run: _Run, *, max_results: int, search_fn: SearchFn | None) -> list[SearchRecord]:
-    """Búsqueda multi-base (A2).
+    """Búsqueda multi-base (A2), congelada en ``01_search/`` (M12).
 
     ``search_fn`` inyectado (tests) tiene prioridad y conserva el contrato de
-    una sola llamada; en producción se busca en todas las bases declaradas.
+    una sola llamada; en producción se busca en todas las bases declaradas con
+    las cadenas de ``00_protocol/search_strings/``. Si la búsqueda ya terminó
+    (existe ``01_search/log.json``), se carga sin repetirla.
     """
-    if search_fn is not None:
-        return search_fn(run.question, max_results)
-    raw_records, failures = _multi_database_search(
-        run.protocol, run.source_dir or run.snapshot_dir, run.question, max_results, run.mailto
+    return run_search(
+        run.protocol,
+        source_dir=run.source_dir,
+        strings_dir=run.snapshot_dir / SEARCH_STRINGS_DIR,
+        question=run.question,
+        max_results=max_results,
+        mailto=run.mailto,
+        search_fn=search_fn,
+        run_ctx=run.ctx,
     )
-    if failures:
-        run.ctx.write_json("01_search/failures.json", failures)
-        for failure in failures:
-            print(
-                f"⚠️  búsqueda · {failure['db']} no respondió ({failure['error']}); "
-                "se continúa sin esa base"
-            )
-    return raw_records
 
 
 def _dedup(run: _Run, raw_records: list[SearchRecord]) -> tuple[list[SearchRecord], int]:

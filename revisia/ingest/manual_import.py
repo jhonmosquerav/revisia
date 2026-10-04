@@ -15,6 +15,9 @@ from pathlib import Path
 from revisia.provenance.runmeta import sha256_text
 from revisia.schemas.records import SearchRecord
 
+# Extensiones que se importan desde `imported/`.
+IMPORT_SUFFIXES: tuple[str, ...] = (".ris", ".bib", ".bibtex")
+
 
 def _record_id(doi: str | None, title: str) -> str:
     if doi:
@@ -101,6 +104,27 @@ def parse_bibtex(text: str, *, source_db: str = "imported-BibTeX") -> list[Searc
     return records
 
 
+def import_file(path: str | Path) -> list[SearchRecord]:
+    """Importa un fichero RIS o BibTeX en UTF-8.
+
+    La búsqueda lo llama fichero a fichero para que uno ilegible quede como
+    ``failed`` en ``01_search/log.json`` sin abortar la corrida (auditoría
+    2026-09-03, M7).
+
+    Raises:
+        ValueError: si la extensión no es ``.ris``, ``.bib`` ni ``.bibtex``.
+        UnicodeDecodeError: si el fichero no está en UTF-8 (p. ej. un RIS de
+            EndNote exportado en UTF-16).
+    """
+    path = Path(path)
+    suffix = path.suffix.lower()
+    if suffix == ".ris":
+        return parse_ris(path.read_text(encoding="utf-8"))
+    if suffix in (".bib", ".bibtex"):
+        return parse_bibtex(path.read_text(encoding="utf-8"))
+    raise ValueError(f"{path.name}: formato no soportado (usa .ris, .bib o .bibtex)")
+
+
 def import_directory(directory: str | Path) -> list[SearchRecord]:
     """Importa todos los ``.ris``/``.bib`` de una carpeta (vacío si no existe)."""
     base = Path(directory)
@@ -108,9 +132,6 @@ def import_directory(directory: str | Path) -> list[SearchRecord]:
         return []
     records: list[SearchRecord] = []
     for path in sorted(base.iterdir()):
-        suffix = path.suffix.lower()
-        if suffix == ".ris":
-            records += parse_ris(path.read_text(encoding="utf-8"))
-        elif suffix in (".bib", ".bibtex"):
-            records += parse_bibtex(path.read_text(encoding="utf-8"))
+        if path.suffix.lower() in IMPORT_SUFFIXES:
+            records += import_file(path)
     return records
