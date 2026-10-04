@@ -37,6 +37,7 @@ from revisia.audit import (
     checks_provenance,
     checks_quality,
     checks_search,
+    checks_timing,
 )
 from revisia.audit.artifacts import AuditContext, load_run
 from revisia.audit.model import AuditCheck, AuditReport, Verdict
@@ -70,6 +71,7 @@ CHECKS: tuple[CheckSpec, ...] = (
     CheckSpec("provenance", "PRISMA 27 / trAIce M2", "reporte", checks_provenance.check_provenance),
     CheckSpec("schemas", "PRISMA 27 / trAIce M5", None, checks_provenance.check_schemas),
     CheckSpec("prompts", "trAIce M6", "reporte", checks_provenance.check_prompts),
+    CheckSpec("timing", "PRISMA 27 / trAIce M2", None, checks_timing.check_timing),
     CheckSpec("ledger", "trAIce M8 / PRISMA 8", None, checks_hitl.check_ledger),
     CheckSpec("hitl", "trAIce M8/R1 / PRISMA 8", None, checks_hitl.check_hitl),
     CheckSpec("final_gate", "trAIce M8", None, checks_hitl.check_final_gate),
@@ -79,6 +81,7 @@ CHECKS: tuple[CheckSpec, ...] = (
     CheckSpec("grounding", "trAIce M8/M9", "sintesis", checks_quality.check_grounding),
     CheckSpec("search_window", "PRISMA-S 9/13", "busqueda", checks_search.check_search_window),
     CheckSpec("registration", "PRISMA 24a", None, checks_search.check_registration),
+    CheckSpec("response_overlap", "trAIce M2", "reporte", checks_timing.check_response_overlap),
 )
 
 
