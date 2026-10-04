@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -82,12 +83,13 @@ from revisia.orchestration.snapshot import (
     read_run_info,
     write_run_info,
 )
-from revisia.provenance.runmeta import RunMeta, sha256_text, utc_now_iso
+from revisia.provenance.runmeta import canonical_sha256, sha256_text, utc_now_iso
 from revisia.rag.embed import Embedder, HashEmbedder
 from revisia.schemas.artifacts import (
     GATED_STAGES,
     DedupReport,
     ExcludedReport,
+    JournalEntry,
     RetrievalOutcome,
     RunInterruption,
     RunStatus,
@@ -422,10 +424,34 @@ def _screen_ta(
 # (`agents/fulltext.py`): entran en el `input_sha256` de su diario.
 _RETRIEVAL_EXTRA: tuple[str, ...] = ("fulltext_url", "oa_url", "pmcid", "pmid")
 
+# Motivos de fallo que NO se escriben en el diario de la recuperación: un error de red
+# (`error_http`) o la falta de `httpx` (`sin_httpx`) no es una respuesta definitiva sobre
+# el informe, así que congelarla haría que reanudar nunca lo reintentara y que "informes
+# no recuperados" contara fallos que ya se habrían resuelto (auditoría 2026-09-03, A9:
+# un fallo transitorio se resuelve reanudando). Se usan en esta invocación y en
+# `retrieval.json` y se piden otra vez al reanudar. Los motivos permanentes
+# (`sin_url_oa`, `texto_vacio`, `no_disponible`) y los éxitos sí se escriben.
+_TRANSIENT_FULLTEXT_REASONS: frozenset[str] = frozenset({"error_http", "sin_httpx"})
 
-def _fetch_one(
-    run: _Run, fetch: FetchFn, record: SearchRecord
-) -> tuple[RetrievalOutcome, list[RunMeta]]:
+
+def _write_bytes_durably(path: Path, data: bytes) -> None:
+    """Escribe ``data`` en ``path`` de forma atómica y duradera.
+
+    Temporal en el mismo directorio, ``flush`` + ``fsync`` y ``os.replace``: el
+    diario ya hace ``fsync`` al escribir, y sin esto, tras un corte de luz, el
+    diario puede sobrevivir sin el texto al que apunta y la reanudación declararía
+    la corrida no fiable.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with tmp.open("wb") as fh:
+        fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
+def _fetch_one(run: _Run, fetch: FetchFn, record: SearchRecord) -> RetrievalOutcome:
     """Recupera un texto completo y, si lo hay, lo guarda en la caché de la corrida.
 
     El fichero es ``04_fulltext/texts/<sha256(id)[:16]>.txt`` (ningún
@@ -435,30 +461,43 @@ def _fetch_one(
     ft = fetch(record)
     if not ft.available:
         # Un fetch_fn inyectado puede no dar motivo: el genérico es no_disponible.
-        outcome = RetrievalOutcome(
+        return RetrievalOutcome(
             available=False,
             source_url=ft.source_url,
             reason=ft.reason or "no_disponible",
             detail=ft.detail,
         )
-        return outcome, []
     text_file = f"04_fulltext/texts/{sha256_text(record.record_id)[:16]}.txt"
-    path = run.ctx.run_dir / text_file
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(ft.text.encode("utf-8"))
-    outcome = RetrievalOutcome(
+    _write_bytes_durably(run.ctx.run_dir / text_file, ft.text.encode("utf-8"))
+    return RetrievalOutcome(
         available=True,
         source_url=ft.source_url,
         n_chars=len(ft.text),
         text_sha256=sha256_text(ft.text),
         text_file=text_file,
     )
-    return outcome, []
 
 
-def _cached_text(run: _Run, outcome: RetrievalOutcome) -> str:
-    """Texto completo de la caché, verificado contra el hash de su diario."""
-    text = (run.ctx.run_dir / outcome.text_file).read_bytes().decode("utf-8")
+def _cached_text(run: _Run, record_id: str, outcome: RetrievalOutcome) -> str:
+    """Texto completo de la caché, verificado contra el hash de su diario.
+
+    Una entrada mal formada, un texto ausente o ilegible y un texto alterado son
+    errores del diario (``JournalError``, rc 2): no son una caída que reintentar,
+    porque cada reanudación fallaría igual (un bucle sin salida).
+    """
+    if outcome.text_file is None or outcome.text_sha256 is None:
+        raise JournalError(
+            f"{record_id}: entrada mal formada en 04_fulltext/retrieval.jsonl (texto "
+            "disponible sin text_file o sin text_sha256); la corrida ya no es fiable: "
+            "empieza una nueva."
+        )
+    try:
+        text = (run.ctx.run_dir / outcome.text_file).read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise JournalError(
+            f"{outcome.text_file}: el texto en caché falta o es ilegible ({type(exc).__name__}); "
+            "la corrida ya no es fiable: empieza una nueva."
+        ) from exc
     if sha256_text(text) != outcome.text_sha256:
         raise JournalError(
             f"{outcome.text_file}: el texto en caché no coincide con el hash de su diario; "
@@ -472,8 +511,11 @@ def _retrieve(
 ) -> tuple[dict[str, RetrievalOutcome], dict[str, str]]:
     """Recuperación de texto completo con diario (``04_fulltext/retrieval.jsonl``).
 
-    Al reanudar no se vuelve a descargar nada: el resultado sale del diario y el
-    texto, de la caché. Escribe ``04_fulltext/retrieval.json`` en el orden de
+    Al reanudar no se vuelve a descargar nada de lo que ya tiene respuesta
+    definitiva: el resultado sale del diario y el texto, de la caché. Los fallos
+    transitorios (``_TRANSIENT_FULLTEXT_REASONS``) no se escriben en el diario y se
+    reintentan al reanudar; el diario conserva así su invariante (misma clave,
+    misma salida). Escribe ``04_fulltext/retrieval.json`` en el orden de
     ``passed_ta``.
     """
     fetch = fetch_fn or (lambda rec: fulltext_agent.fetch_fulltext(rec, mailto=run.mailto))
@@ -481,22 +523,34 @@ def _retrieve(
     outcomes: dict[str, RetrievalOutcome] = {}
     texts: dict[str, str] = {}
     for record in passed_ta:
-        outcome = journaled(
-            journal,
-            record_id=record.record_id,
-            inputs={
+        input_sha256 = canonical_sha256(
+            {
                 "record_id": record.record_id,
                 "doi": record.doi,
                 "extra": {k: record.extra[k] for k in _RETRIEVAL_EXTRA if k in record.extra},
                 "mailto_set": bool(run.mailto),
-            },
-            model=RetrievalOutcome,
-            compute=partial(_fetch_one, run, fetch, record),
-            run_ctx=run.ctx,
+            }
         )
+        entry = journal.lookup(record.record_id, input_sha256)
+        if entry is not None:
+            outcome = RetrievalOutcome.model_validate(entry.output)
+        else:
+            # El texto va a la caché antes que la entrada al diario: una caída entre
+            # medias deja un texto huérfano (inocuo), nunca una entrada sin texto.
+            outcome = _fetch_one(run, fetch, record)
+            if outcome.reason not in _TRANSIENT_FULLTEXT_REASONS:
+                journal.append(
+                    JournalEntry(
+                        stage="fulltext_retrieval",
+                        record_id=record.record_id,
+                        input_sha256=input_sha256,
+                        output=outcome.model_dump(mode="json"),
+                        metas=[],
+                    )
+                )
         outcomes[record.record_id] = outcome
         if outcome.available:
-            texts[record.record_id] = _cached_text(run, outcome)
+            texts[record.record_id] = _cached_text(run, record.record_id, outcome)
     run.ctx.write_json(
         "04_fulltext/retrieval.json",
         [{"record_id": rid, **o.model_dump(mode="json")} for rid, o in outcomes.items()],

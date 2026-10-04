@@ -3,13 +3,16 @@ D3 y D14; auditoría 2026-09-03, A9; spec 2026-10-04 §7)."""
 
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
 
 import pytest
-from fakes import ScriptedProvider, fetch_disponible
+from fakes import ScriptedProvider, fetch_disponible, fetch_no_disponible
 from hitl_helpers import correr_hasta
 
 from revisia.agent_driver import run_review_with_agent
+from revisia.agents.fulltext import FullText
 from revisia.config import load_protocol
 from revisia.llm.base import LLMRequest
 from revisia.llm.preflight import PreflightError
@@ -312,8 +315,204 @@ def test_recuperacion_en_diario_y_texto_en_cache(tmp_path: Path) -> None:
     assert "LLM screening for systematic reviews" in cache.read_text(encoding="utf-8")
     entradas = _diario(ctx, "04_fulltext/retrieval.jsonl")
     assert [(e.record_id, e.metas) for e in entradas] == [("rec-1", []), ("rec-2", [])]
+    # Contrato vigente (revisión de B12): la etapa del diario y la ruta de la caché en
+    # retrieval.json.
+    assert {e.stage for e in entradas} == {"fulltext_retrieval"}
+    retrieval = json.loads((ctx.run_dir / "04_fulltext" / "retrieval.json").read_text("utf-8"))
+    assert retrieval[0]["text_file"] == f"04_fulltext/texts/{sha256_text('rec-1')[:16]}.txt"
 
     # Un texto en caché alterado no se usa en silencio.
     cache.write_text("otro texto", encoding="utf-8")
     with pytest.raises(JournalError, match="caché"):
         run_pipeline(protocol, EXAMPLE, RunContext.open(ctx.run_dir), fetch_fn=fetch)
+
+
+# ── Recuperación: caché ilegible, fallos transitorios y escritura duradera (revisión de B12) ──
+
+
+def _pausar_en_ft(tmp_path: Path, fetch) -> tuple:
+    """Corre hasta el gate de ``screening_ft`` (el texto completo ya está recuperado)."""
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    pausa = correr_hasta(
+        protocol, EXAMPLE, ctx, search_fn=_busqueda, fetch_fn=fetch, parar_en="screening_ft"
+    )
+    assert (pausa.status, pausa.stage) == ("paused", "screening_ft")
+    return protocol, ctx
+
+
+def _alterar_diario_de_recuperacion(ctx: RunContext, **campos: object) -> None:
+    """Cambia campos de la salida de la primera entrada (rec-1) de retrieval.jsonl."""
+    ruta = ctx.run_dir / "04_fulltext" / "retrieval.jsonl"
+    lineas = ruta.read_text("utf-8").splitlines()
+    entrada = json.loads(lineas[0])
+    entrada["output"].update(campos)
+    lineas[0] = json.dumps(entrada, ensure_ascii=False)
+    ruta.write_text("\n".join(lineas) + "\n", encoding="utf-8", newline="\n")
+
+
+def _cache_de(ctx: RunContext, record_id: str) -> Path:
+    return ctx.run_dir / "04_fulltext" / "texts" / f"{sha256_text(record_id)[:16]}.txt"
+
+
+@pytest.mark.parametrize(
+    ("dano", "mensaje"),
+    [
+        pytest.param(
+            lambda ctx: _cache_de(ctx, "rec-1").unlink(), "falta o es ilegible", id="ausente"
+        ),
+        pytest.param(
+            lambda ctx: _cache_de(ctx, "rec-1").write_bytes(b"\xff\xfe no es UTF-8"),
+            "falta o es ilegible",
+            id="no_utf8",
+        ),
+        pytest.param(
+            lambda ctx: _alterar_diario_de_recuperacion(ctx, text_file=None),
+            "mal formada",
+            id="entrada_sin_text_file",
+        ),
+        pytest.param(
+            lambda ctx: _alterar_diario_de_recuperacion(ctx, text_sha256=None),
+            "mal formada",
+            id="entrada_sin_text_sha256",
+        ),
+    ],
+)
+def test_cache_ilegible_es_error_del_diario_y_no_una_caida(
+    tmp_path: Path, dano, mensaje: str
+) -> None:
+    # Un texto en caché ausente (alguien comparte la carpeta sin 04_fulltext/texts/),
+    # no UTF-8, o una entrada disponible sin ruta ni hash, salían como RunInterrupted
+    # (rc 3): cada reanudación fallaba igual, un bucle sin salida. Es un error del
+    # diario (rc 2): no cuenta como caída y deja la pausa tal como estaba.
+    protocol, ctx = _pausar_en_ft(tmp_path, fetch_disponible)
+    dano(ctx)
+
+    with pytest.raises(JournalError, match=mensaje):
+        run_pipeline(protocol, EXAMPLE, RunContext.open(ctx.run_dir), fetch_fn=fetch_disponible)
+
+    info = read_run_info(ctx.run_dir)
+    assert (info.status, info.stage) == ("paused", "screening_ft")
+    assert info.interruptions == []
+
+
+@pytest.mark.parametrize("motivo", ["error_http", "sin_httpx"])
+def test_fallo_transitorio_de_recuperacion_no_se_congela_y_se_reintenta(
+    tmp_path: Path, motivo: str
+) -> None:
+    # Decisión del controlador (§14 del spec): un error de red no es una respuesta
+    # definitiva; se usa en esta invocación y se reintenta al reanudar (A9).
+    llamadas: dict[str, int] = {}
+
+    def fetch(record: SearchRecord) -> FullText:
+        llamadas[record.record_id] = llamadas.get(record.record_id, 0) + 1
+        if record.record_id == "rec-1" and llamadas["rec-1"] == 1:
+            return FullText(text="", available=False, reason=motivo, detail="sin red")
+        return fetch_disponible(record)
+
+    protocol, ctx = _pausar_en_ft(tmp_path, fetch)
+    # Esta invocación lo cuenta como no recuperado, con su motivo, pero no lo congela.
+    retrieval = json.loads((ctx.run_dir / "04_fulltext" / "retrieval.json").read_text("utf-8"))
+    assert [(r["record_id"], r["available"], r["reason"]) for r in retrieval] == [
+        ("rec-1", False, motivo),
+        ("rec-2", True, None),
+    ]
+    assert [e.record_id for e in _diario(ctx, "04_fulltext/retrieval.jsonl")] == ["rec-2"]
+
+    run_pipeline(protocol, EXAMPLE, RunContext.open(ctx.run_dir), fetch_fn=fetch)
+
+    assert llamadas == {"rec-1": 2, "rec-2": 1}  # al reanudar solo se reintenta el que falló
+    entradas = _diario(ctx, "04_fulltext/retrieval.jsonl")
+    assert [(e.record_id, e.output["available"]) for e in entradas] == [
+        ("rec-2", True),
+        ("rec-1", True),
+    ]  # una sola entrada por registro: la del éxito
+    retrieval = json.loads((ctx.run_dir / "04_fulltext" / "retrieval.json").read_text("utf-8"))
+    assert [(r["record_id"], r["available"]) for r in retrieval] == [
+        ("rec-1", True),
+        ("rec-2", True),
+    ]
+    decisiones = json.loads((ctx.run_dir / "04_fulltext" / "decisions.json").read_text("utf-8"))
+    assert [d["fulltext_status"] for d in decisiones] == ["retrieved", "retrieved"]
+
+
+def _sin_texto(motivo: str):
+    def fetch(record: SearchRecord) -> FullText:
+        if record.record_id == "rec-1":
+            return FullText(text="", available=False, reason=motivo)
+        return fetch_disponible(record)
+
+    return fetch
+
+
+@pytest.mark.parametrize(
+    ("fetch_sin_texto", "motivo"),
+    [
+        pytest.param(fetch_no_disponible(["rec-1"]), "no_disponible", id="no_disponible"),
+        pytest.param(_sin_texto("sin_url_oa"), "sin_url_oa", id="sin_url_oa"),
+        pytest.param(_sin_texto("texto_vacio"), "texto_vacio", id="texto_vacio"),
+    ],
+)
+def test_no_recuperado_permanente_va_al_diario_y_no_se_vuelve_a_pedir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fetch_sin_texto, motivo: str
+) -> None:
+    proveedor = ScriptedProvider()
+    monkeypatch.setattr(pipeline_mod, "build_provider", lambda _cfg: proveedor)
+    descargas: list[str] = []
+
+    def fetch(record: SearchRecord) -> FullText:
+        descargas.append(record.record_id)
+        return fetch_sin_texto(record)
+
+    protocol, ctx = _pausar_en_ft(tmp_path, fetch)
+    run_pipeline(protocol, EXAMPLE, RunContext.open(ctx.run_dir), fetch_fn=fetch)
+
+    assert descargas == ["rec-1", "rec-2"]  # al reanudar no se pidió nada otra vez
+    entradas = _diario(ctx, "04_fulltext/retrieval.jsonl")
+    assert [(e.record_id, e.output["available"], e.output["reason"]) for e in entradas] == [
+        ("rec-1", False, motivo),
+        ("rec-2", True, None),
+    ]
+    assert {e.stage for e in entradas} == {"fulltext_retrieval"}
+    assert [e.metas for e in entradas] == [[], []]
+    retrieval = json.loads((ctx.run_dir / "04_fulltext" / "retrieval.json").read_text("utf-8"))
+    assert [(r["record_id"], r["text_file"] is None) for r in retrieval] == [
+        ("rec-1", True),
+        ("rec-2", False),
+    ]
+    # El informe no recuperado nunca llega a la IA de texto completo (PRISMA estricto, D2).
+    prompts_ft = [p for p in proveedor.prompts if "Texto completo de prueba" in p]
+    assert prompts_ft  # rec-2 sí se criba (en la corrida y al reanudar)
+    assert all("Active learning" in p and "LLM screening" not in p for p in prompts_ft)
+
+
+def test_la_cache_se_escribe_en_un_temporal_se_fuerza_a_disco_y_se_renombra(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Sin esto, tras un corte de luz el diario (que sí hace fsync) puede sobrevivir y
+    # el texto no: la reanudación declararía la corrida no fiable.
+    eventos: list[tuple] = []
+    fsync_real, replace_real = os.fsync, os.replace
+
+    def fsync(fd: int) -> None:
+        eventos.append(("fsync", os.fstat(fd).st_size))
+        fsync_real(fd)
+
+    def replace(src, dst) -> None:
+        origen, destino = Path(src), Path(dst)
+        eventos.append(("replace", origen, destino, origen.read_bytes()))
+        replace_real(src, dst)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    monkeypatch.setattr(os, "replace", replace)
+
+    _, ctx = _pausar_en_ft(tmp_path, fetch_disponible)
+
+    reemplazos = [i for i, e in enumerate(eventos) if e[0] == "replace" and "texts" in e[2].parts]
+    assert len(reemplazos) == 2  # rec-1 y rec-2
+    for i in reemplazos:
+        _, origen, destino, contenido = eventos[i]
+        assert origen != destino and origen.parent == destino.parent
+        assert eventos[i - 1] == ("fsync", len(contenido))  # fsync del temporal justo antes
+        assert destino.read_bytes() == contenido
+    assert list((ctx.run_dir / "04_fulltext" / "texts").glob("*.tmp")) == []
