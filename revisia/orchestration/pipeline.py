@@ -408,6 +408,9 @@ def _screen_ta(
     run.ctx.write_json("03_screening/decisions.json", [d.model_dump() for d in decisions])
 
     if gold:
+        # Gold efectivo (fichero + `gold_labels=`), para que el auditor recalcule
+        # las métricas desde disco (D6).
+        run.ctx.write_json("03_screening/gold.json", dict(sorted(gold.items())))
         run.metrics = compute_screening_metrics(
             decisions, gold, fn_weight=run.protocol.thresholds.get("wmcc_fn_weight", 10.0)
         )

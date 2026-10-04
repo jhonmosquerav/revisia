@@ -140,3 +140,20 @@ def test_run_context_open_y_slug_por_defecto(tmp_path: Path) -> None:
     (antigua / "03_screening").mkdir(parents=True)
     with pytest.raises(LegacyRunError, match="anterior a la Ola 1"):
         RunContext.open(antigua)
+
+
+def test_gold_efectivo_persistido(tmp_path: Path) -> None:
+    proto = tmp_path / "proto"
+    shutil.copytree(EXAMPLE, proto)
+    (proto / "gold.yml").write_text('gold:\n  "rec-1": true\n  "rec-2": true\n', "utf-8")
+    protocol = load_protocol(proto)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+
+    run_pipeline(protocol, proto, ctx, search_fn=_busqueda, gold_labels={"rec-2": False})
+
+    # 00_protocol/gold.yml más las etiquetas por código, que tienen prioridad.
+    assert (ctx.run_dir / "00_protocol" / "gold.yml").exists()
+    gold = json.loads((ctx.run_dir / "03_screening" / "gold.json").read_text(encoding="utf-8"))
+    assert gold == {"rec-1": True, "rec-2": False}
+    metricas = json.loads((ctx.run_dir / "03_screening" / "metrics.json").read_text("utf-8"))
+    assert metricas["n"] == 2
