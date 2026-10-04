@@ -9,14 +9,17 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Annotated
 
 import pytest
+import yaml
 from audit_fixtures import auditar, fila, pausar_en_screening_ft
 from pydantic import AfterValidator, TypeAdapter
 
 import revisia.audit as audit_pkg
+import revisia.audit.artifacts as artifacts_mod
 from revisia.audit import CHECKS, AuditCheck, AuditReport, CheckSpec, render_audit_md
 from revisia.audit.artifacts import (
     AuditContext,
@@ -27,6 +30,7 @@ from revisia.audit.artifacts import (
     read_text,
     read_yaml,
     short_repr,
+    short_text,
     validate,
 )
 from revisia.audit.render import _md_cell
@@ -150,6 +154,20 @@ def test_validate_no_lanza_si_el_validador_revienta() -> None:
 # el proceso (0xC00000FD en Windows) sin que ningún `except` lo atrape. Cada vector
 # corre en un subproceso: si el guarda falla, se ve un código de salida distinto de 0
 # y no se cae la sesión de pytest.
+#
+# libyaml también trata U+2028, U+2029 y U+0085 como saltos de línea y salta el BOM: unas
+# guardas físicas por línea (`^` + `re.MULTILINE`) no los veían y el recorrido de eventos
+# nunca corría (tercera revisión de la Tarea 4). La guarda por eventos mide lo que el
+# parser entiende, no lo que una regex cree ver.
+_SALTOS_UNICODE = {"LS": "\u2028", "NEL": "\u0085", "PS": "\u2029"}
+
+
+def _sangria_con_salto(salto: str, niveles: int = 4_000) -> str:
+    """Un bloque de mapas anidados por sangría, con ``salto`` como salto de línea."""
+    lineas = salto.join(" " * i + "a:" for i in range(niveles))
+    return lineas + salto + " " * niveles + "z: 1"
+
+
 _VECTORES_ANIDADOS = [
     pytest.param(lambda: "x: " + "[" * 10_000 + "\n", id="corchetes"),
     # Los tres siguientes esquivaban la guarda de comillas/comentarios por línea (segunda
@@ -165,6 +183,16 @@ _VECTORES_ANIDADOS = [
         lambda: "".join(" " * i + "a:\n" for i in range(3_000)) + " " * 3_000 + "z: 1\n",
         id="sangria",
     ),
+    # Tercera revisión: saltos de línea que solo libyaml reconoce, y el BOM.
+    *[
+        pytest.param(lambda s=salto: _sangria_con_salto(s), id=f"sangria-con-{nombre}")
+        for nombre, salto in _SALTOS_UNICODE.items()
+    ],
+    # Con LS y con el BOM basta la versión de 10 000 (la más fuerte); NEL y PS, la de 4 000.
+    pytest.param(lambda: "x:\u2028" + "- " * 10_000, id="indicadores-con-LS"),
+    pytest.param(lambda: "x:\u0085" + "- " * 4_000 + "x", id="indicadores-con-NEL"),
+    pytest.param(lambda: "x:\u2029" + "- " * 4_000 + "x", id="indicadores-con-PS"),
+    pytest.param(lambda: "\ufeff" + "- " * 10_000, id="bom-con-indicadores"),
 ]
 
 _SCRIPT_AUDITAR = (
@@ -208,28 +236,89 @@ def test_guarda_de_anidamiento_respeta_sus_limites(tmp_path) -> None:
         (tmp_path / "x.yml").write_text(texto, encoding="utf-8")
         return read_yaml(tmp_path, "x.yml", **kwargs)
 
-    # La guarda cuenta niveles de colección (también el mapa raíz) y solo corre si el
-    # conteo crudo de `[`/`{` pasa de 500; los `y: []`/`z: []` sueltos lo garantizan.
+    # Un único límite, medido por eventos del parser: 500 niveles de colección (también el
+    # mapa raíz), sea cual sea la sintaxis (flujo, bloque con `- `, bloque por sangría).
     def anidado(niveles: int) -> str:
-        return "x: " + "[" * niveles + "]" * niveles + "\ny: []\nz: []\n"
+        return "x: " + "[" * niveles + "]" * niveles + "\n"
+
+    def sangrado(lineas: int) -> str:
+        """`lineas` líneas `a:` más la hoja `z: 1`: lineas + 1 mapas anidados."""
+        return "".join(" " * i + "a:\n" for i in range(lineas)) + " " * lineas + "z: 1\n"
 
     assert cargar(anidado(499)).ok  # raíz + 499 = profundidad 500: pasa
     assert "anidada" in cargar(anidado(500)).error  # profundidad 501: se rechaza sin cargar
     assert "anidada" in cargar("x: " + "{a: " * 501 + "1" + "}" * 501 + "\n").error
+    # Hasta 500 indicadores `- ` encadenados en una línea pasan; 501 no.
+    assert cargar("- " * 500 + "x\n", root=list).ok
+    assert "anidada" in cargar("- " * 501 + "x\n", root=list).error
+    assert cargar(sangrado(499)).ok
+    assert "anidada" in cargar(sangrado(500)).error
     # Los corchetes entre comillas o en un comentario no cuentan (no abren colecciones).
     assert cargar('x: "' + "[" * 5_000 + '"\n').ok
     assert cargar("x: '" + "{" * 5_000 + "'\n").ok
     assert cargar("x: 1  # " + "[" * 5_000 + "\n").ok
-    # Una sangría de 500 espacios pasa; de 501 no.
-    assert cargar("x: |\n" + " " * 500 + "t\n").ok
-    assert "anidada" in cargar("x: |\n" + " " * 501 + "t\n").error
-    # Hasta 500 indicadores `- ` encadenados en una línea pasan; 501 no.
-    assert cargar("- " * 500 + "x\n", root=list).ok
-    assert "anidada" in cargar("- " * 501 + "x\n", root=list).error
+    # Una sangría larga sin anidamiento (un bloque literal) no es un problema de pila.
+    assert cargar("x: |\n" + " " * 600 + "t\n").ok
     # Un manifiesto normal (listas y mapas de profundidad < 20) no se toca.
     assert cargar("a:\n  - b: [1, 2, {c: d}]\n  - e: 'f'\n").value == {
         "a": [{"b": [1, 2, {"c": "d"}]}, {"e": "f"}]
     }
+    # Los alias normales siguen permitidos: solo se rechazan las claves de fusión (`<<`).
+    assert cargar("a: &x [1, 2]\nb: *x\n").value == {"a": [1, 2], "b": [1, 2]}
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        pytest.param("a: &a {x: 1}\nb:\n  <<: *a\n  y: 2\n", id="bloque"),
+        pytest.param("a: &a {x: 1}\nb: {<<: [*a], y: 2}\n", id="flujo-con-lista"),
+        pytest.param("a: &a {x: 1}\nb:\n  ? <<\n  : *a\n", id="clave-compleja"),
+        # Con la etiqueta explícita `!!merge` cualquier escalar actúa como clave de fusión,
+        # también uno entrecomillado o con otro valor: no basta mirar el texto `<<`.
+        pytest.param('a: &a {x: 1}\nb: {!!merge "<<": *a}\n', id="etiqueta-entrecomillada"),
+        pytest.param("a: &a {x: 1}\nb: {!!merge zzz: *a}\n", id="etiqueta-otro-valor"),
+    ],
+)
+def test_clave_de_fusion_se_rechaza_sin_cargar(tmp_path, texto: str) -> None:
+    (tmp_path / "x.yml").write_text(texto, encoding="utf-8")
+    cargado = read_yaml(tmp_path, "x.yml")
+    assert cargado.present and not cargado.ok
+    assert "fusión" in cargado.error
+    assert "anidada" not in cargado.error
+
+
+def test_clave_entrecomillada_no_es_de_fusion(tmp_path) -> None:
+    """``"<<"`` y ``'<<'`` entrecomillados son claves de texto corrientes: se cargan."""
+    (tmp_path / "x.yml").write_text("a: {\"<<\": 1, '<<<': 2, x: 3}\n", encoding="utf-8")
+    cargado = read_yaml(tmp_path, "x.yml")
+    assert cargado.ok, cargado.error
+    assert cargado.value == {"a": {"<<": 1, "<<<": 2, "x": 3}}
+
+
+def test_la_guarda_no_depende_de_libyaml(tmp_path, monkeypatch) -> None:
+    """Con el loader de Python puro (sin `CSafeLoader`) la guarda ve lo mismo."""
+    monkeypatch.setattr(artifacts_mod, "_YAML_LOADER", yaml.SafeLoader)
+    for salto in _SALTOS_UNICODE.values():
+        (tmp_path / "x.yml").write_text(_sangria_con_salto(salto), encoding="utf-8")
+        assert "anidada" in read_yaml(tmp_path, "x.yml").error
+    (tmp_path / "x.yml").write_text("\ufeff" + "- " * 4_000 + "x\n", encoding="utf-8")
+    assert "anidada" in read_yaml(tmp_path, "x.yml", root=list).error
+    (tmp_path / "x.yml").write_text("a: &a {x: 1}\nb: {<<: *a}\n", encoding="utf-8")
+    assert "fusión" in read_yaml(tmp_path, "x.yml").error
+    # Un carácter de control lanza `ReaderError` al construir el loader de Python puro: no
+    # es un problema de anidamiento, la carga lo informa como YAML inválido.
+    (tmp_path / "x.yml").write_text("x: \x01\n", encoding="utf-8")
+    assert read_yaml(tmp_path, "x.yml").error.startswith("YAML inválido")
+
+
+def test_yaml_con_sintaxis_erronea_es_invalido_y_no_anidado(corrida) -> None:
+    """Un error de sintaxis tras 600 `[]` es «YAML inválido», no un problema de anidamiento."""
+    texto = "".join(f"k{i}: []\n" for i in range(600)) + "x: [a, b\ny: c]]\n"
+    (corrida / "manifest.yml").write_text(texto, encoding="utf-8")
+    manifiesto = fila(auditar(corrida), "manifest")
+    assert manifiesto.status == "FAIL"
+    assert "YAML inválido" in manifiesto.detail
+    assert "anidada" not in manifiesto.detail
 
 
 def test_manifiesto_valido_con_miles_de_corchetes_se_carga_sin_rechazo(tmp_path) -> None:
@@ -238,7 +327,7 @@ def test_manifiesto_valido_con_miles_de_corchetes_se_carga_sin_rechazo(tmp_path)
         f"- stage: screening_ta\n  seed: {i}\n  usage: {{}}\n  tags: []\n" for i in range(2_000)
     )
     texto = f"slug: demo\nmodels_used: [m/x]\nllm_calls:\n{llamadas}"
-    assert texto.count("[") + texto.count("{") > 500  # el recorrido de eventos sí se ejecuta
+    assert texto.count("[") + texto.count("{") > 500
     (tmp_path / "manifest.yml").write_text(texto, encoding="utf-8")
     cargado = read_yaml(tmp_path, "manifest.yml")
     assert cargado.ok, cargado.error
@@ -272,6 +361,25 @@ def _bomba_de_alias(niveles: int = 10) -> str:
             "PASS",
             id="models_used",
         ),
+        # Tercera revisión: `checks_search` interpolaba el valor crudo en dos f-strings.
+        pytest.param(
+            "protocol:\n  search_window:\n    executed: *a9\n",
+            "search_window",
+            "PASS",
+            id="search_window-executed",
+        ),
+        pytest.param(
+            "protocol:\n  registration:\n    prospero: *a9\n",
+            "registration",
+            "PASS",
+            id="registration-plana",
+        ),
+        pytest.param(
+            "protocol:\n  registration: {osf: {id: *a9}}\n",
+            "registration",
+            "PASS",
+            id="registration-anidada",
+        ),
     ],
 )
 def test_bomba_de_alias_no_cuelga_el_auditor_ni_llena_el_detalle(
@@ -285,6 +393,28 @@ def test_bomba_de_alias_no_cuelga_el_auditor_ni_llena_el_detalle(
     assert len(filas) == len(CHECKS)
 
 
+# Una bomba de claves de fusión (`<<: [*a, … ×9]`, un nivel tras otro) cuelga la propia
+# carga: `flatten_mapping` multiplica los pares ×9 por nivel (el nivel 8 ya tarda segundos
+# y el 10, minutos y decenas de GB). El motor nunca escribe `<<`, así que se rechaza sin
+# cargar (tercera revisión de la Tarea 4).
+def _bomba_de_fusion(niveles: int) -> str:
+    base = "a0: &a0 {x: 1}\n"
+    return base + "".join(
+        f"a{i}: &a{i} {{<<: [{', '.join([f'*a{i - 1}'] * 9)}]}}\n" for i in range(1, niveles)
+    )
+
+
+def test_bomba_de_claves_de_fusion_no_cuelga_la_carga(corrida) -> None:
+    (corrida / "manifest.yml").write_text(_bomba_de_fusion(8), encoding="utf-8")
+    inicio = time.monotonic()
+    filas = _auditar_en_subproceso(corrida, timeout=10)
+    assert time.monotonic() - inicio < 10
+    assert filas["manifest"][0] == "FAIL"
+    assert "fusión" in filas["manifest"][1]
+    assert [i for i, (_, detalle) in filas.items() if "error interno" in detalle] == []
+    assert len(filas) == len(CHECKS)
+
+
 def test_short_repr_acota_coste_y_longitud() -> None:
     assert short_repr("pipeline") == "'pipeline'"
     assert short_repr([1, 2]) == "[1, 2]"
@@ -293,6 +423,13 @@ def test_short_repr_acota_coste_y_longitud() -> None:
     ciclica: list = []
     ciclica.append(ciclica)  # YAML permite referencias circulares con `&a [*a]`
     assert len(short_repr(ciclica)) <= 120
+
+
+def test_short_text_deja_las_cadenas_tal_cual_y_acota_el_resto() -> None:
+    assert short_text("2026-10-04") == "2026-10-04"  # sin comillas: el detalle se lee como antes
+    assert short_text("x" * 10_000) == "x" * 119 + "…"
+    assert short_text([1, 2]) == "[1, 2]"
+    assert len(short_text([[[[1] * 9] * 9] * 9] * 9)) <= 120
 
 
 def test_ledger_con_separadores_unicode_en_el_texto_conserva_la_entrada(corrida) -> None:

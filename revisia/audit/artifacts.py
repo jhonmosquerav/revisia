@@ -2,15 +2,15 @@
 
 Los loaders **nunca lanzan**: devuelven un :class:`Loaded` con el valor o con
 el error (``OSError``, ``UnicodeDecodeError``, JSON/YAML inválido, raíz de tipo
-inesperado, ``ValidationError``, ``RecursionError``, YAML demasiado anidado y
-cualquier otra excepción del parser). Antes de la Ola 1 un
+inesperado, ``ValidationError``, ``RecursionError``, YAML demasiado anidado, YAML
+con claves de fusión y cualquier otra excepción del parser). Antes de la Ola 1 un
 ``manifest.yml`` con raíz de lista reventaba el auditor con ``AttributeError``
 y una línea corrupta del ledger se descartaba en silencio (auditoría
 2026-09-03, A11/C3): un auditor que revienta o que ignora lo ilegible no
 verifica nada. «Nunca lanzan» incluye lo que ningún ``except`` atrapa: un YAML
 con miles de niveles de anidamiento desborda la pila nativa de ``CSafeLoader`` y
-mata el proceso sin informe, así que se rechaza antes de cargarlo (revisión de
-la Tarea 4).
+mata el proceso sin informe, y una bomba de claves de fusión (``<<``) cuelga la
+carga misma; ambos se rechazan antes de cargar (revisiones de la Tarea 4).
 
 ``AuditContext`` reúne lo que los checks comparten (manifiesto, ledger,
 decisiones efectivas, estado, protocolo) y lo calcula una sola vez.
@@ -19,7 +19,6 @@ decisiones efectivas, estado, protocolo) y lo calcula una sola vez.
 from __future__ import annotations
 
 import json
-import re
 import reprlib
 from dataclasses import dataclass
 from functools import cached_property
@@ -53,27 +52,39 @@ T = TypeVar("T")
 # `llm_calls`; PyYAML sin libyaml no lo trae.
 _YAML_LOADER: type = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
-# Guarda contra el anidamiento hostil. `CSafeLoader` compone los nodos con recursión
-# nativa de C, que `sys.setrecursionlimit` no limita: medido en Windows con Python
-# 3.13, a ~2 664 niveles desborda la pila (0xC00000FD) y mata el proceso sin que
-# ningún `except` lo atrape. Los manifiestos reales tienen profundidad < 20.
+# Guarda contra el YAML hostil: UNA sola, por eventos del parser, SIEMPRE, antes de cargar.
 #
-# - Colecciones de flujo (`[`/`{`) y, en general, cualquier colección: un único límite de
-#   profundidad medido por **eventos** del parser (`_yaml_depth_exceeded`). Es la fuente
-#   de verdad porque el parser ya resolvió comillas, escapes y comentarios; una regex por
-#   línea se esquivaba con una comilla suelta o un `#` dentro de una cadena multilínea.
-#   La pila del parser de libyaml vive en el heap: solo el compositor recursa.
-# - Bloque: las dos guardas físicas de abajo (sangría y cadena de indicadores en una
-#   línea) acotan la profundidad sin parsear; el recorrido de eventos no les hace falta.
+# Dos vectores matan o cuelgan el proceso sin que ningún `except` lo atrape:
+# - Anidamiento: `CSafeLoader` compone los nodos con recursión nativa de C, que
+#   `sys.setrecursionlimit` no limita. Medido en Windows con Python 3.13, a ~2 690 niveles
+#   desborda la pila (0xC00000FD) y mata el proceso sin informe. Los manifiestos reales
+#   tienen profundidad < 20; el límite uniforme de 500 niveles queda ≈ 5× bajo el crash.
+# - Claves de fusión (`<<`): `flatten_mapping` copia los pares de cada alias sin memoizar,
+#   así que `aN: &aN {<<: [*a(N-1) ×9]}` los multiplica ×9 por nivel (el nivel 8 ya tarda
+#   segundos; el 10, minutos y decenas de GB). El motor nunca escribe `<<`: se rechaza. Los
+#   alias normales (`*a`) comparten nodos y siguen permitidos.
 #
-# Se aplican también con el `SafeLoader` de Python puro para que el veredicto no
-# dependa de tener libyaml.
-_YAML_MAX_DEPTH = 500  # niveles de colección (mapas/listas) medidos por eventos
-_YAML_MAX_INDENT = 500  # espacios de sangría de una línea
-_YAML_MAX_BLOCK_CHAIN = 500  # indicadores `- `/`? `/`: ` encadenados en una línea
+# Se mide por **eventos** del parser, no con regex sobre el texto: el parser ya resolvió
+# comillas, escapes, comentarios, el BOM y los saltos de línea que libyaml reconoce (U+2028,
+# U+2029 y U+0085, además de `\n`). Unas regex físicas por línea (`^` + `re.MULTILINE`) se
+# esquivaban con cualquiera de ellos y dejaban pasar el desbordamiento (tercera revisión de
+# la Tarea 4). La pila del parser de libyaml vive en el heap: solo el compositor recursa, y
+# aquí no se compone. El recorrido solo cuesta algo apreciable en manifiestos de miles de
+# llamadas (coste medido en el informe de la tarea).
+#
+# Se aplica con el loader que luego carga (`CSafeLoader` si existe) y funciona igual con el
+# `SafeLoader` de Python puro, para que el veredicto no dependa de tener libyaml.
+_YAML_MAX_DEPTH = 500  # niveles de colección (mapas/listas), también el mapa raíz
+_YAML_MERGE_TAG = "tag:yaml.org,2002:merge"
 
-_YAML_DEEP_INDENT = re.compile(rf"^ {{{_YAML_MAX_INDENT + 1},}}[^ \r\n]", re.MULTILINE)
-_YAML_DEEP_CHAIN = re.compile(rf"^ *(?:[-?:][ \t]+){{{_YAML_MAX_BLOCK_CHAIN + 1},}}", re.MULTILINE)
+_YAML_ERR_DEPTH = (
+    f"estructura YAML demasiado anidada (más de {_YAML_MAX_DEPTH} niveles de colecciones "
+    "anidadas); no se carga para no desbordar la pila del intérprete"
+)
+_YAML_ERR_MERGE = (
+    "claves de fusión YAML (<<) no admitidas en artefactos del motor; no se carga para no "
+    "multiplicar sus pares en memoria"
+)
 
 
 @dataclass(frozen=True)
@@ -132,6 +143,17 @@ def short_repr(value: object, *, limit: int = 120) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+def short_text(value: object, *, limit: int = 120) -> str:
+    """Valor del manifiesto para un detalle: las cadenas tal cual (recortadas), lo demás acotado.
+
+    Una cadena no puede ser una bomba de alias, y sin comillas el detalle se lee igual que
+    antes de acotarlo; todo lo demás (listas, mapas) pasa por :func:`short_repr`.
+    """
+    if isinstance(value, str):
+        return value if len(value) <= limit else value[: limit - 1] + "…"
+    return short_repr(value, limit=limit)
+
+
 def format_validation(exc: ValidationError, *, limit: int = 3) -> str:
     """``loc: msg; loc: msg (+k más)`` a partir de una ``ValidationError``."""
     errors = exc.errors()
@@ -186,72 +208,64 @@ def read_json(
     return Loaded(rel, True, value)
 
 
-def _yaml_depth_exceeded(text: str) -> bool:
-    """¿Supera el YAML ``_YAML_MAX_DEPTH`` niveles de colección? Recorre eventos, no nodos.
+def _yaml_guard(text: str) -> str | None:
+    """Por qué el YAML se rechaza sin cargarlo, o ``None`` si pasa la guarda.
 
-    El parser de libyaml emite los eventos con una pila en el heap: aquí no hay
-    recursión nativa, que es lo que el compositor sí tiene y lo que desborda. Un
-    ``yaml.YAMLError`` (YAML mal formado) no es un problema de anidamiento: ya lo
-    informará la carga, así que se devuelve ``False``.
+    Recorre los eventos del parser (pila en el heap: aquí no hay la recursión nativa que
+    sí tiene el compositor y que desborda) y rechaza el anidamiento por encima de
+    ``_YAML_MAX_DEPTH`` y cualquier clave de fusión. Ver el comentario de las constantes.
+
+    Un ``yaml.YAMLError`` (YAML mal formado; también el ``ReaderError`` por un carácter de
+    control, que el loader de Python puro lanza al construirse) no es un problema de
+    anidamiento: ya lo informará la carga, así que se devuelve ``None``.
+
+    Una clave de fusión es un escalar plano ``<<`` o cualquier nodo con la etiqueta
+    explícita ``!!merge``: la etiqueta, no el texto, es lo que activa ``flatten_mapping``
+    (``!!merge "<<"`` y ``!!merge cualquier-cosa`` también fusionan). Un escalar plano trae
+    ``style == ""`` con libyaml y ``None`` con Python puro: se mira con ``not style``.
     """
-    loader = _YAML_LOADER(text)
+    loader = None
     try:
+        loader = _YAML_LOADER(text)
         depth = 0
         while loader.check_event():
             event = loader.get_event()
-            if isinstance(event, yaml.SequenceStartEvent | yaml.MappingStartEvent):
+            if isinstance(event, yaml.ScalarEvent):
+                if event.tag == _YAML_MERGE_TAG or (event.value == "<<" and not event.style):
+                    return _YAML_ERR_MERGE
+            elif isinstance(event, yaml.SequenceStartEvent | yaml.MappingStartEvent):
+                if event.tag == _YAML_MERGE_TAG:
+                    return _YAML_ERR_MERGE
                 depth += 1
                 if depth > _YAML_MAX_DEPTH:
-                    return True
+                    return _YAML_ERR_DEPTH
             elif isinstance(event, yaml.SequenceEndEvent | yaml.MappingEndEvent):
                 depth -= 1
-        return False
+        return None
     except yaml.YAMLError:
-        return False
+        return None
     finally:
-        loader.dispose()
-
-
-def _yaml_nesting_problem(text: str) -> str | None:
-    """Por qué el YAML se rechaza sin cargarlo, o ``None`` si pasa la guarda.
-
-    Ver el comentario de las constantes ``_YAML_MAX_*``: el desbordamiento de pila
-    de ``CSafeLoader`` no se puede atrapar, así que se previene antes de cargar.
-    """
-    if _YAML_DEEP_INDENT.search(text):
-        return f"una línea con más de {_YAML_MAX_INDENT} espacios de sangría"
-    if _YAML_DEEP_CHAIN.search(text):
-        return f"más de {_YAML_MAX_BLOCK_CHAIN} indicadores `- `/`? ` encadenados en una línea"
-    # El conteo crudo de `count` (en C) no se puede esquivar con comillas ni comentarios:
-    # sin más de 500 `[`/`{` no hay anidamiento de flujo posible y el manifiesto normal
-    # no paga el recorrido de eventos.
-    if text.count("[") + text.count("{") > _YAML_MAX_DEPTH and _yaml_depth_exceeded(text):
-        return f"más de {_YAML_MAX_DEPTH} niveles de colecciones anidadas"
-    return None
+        if loader is not None:
+            loader.dispose()
 
 
 def read_yaml(run_dir: Path, rel: str, *, root: type | tuple[type, ...] = dict) -> Loaded[Any]:
     """Lee un YAML (``CSafeLoader`` si está disponible) y comprueba su raíz.
 
-    Un YAML con miles de niveles de anidamiento se rechaza antes de cargarlo:
-    desbordaría la pila nativa del loader en C y mataría el proceso (revisión
-    de la Tarea 4). PyYAML tampoco lanza solo ``YAMLError``: una etiqueta
-    explícita como ``!!timestamp foo`` o ``!!bool maybe`` produce
-    ``AttributeError``/``KeyError``, por eso se captura ``Exception``, guarda
+    Antes de cargar, ``_yaml_guard`` rechaza el YAML con miles de niveles de anidamiento
+    (desbordaría la pila nativa del loader en C y mataría el proceso) y el que lleva claves
+    de fusión (cuelgan la carga): revisiones de la Tarea 4. PyYAML tampoco lanza solo
+    ``YAMLError``: una etiqueta explícita como ``!!timestamp foo`` o ``!!bool maybe``
+    produce ``AttributeError``/``KeyError``, por eso se captura ``Exception``, guarda
     incluida («nunca lanza» vale también para ella).
     """
     text = read_text(run_dir, rel)
     if not text.ok:
         return Loaded(rel, text.present, error=text.error)
     try:
-        problem = _yaml_nesting_problem(text.value)
+        problem = _yaml_guard(text.value)
         if problem:
-            return Loaded(
-                rel,
-                True,
-                error=f"estructura YAML demasiado anidada ({problem}); no se carga para no "
-                "desbordar la pila del intérprete",
-            )
+            return Loaded(rel, True, error=problem)
         value = yaml.load(text.value, Loader=_YAML_LOADER)
     except Exception as exc:  # fail-closed: no solo `YAMLError` (ver la docstring)
         return Loaded(rel, True, error=f"YAML inválido ({type(exc).__name__})")

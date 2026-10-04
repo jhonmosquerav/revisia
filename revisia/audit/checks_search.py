@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from revisia.audit.artifacts import AuditContext
+from revisia.audit.artifacts import AuditContext, short_text
 from revisia.audit.model import Verdict
 
 _NA_PROTOCOLO = "no aplica: sin protocolo legible en el manifiesto (ver `manifest`)."
@@ -24,7 +24,9 @@ def check_search_window(ctx: AuditContext) -> Verdict:
     if window is None:
         return "N/A", _NA_PROTOCOLO
     if window.get("executed"):
-        return "PASS", f"Búsqueda ejecutada declarada: {window.get('executed')}."
+        # Valor no confiable del manifiesto: acotado, no interpolado crudo (una bomba de alias,
+        # `*a` ×9 por nivel, cuelga el `str` del f-string; tercera revisión de la Tarea 4).
+        return "PASS", f"Búsqueda ejecutada declarada: {short_text(window.get('executed'))}."
     return "WARN", "search_window.executed vacío: declara cuándo se ejecutó la búsqueda."
 
 
@@ -35,7 +37,7 @@ def check_registration(ctx: AuditContext) -> Verdict:
         return "N/A", _NA_PROTOCOLO
     declared = {k: v for k, v in registration.items() if v}
     if declared:
-        return "PASS", (
-            "Registro declarado: " + ", ".join(f"{k}={v}" for k, v in declared.items()) + "."
-        )
+        # Igual que arriba: la clave y el valor vienen del manifiesto, siempre acotados.
+        registro = ", ".join(f"{short_text(k)}={short_text(v)}" for k, v in declared.items())
+        return "PASS", f"Registro declarado: {registro}."
     return "WARN", "Sin registro (PROSPERO/OSF): preregistra el protocolo antes de publicar."
