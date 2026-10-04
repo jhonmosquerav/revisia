@@ -984,7 +984,7 @@ def _write_deliverables(
     """Escribe el entregable completo (``deliverable/``) y devuelve su carpeta."""
     protocol = run.protocol
     search_log = SearchLog.model_validate_json(
-        (run.ctx.run_dir / "01_search" / "log.json").read_text(encoding="utf-8")
+        (run.ctx.run_dir / SEARCH_DIR / "log.json").read_text(encoding="utf-8")
     )
     deliverable = run.ctx.deliverable_dir()
     (deliverable / "documento.md").write_text(

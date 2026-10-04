@@ -18,7 +18,7 @@ from revisia.provenance.runmeta import RunMeta
 if TYPE_CHECKING:
     from revisia.exclusions import ExclusionBreakdown
     from revisia.metrics import ScreeningMetrics
-    from revisia.schemas.artifacts import SearchLog
+    from revisia.schemas.artifacts import SearchLog, SearchLogEntry
 
 # (sección, número, título corto). Numeración principal PRISMA 2020 (1–27).
 _PRISMA_2020_ITEMS: list[tuple[str, int, str]] = [
@@ -106,15 +106,49 @@ _PRISMA_S_ITEMS: list[tuple[int, str, str]] = [
 ]
 
 
+def _ran_in_engine(entry: SearchLogEntry) -> bool:
+    """Si el motor ejecutó esa búsqueda (base con backend o búsqueda inyectada).
+
+    Una importación (``manual_import``) lleva la hora de lectura del fichero, no la de
+    la búsqueda externa que lo originó; una base ``manual_only`` o desconocida no se
+    ejecutó.
+    """
+    return entry.kind == "injected" or (entry.kind == "database" and entry.backend is not None)
+
+
 def engine_search_date(search_log: SearchLog) -> str:
     """Fecha (UTC, ``AAAA-MM-DD``) en que el motor ejecutó la búsqueda.
 
-    La más temprana de las entradas del log; si ninguna tiene hora, la de
-    inicio del log. Es la fecha que se reporta, no la tecleada en
-    ``search_window.executed`` (PRISMA-S 13).
+    La más temprana de las búsquedas que ejecutó el motor (bases con backend o
+    búsqueda inyectada; no las importaciones); si ninguna tiene hora, la de inicio
+    del log. Es la fecha que se reporta, no la tecleada en ``search_window.executed``
+    (PRISMA-S 13).
     """
-    starts = [e.started_utc for e in search_log.entries if e.started_utc]
+    starts = [e.started_utc for e in search_log.entries if _ran_in_engine(e) and e.started_utc]
     return min(starts or [search_log.started_utc])[:10]
+
+
+def _flat(text: str) -> str:
+    """Colapsa el espacio en blanco (saltos de línea incluidos) a un solo espacio.
+
+    Una cadena de búsqueda multilínea partiría el ítem del checklist y, al pasar a
+    HTML (Anexo E), una línea que empiece por ``#`` o ``- `` se volvería un encabezado
+    o una lista. ``log.json`` conserva la cadena exacta; solo se aplana al renderizar.
+    """
+    return " ".join(text.split())
+
+
+_MAX_ERROR_CHARS = 120
+
+
+def _failure_note(entry: SearchLogEntry) -> str:
+    """``(falló: <error>)`` de una entrada fallida (error ya redactado, recortado)."""
+    if entry.status != "failed":
+        return ""
+    error = _flat(entry.error or "sin detalle")
+    if len(error) > _MAX_ERROR_CHARS:
+        error = error[: _MAX_ERROR_CHARS - 1] + "…"
+    return f" (falló: {error})"
 
 
 def _strings_evidence(search_log: SearchLog) -> str:
@@ -123,24 +157,44 @@ def _strings_evidence(search_log: SearchLog) -> str:
     for entry in search_log.entries:
         if entry.kind == "injected":
             parts.append("búsqueda inyectada (search_fn): sin cadena por base")
-        elif entry.kind != "database":
             continue
-        elif entry.status == "unknown":
+        if entry.kind != "database":
+            continue
+        where = f" ({entry.query_file})" if entry.query_file else ""
+        query = _flat(entry.query or "")
+        if entry.status == "unknown":
             parts.append(f"{entry.database}: base desconocida, sin búsqueda")
+        elif entry.status == "manual_only" and entry.query_origin == "file":
+            # No la ejecutó el motor: es la cadena declarada de una búsqueda externa
+            # cuyos resultados entran por imported/.
+            parts.append(
+                f"{entry.database}: cadena declarada para una búsqueda externa "
+                f"(importada vía imported/): «{query}»{where}"
+            )
         elif entry.query_origin == "file":
-            parts.append(f"{entry.database}: «{entry.query}» ({entry.query_file})")
+            parts.append(f"{entry.database}: «{query}»{where}{_failure_note(entry)}")
         elif entry.query_origin == "question_fallback":
             parts.append(
-                f"{entry.database}: ⚠ sin cadena propia, se usó la pregunta «{entry.query}»"
+                f"{entry.database}: ⚠ sin cadena propia, se usó la pregunta «{query}»"
+                f"{_failure_note(entry)}"
             )
         else:
             parts.append(f"{entry.database}: importación manual (imported/)")
     return "Cadenas ejecutadas (01_search/log.json) — " + " · ".join(parts) + "."
 
 
+def _date_note(entry: SearchLogEntry) -> str:
+    """``<fuente> <fecha>`` de una entrada con hora; las importaciones, «importado el»."""
+    day = (entry.started_utc or "")[:10]
+    if entry.kind == "manual_import":
+        verb = "importación intentada el" if entry.status == "failed" else "importado el"
+        return f"{entry.database} {verb} {day}{_failure_note(entry)}"
+    return f"{entry.database} {day}{_failure_note(entry)}"
+
+
 def _dates_evidence(search_log: SearchLog, search_window: dict[str, str] | None) -> str:
     """PRISMA-S 13: fecha de ejecución registrada por el motor, por base."""
-    dated = [f"{e.database} {e.started_utc[:10]}" for e in search_log.entries if e.started_utc]
+    dated = [_date_note(e) for e in search_log.entries if e.started_utc]
     text = f"Búsqueda ejecutada (fecha del motor): {engine_search_date(search_log)}"
     if dated:
         text += f" ({' · '.join(dated)})"
@@ -241,14 +295,23 @@ def render_prisma_abstracts_checklist(
     Como el checklist principal, se emite de andamiaje: pre-rellena la
     evidencia que el pipeline conoce (fuentes, ventana, conteos, registro) y
     deja el juicio editorial al humano. Con ``search_log``, la fecha de la
-    búsqueda (ítem 4) es la que registró el motor.
+    búsqueda (ítem 4) es la que registró el motor, y sale aunque el protocolo no
+    declare bases: el motor buscó en OpenAlex por defecto y lo dejó en el log.
     """
     auto: dict[int, str] = {}
-    if databases:
+    if databases or search_log is not None:
         executed = (search_window or {}).get("executed") or "(sin fecha ejecutada)"
+        sources = list(databases or [])
         if search_log is not None:
             executed = f"{engine_search_date(search_log)} (registrada por el motor)"
-        auto[4] = f"Bases: {', '.join(databases)} · última búsqueda: {executed}."
+            if not sources:
+                sources = [
+                    "búsqueda inyectada (search_fn)" if e.kind == "injected" else e.database
+                    for e in search_log.entries
+                    if _ran_in_engine(e)
+                ]
+        listed = ", ".join(sources) or "(ninguna registrada)"
+        auto[4] = f"Bases: {listed} · última búsqueda: {executed}."
     if counts is not None:
         auto[7] = f"{counts.included} estudios incluidos (ver prisma_flow.md)."
     if registration and any(registration.values()):

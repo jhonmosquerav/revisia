@@ -75,10 +75,15 @@ def render_methods(
         f"Componentes: {components}",
         f"Bases consultadas: {bases}",
         f"Ventana de búsqueda: {_window_line(protocol.search_window)}",
-        "Cadenas de búsqueda: 00_protocol/search_strings/ de la corrida (copia congelada "
-        "del protocolo; PRISMA-S).",
-        "Criterios: ver inclusion_exclusion.yml (declarados antes de ver resultados).",
     ]
+    # Sin log no se sabe qué se usó y se conserva la cita; con log solo si alguna base
+    # leyó su cadena de search_strings/ (una búsqueda inyectada no usa cadenas por base).
+    if search_log is None or any(e.query_origin == "file" for e in search_log.entries):
+        lines.append(
+            "Cadenas de búsqueda: 00_protocol/search_strings/ de la corrida (copia congelada "
+            "del protocolo; PRISMA-S)."
+        )
+    lines.append("Criterios: ver inclusion_exclusion.yml (declarados antes de ver resultados).")
     if search_log is not None:
         lines.append(
             f"Búsqueda ejecutada (fecha registrada por el motor): {engine_search_date(search_log)}."

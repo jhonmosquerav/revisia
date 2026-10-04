@@ -8,6 +8,7 @@ entregables y manifiesto reproducible.
 from __future__ import annotations
 
 import json
+import shutil
 from collections import Counter
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from hitl_helpers import correr_hasta
 from revisia.audit import run_audit
 from revisia.config import load_protocol
 from revisia.orchestration import pipeline as pipeline_mod
+from revisia.orchestration import search_stage as search_stage_mod
 from revisia.orchestration.pipeline import run_pipeline
 from revisia.orchestration.run_context import RunContext
 from revisia.schemas.records import SearchRecord
@@ -323,3 +325,56 @@ def test_llm_calls_etiquetadas_por_etapa_y_registro(tmp_path: Path) -> None:
         "rob": "A0",
         "reporte": "A1",
     }
+
+
+@pytest.mark.parametrize(
+    ("executed", "difiere"),
+    [("2026-06-26", True), ("2026-03-01", False)],
+    ids=["fecha_tecleada_distinta", "fechas_coincidentes"],
+)
+def test_entregables_de_busqueda_salen_del_log_del_motor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, executed: str, difiere: bool
+) -> None:
+    # M12 · cableado: PRISMA-S, el checklist de resúmenes y metodologia.md reciben el
+    # log de búsqueda. Quitar `search_log=` de cualquiera de las tres llamadas lo rompe.
+    monkeypatch.setattr(search_stage_mod, "utc_now_iso", lambda: "2026-03-01T10:00:00+00:00")
+    proto = tmp_path / "proto"
+    shutil.copytree(EXAMPLE, proto)
+    ficha = proto / "protocol.yml"
+    ficha.write_text(
+        ficha.read_text(encoding="utf-8").replace(
+            'executed: "2026-06-26"', f'executed: "{executed}"'
+        ),
+        encoding="utf-8",
+    )
+    protocol = load_protocol(proto)
+    assert protocol.search_window["executed"] == executed
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T-LOG")
+    result = run_pipeline(
+        protocol,
+        proto,
+        ctx,
+        auto_approve=True,
+        search_fn=_fake_search,
+        fetch_fn=fetch_disponible,
+    )
+    assert result.status == "completed"
+    entregable = ctx.run_dir / "deliverable"
+
+    def item(fichero: str, prefijo: str) -> str:
+        texto = (entregable / fichero).read_text(encoding="utf-8")
+        return next(x for x in texto.splitlines() if x.startswith(prefijo))
+
+    # PRISMA-S: la rama «injected» (sin cadena por base) y la fecha del motor.
+    item_8 = item("checklist_s.md", "- [ ] 8.")
+    assert "búsqueda inyectada (search_fn): sin cadena por base" in item_8
+    item_13 = item("checklist_s.md", "- [ ] 13.")
+    assert "(fecha del motor): 2026-03-01" in item_13
+    assert ("Difiere de search_window.executed" in item_13) is difiere
+    assert ("⚠" in item_13) is difiere
+    # Resúmenes: ítem 4 con la fecha registrada por el motor.
+    assert "2026-03-01 (registrada por el motor)" in item("checklist_abstracts.md", "- [ ] 4.")
+    # Métodos: fecha del motor y sin cita de cadenas por base (la búsqueda fue inyectada).
+    metodologia = (entregable / "metodologia.md").read_text(encoding="utf-8")
+    assert "(fecha registrada por el motor): 2026-03-01" in metodologia
+    assert "00_protocol/search_strings/" not in metodologia

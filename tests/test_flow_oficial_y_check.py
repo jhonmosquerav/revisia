@@ -13,6 +13,7 @@ from revisia.exports import (
     render_prisma_abstracts_checklist,
     render_prisma_s_checklist,
 )
+from revisia.exports.checklist import engine_search_date
 from revisia.schemas.artifacts import SearchLog, SearchLogEntry
 
 _COUNTS = PrismaCounts(
@@ -232,3 +233,173 @@ def test_prisma_s_desde_el_log_de_busqueda() -> None:
     assert "fecha registrada por el motor): 2026-10-04" in metodos
     assert "00_protocol/search_strings/" in metodos
     assert "Sin cadena propia en Europe PMC" in metodos
+
+
+_HORA = "2026-10-04T10:00:00+00:00"
+
+
+def _entrada(**campos) -> SearchLogEntry:
+    """Entrada del log de búsqueda con los valores por omisión de una base ejecutada."""
+    base = {
+        "database": "OpenAlex",
+        "db_key": "openalex",
+        "kind": "database",
+        "declared": True,
+        "status": "ok",
+        "backend": "openalex.search_openalex",
+        "started_utc": _HORA,
+    }
+    return SearchLogEntry(**{**base, **campos})
+
+
+def _log(*entradas: SearchLogEntry) -> SearchLog:
+    return SearchLog(
+        started_utc=_HORA, finished_utc=_HORA, max_results=50, mailto_set=False, entries=entradas
+    )
+
+
+def _item(markdown: str, numero: int) -> str:
+    return next(x for x in markdown.splitlines() if x.startswith(f"- [ ] {numero}."))
+
+
+def test_prisma_s_cadena_multilinea_es_una_sola_linea() -> None:
+    # Una cadena PubMed/Scopus de varias líneas partía el ítem 8 y, al pasar a HTML
+    # (Anexo E), una línea con «#» se volvía <h1> y otra con «- » una lista.
+    cadena = "#1 salud\n#2 educación\n- otro\n#1 AND #2"
+    log = _log(
+        _entrada(query=cadena, query_origin="file", query_file="00_protocol/search_strings/o.txt"),
+        _entrada(
+            database="Europe PMC",
+            db_key="europepmc",
+            query="  ¿qué\n# pasa?  ",
+            query_origin="question_fallback",
+        ),
+    )
+    markdown = render_prisma_s_checklist(search_log=log)
+    assert "#1 salud #2 educación - otro #1 AND #2" in _item(markdown, 8)
+    assert "«¿qué # pasa?»" in _item(markdown, 8)
+    # Ninguna línea del Markdown arranca como encabezado ni como lista por culpa de la cadena.
+    assert not [x for x in markdown.splitlines() if x.startswith(("#2", "- otro", "#1 AND"))]
+    assert markdown.count("- [ ]") == 16
+
+
+def test_prisma_s_base_fallida_no_se_muestra_como_ejecutada() -> None:
+    error = "ReadTimeout: " + "x" * 300
+    log = _log(
+        _entrada(query="llm", query_origin="file", status="failed", error=error),
+        _entrada(database="Crossref", db_key="crossref", query="ml", query_origin="file"),
+    )
+    markdown = render_prisma_s_checklist(search_log=log)
+    item_8, item_13 = _item(markdown, 8), _item(markdown, 13)
+    assert "OpenAlex: «llm»" in item_8
+    assert "(falló: ReadTimeout: " in item_8
+    assert "(falló: ReadTimeout: " in item_13
+    assert "OpenAlex 2026-10-04 (falló:" in item_13
+    assert "x" * 200 not in item_8  # el error se recorta (~120 caracteres)
+    assert "Crossref: «ml»" in item_8
+    assert "Crossref 2026-10-04" in item_13
+    assert "Crossref 2026-10-04 (falló" not in item_13
+
+
+def test_engine_search_date_ignora_las_importaciones() -> None:
+    # Una importación lleva la hora de lectura del fichero, no la de la búsqueda externa.
+    importada = _entrada(
+        database="imported/scopus.ris",
+        db_key="imported",
+        kind="manual_import",
+        backend=None,
+        started_utc="2026-09-01T08:00:00+00:00",
+    )
+    assert engine_search_date(_log(_entrada(), importada)) == "2026-10-04"
+    inyectada = _entrada(
+        database="search_fn",
+        db_key="search_fn",
+        kind="injected",
+        backend=None,
+        started_utc="2026-10-02T08:00:00+00:00",
+    )
+    assert engine_search_date(_log(_entrada(), importada, inyectada)) == "2026-10-02"
+    # Sin búsquedas del motor se queda el inicio del log, como antes.
+    assert engine_search_date(_log(importada)) == "2026-10-04"
+
+
+def test_prisma_s_manual_only_y_importaciones_se_rotulan_aparte() -> None:
+    log = _log(
+        _entrada(),
+        _entrada(
+            database="Scopus",
+            db_key="scopus",
+            status="manual_only",
+            backend=None,
+            started_utc=None,
+            query="TITLE-ABS-KEY(llm)",
+            query_origin="file",
+            query_file="00_protocol/search_strings/scopus.txt",
+        ),
+        _entrada(
+            database="imported/scopus.ris",
+            db_key="imported",
+            kind="manual_import",
+            backend=None,
+            started_utc="2026-09-01T08:00:00+00:00",
+        ),
+    )
+    markdown = render_prisma_s_checklist(search_log=log)
+    item_8, item_13 = _item(markdown, 8), _item(markdown, 13)
+    assert "Scopus: cadena declarada para una búsqueda externa (importada vía imported/)" in item_8
+    assert "«TITLE-ABS-KEY(llm)»" in item_8
+    assert "Scopus: «TITLE-ABS-KEY(llm)» (" not in item_8  # no es una cadena «ejecutada»
+    assert "imported/scopus.ris importado el 2026-09-01" in item_13
+    assert "imported/scopus.ris 2026-09-01" not in item_13
+    assert "(fecha del motor): 2026-10-04" in item_13
+
+
+def test_prisma_s_ramas_unknown_e_injected_y_fechas_coincidentes() -> None:
+    log = _log(
+        _entrada(
+            database="Atlantis",
+            db_key="atlantis",
+            status="unknown",
+            backend=None,
+            started_utc=None,
+        ),
+        _entrada(database="search_fn", db_key="search_fn", kind="injected", backend=None),
+    )
+    markdown = render_prisma_s_checklist(search_window={"executed": "2026-10-04"}, search_log=log)
+    item_8, item_13 = _item(markdown, 8), _item(markdown, 13)
+    assert "Atlantis: base desconocida, sin búsqueda" in item_8
+    assert "búsqueda inyectada (search_fn): sin cadena por base" in item_8
+    assert "(fecha del motor): 2026-10-04" in item_13
+    assert "⚠" not in item_13  # fechas coincidentes: sin aviso
+    assert "Difiere" not in item_13
+
+
+def test_resumenes_item_4_con_el_log_aunque_no_haya_bases_declaradas() -> None:
+    # Sin `databases:` el motor busca en OpenAlex por defecto y lo deja en el log.
+    log = _log(_entrada(declared=False, query="llm", query_origin="question_fallback"))
+    markdown = render_prisma_abstracts_checklist(search_log=log)
+    item_4 = next(x for x in markdown.splitlines() if x.startswith("- [ ] 4."))
+    assert "Bases: OpenAlex" in item_4
+    assert "última búsqueda: 2026-10-04 (registrada por el motor)" in item_4
+    assert "(completar)" not in item_4
+    # Sin log ni bases no hay evidencia, como antes.
+    sin_nada = render_prisma_abstracts_checklist()
+    assert "(completar)" in next(x for x in sin_nada.splitlines() if x.startswith("- [ ] 4."))
+
+
+def test_metodos_cita_search_strings_solo_si_se_usaron_cadenas_por_base() -> None:
+    protocolo = ReviewProtocol.model_validate(
+        {"slug": "d", "title": "D", "question": {"text": "¿X?", "framework": "PEO"}}
+    )
+    con_fichero = _log(_entrada(query="llm", query_origin="file", query_file="x.txt"))
+    solo_pregunta = _log(_entrada(query="¿X?", query_origin="question_fallback"))
+    inyectada = _log(_entrada(database="search_fn", kind="injected", backend=None))
+    assert "00_protocol/search_strings/" in render_methods(
+        protocol=protocolo, counts=_COUNTS, search_log=con_fichero
+    )
+    for log in (solo_pregunta, inyectada):
+        assert "00_protocol/search_strings/" not in render_methods(
+            protocol=protocolo, counts=_COUNTS, search_log=log
+        )
+    # Sin log no se sabe qué se usó: se conserva la cita de siempre.
+    assert "00_protocol/search_strings/" in render_methods(protocol=protocolo, counts=_COUNTS)
