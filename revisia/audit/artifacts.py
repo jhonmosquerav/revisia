@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+import reprlib
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
@@ -54,20 +55,23 @@ _YAML_LOADER: type = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 # Guarda contra el anidamiento hostil. `CSafeLoader` compone los nodos con recursión
 # nativa de C, que `sys.setrecursionlimit` no limita: medido en Windows con Python
-# 3.13, a ~2 680 niveles desborda la pila (0xC00000FD) y mata el proceso sin que
-# ningún `except` lo atrape. Los límites dejan un margen 5× contra esa medida para
-# rechazo preventivo sin cargar. Los manifiestos reales tienen profundidad < 20.
+# 3.13, a ~2 664 niveles desborda la pila (0xC00000FD) y mata el proceso sin que
+# ningún `except` lo atrape. Los manifiestos reales tienen profundidad < 20.
+#
+# - Colecciones de flujo (`[`/`{`) y, en general, cualquier colección: un único límite de
+#   profundidad medido por **eventos** del parser (`_yaml_depth_exceeded`). Es la fuente
+#   de verdad porque el parser ya resolvió comillas, escapes y comentarios; una regex por
+#   línea se esquivaba con una comilla suelta o un `#` dentro de una cadena multilínea.
+#   La pila del parser de libyaml vive en el heap: solo el compositor recursa.
+# - Bloque: las dos guardas físicas de abajo (sangría y cadena de indicadores en una
+#   línea) acotan la profundidad sin parsear; el recorrido de eventos no les hace falta.
+#
 # Se aplican también con el `SafeLoader` de Python puro para que el veredicto no
 # dependa de tener libyaml.
-_YAML_MAX_FLOW_DEPTH = 500  # niveles de `[`/`{` (margen 5× contra ~2 680)
-_YAML_MAX_INDENT = 500  # espacios de sangría de una línea (margen 5× contra ~2 680)
-_YAML_MAX_BLOCK_CHAIN = 500  # indicadores `- `/`? `/`: ` encadenados (margen 5×)
+_YAML_MAX_DEPTH = 500  # niveles de colección (mapas/listas) medidos por eventos
+_YAML_MAX_INDENT = 500  # espacios de sangría de una línea
+_YAML_MAX_BLOCK_CHAIN = 500  # indicadores `- `/`? `/`: ` encadenados en una línea
 
-# Comillas (dobles o simples) y comentarios se consumen enteros: los corchetes que
-# contienen no abren niveles. Es una aproximación a la gramática de YAML (ignora
-# los escapes `\"` y las comillas multilínea), suficiente para una guarda; una
-# comilla suelta sin pareja en su línea no casa, así que el escaneo es lineal.
-_YAML_FLOW_TOKEN = re.compile(r""""[^"\n]*"|'[^'\n]*'|(?<![^\s])#[^\n]*|[\[\]{}]""")
 _YAML_DEEP_INDENT = re.compile(rf"^ {{{_YAML_MAX_INDENT + 1},}}[^ \r\n]", re.MULTILINE)
 _YAML_DEEP_CHAIN = re.compile(rf"^ *(?:[-?:][ \t]+){{{_YAML_MAX_BLOCK_CHAIN + 1},}}", re.MULTILINE)
 
@@ -109,6 +113,23 @@ def _type_names(root: type | tuple[type, ...]) -> str:
 
 def _root_name(value: object) -> str:
     return {dict: "mapa", list: "lista"}.get(type(value), type(value).__name__)
+
+
+# `repr` de un valor del manifiesto, siempre acotado. Una bomba de alias YAML (`*a` repetido
+# nivel tras nivel) carga en milisegundos porque PyYAML comparte los nodos, pero `repr`/`str`
+# la recorren entera: 9**10 hojas, el auditor cuelga sin informe (segunda revisión de la
+# Tarea 4). `reprlib.repr` con sus límites por defecto no basta (una bomba de 10 niveles da
+# ~400 KB): 2 niveles y 3 elementos por colección acotan el coste y el tamaño del detalle.
+_SHORT_REPR = reprlib.Repr()
+_SHORT_REPR.maxlevel = 2
+_SHORT_REPR.maxlist = _SHORT_REPR.maxtuple = _SHORT_REPR.maxdict = _SHORT_REPR.maxset = 3
+_SHORT_REPR.maxstring = _SHORT_REPR.maxother = 60
+
+
+def short_repr(value: object, *, limit: int = 120) -> str:
+    """``repr`` acotado en coste y en longitud para mostrar valores no confiables del manifiesto."""
+    text = _SHORT_REPR.repr(value)
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def format_validation(exc: ValidationError, *, limit: int = 3) -> str:
@@ -165,28 +186,47 @@ def read_json(
     return Loaded(rel, True, value)
 
 
+def _yaml_depth_exceeded(text: str) -> bool:
+    """¿Supera el YAML ``_YAML_MAX_DEPTH`` niveles de colección? Recorre eventos, no nodos.
+
+    El parser de libyaml emite los eventos con una pila en el heap: aquí no hay
+    recursión nativa, que es lo que el compositor sí tiene y lo que desborda. Un
+    ``yaml.YAMLError`` (YAML mal formado) no es un problema de anidamiento: ya lo
+    informará la carga, así que se devuelve ``False``.
+    """
+    loader = _YAML_LOADER(text)
+    try:
+        depth = 0
+        while loader.check_event():
+            event = loader.get_event()
+            if isinstance(event, yaml.SequenceStartEvent | yaml.MappingStartEvent):
+                depth += 1
+                if depth > _YAML_MAX_DEPTH:
+                    return True
+            elif isinstance(event, yaml.SequenceEndEvent | yaml.MappingEndEvent):
+                depth -= 1
+        return False
+    except yaml.YAMLError:
+        return False
+    finally:
+        loader.dispose()
+
+
 def _yaml_nesting_problem(text: str) -> str | None:
     """Por qué el YAML se rechaza sin cargarlo, o ``None`` si pasa la guarda.
 
-    Ver las constantes ``_YAML_MAX_*``: el desbordamiento de pila de
-    ``CSafeLoader`` no se puede atrapar, así que se previene con una pasada
-    barata sobre el texto (lineal; sin cargar nada).
+    Ver el comentario de las constantes ``_YAML_MAX_*``: el desbordamiento de pila
+    de ``CSafeLoader`` no se puede atrapar, así que se previene antes de cargar.
     """
     if _YAML_DEEP_INDENT.search(text):
         return f"una línea con más de {_YAML_MAX_INDENT} espacios de sangría"
     if _YAML_DEEP_CHAIN.search(text):
         return f"más de {_YAML_MAX_BLOCK_CHAIN} indicadores `- `/`? ` encadenados en una línea"
-    # `count` es de C y acota la profundidad: casi todo manifiesto se libra del escaneo.
-    if text.count("[") + text.count("{") > _YAML_MAX_FLOW_DEPTH:
-        depth = 0
-        for token in _YAML_FLOW_TOKEN.finditer(text):
-            char = token.group()
-            if char in "[{":
-                depth += 1
-                if depth > _YAML_MAX_FLOW_DEPTH:
-                    return f"más de {_YAML_MAX_FLOW_DEPTH} niveles de `[`/`{{`"
-            elif char in "]}":
-                depth = max(0, depth - 1)
+    # El conteo crudo de `count` (en C) no se puede esquivar con comillas ni comentarios:
+    # sin más de 500 `[`/`{` no hay anidamiento de flujo posible y el manifiesto normal
+    # no paga el recorrido de eventos.
+    if text.count("[") + text.count("{") > _YAML_MAX_DEPTH and _yaml_depth_exceeded(text):
+        return f"más de {_YAML_MAX_DEPTH} niveles de colecciones anidadas"
     return None
 
 
@@ -197,20 +237,21 @@ def read_yaml(run_dir: Path, rel: str, *, root: type | tuple[type, ...] = dict) 
     desbordaría la pila nativa del loader en C y mataría el proceso (revisión
     de la Tarea 4). PyYAML tampoco lanza solo ``YAMLError``: una etiqueta
     explícita como ``!!timestamp foo`` o ``!!bool maybe`` produce
-    ``AttributeError``/``KeyError``, por eso se captura ``Exception``.
+    ``AttributeError``/``KeyError``, por eso se captura ``Exception``, guarda
+    incluida («nunca lanza» vale también para ella).
     """
     text = read_text(run_dir, rel)
     if not text.ok:
         return Loaded(rel, text.present, error=text.error)
-    problem = _yaml_nesting_problem(text.value)
-    if problem:
-        return Loaded(
-            rel,
-            True,
-            error=f"estructura YAML demasiado anidada ({problem}); no se carga para no "
-            "desbordar la pila del intérprete",
-        )
     try:
+        problem = _yaml_nesting_problem(text.value)
+        if problem:
+            return Loaded(
+                rel,
+                True,
+                error=f"estructura YAML demasiado anidada ({problem}); no se carga para no "
+                "desbordar la pila del intérprete",
+            )
         value = yaml.load(text.value, Loader=_YAML_LOADER)
     except Exception as exc:  # fail-closed: no solo `YAMLError` (ver la docstring)
         return Loaded(rel, True, error=f"YAML inválido ({type(exc).__name__})")
@@ -418,7 +459,8 @@ class AuditContext:
         if not raw.present or raw.value is None:
             return LedgerView(raw.present, (), (), raw.error)
         entries: list[tuple[int, DecisionEntry]] = []
-        errors = (raw.error or "").splitlines()
+        # `split("\n")` y no `splitlines()` (U+2028…, como en `read_jsonl`); sin error, `[]`.
+        errors = raw.error.split("\n") if raw.error else []
         for number, obj in raw.value:
             try:
                 entries.append((number, _DECISION_ENTRY.validate_python(obj)))

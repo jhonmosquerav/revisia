@@ -26,6 +26,7 @@ from revisia.audit.artifacts import (
     read_jsonl,
     read_text,
     read_yaml,
+    short_repr,
     validate,
 )
 from revisia.audit.render import _md_cell
@@ -151,6 +152,14 @@ def test_validate_no_lanza_si_el_validador_revienta() -> None:
 # y no se cae la sesión de pytest.
 _VECTORES_ANIDADOS = [
     pytest.param(lambda: "x: " + "[" * 10_000 + "\n", id="corchetes"),
+    # Los tres siguientes esquivaban la guarda de comillas/comentarios por línea (segunda
+    # revisión de la Tarea 4): una comilla suelta o un `#` dentro de una cadena multilínea
+    # ocultaban los `[` que sí anidan. La guarda por eventos del parser no los puede ocultar.
+    pytest.param(lambda: 'x: [a"b, ' + "[" * 10_000 + ' c"d\n', id="comilla-doble-suelta"),
+    pytest.param(lambda: "x: [a'b, " + "[" * 10_000 + " c'd\n", id="comilla-simple-suelta"),
+    pytest.param(
+        lambda: 'x: ["a\n # b", ' + "[" * 10_000 + "\n", id="cadena-multilinea-con-almohadilla"
+    ),
     pytest.param(lambda: "- " * 10_000 + "x\n", id="indicadores-de-bloque-encadenados"),
     pytest.param(
         lambda: "".join(" " * i + "a:\n" for i in range(3_000)) + " " * 3_000 + "z: 1\n",
@@ -166,19 +175,28 @@ _SCRIPT_AUDITAR = (
 )
 
 
-@pytest.mark.parametrize("texto", _VECTORES_ANIDADOS)
-def test_manifiesto_muy_anidado_no_tumba_el_proceso_del_auditor(corrida, texto) -> None:
-    (corrida / "manifest.yml").write_text(texto(), encoding="utf-8")
+def _auditar_en_subproceso(corrida: Path, *, timeout: int) -> dict[str, tuple[str, str]]:
+    """``run_audit`` en un proceso aparte: ``{check_id: (estado, detalle)}``.
+
+    Un crash nativo o un cuelgue del auditor no puede tirar la sesión de pytest: se ve como
+    un código de salida distinto de 0 o como ``TimeoutExpired``.
+    """
     proceso = subprocess.run(
         [sys.executable, "-c", _SCRIPT_AUDITAR, str(corrida)],
         cwd=REPO,
         capture_output=True,
         text=True,
-        timeout=300,
+        timeout=timeout,
     )
     mensaje = f"el auditor murió (código {proceso.returncode}): {proceso.stderr[-500:]}"
     assert proceso.returncode == 0, mensaje
-    filas = {i: (status, detalle) for i, status, detalle in json.loads(proceso.stdout)}
+    return {i: (status, detalle) for i, status, detalle in json.loads(proceso.stdout)}
+
+
+@pytest.mark.parametrize("texto", _VECTORES_ANIDADOS)
+def test_manifiesto_muy_anidado_no_tumba_el_proceso_del_auditor(corrida, texto) -> None:
+    (corrida / "manifest.yml").write_text(texto(), encoding="utf-8")
+    filas = _auditar_en_subproceso(corrida, timeout=300)
     assert filas["manifest"][0] == "FAIL"
     assert "anidada" in filas["manifest"][1]
     assert [i for i, (_, detalle) in filas.items() if "error interno" in detalle] == []
@@ -190,11 +208,15 @@ def test_guarda_de_anidamiento_respeta_sus_limites(tmp_path) -> None:
         (tmp_path / "x.yml").write_text(texto, encoding="utf-8")
         return read_yaml(tmp_path, "x.yml", **kwargs)
 
-    # 500 niveles de corchetes pasan; 501 se rechazan antes de cargar.
-    assert cargar("x: " + "[" * 500 + "]" * 500 + "\n").ok
-    assert "anidada" in cargar("x: " + "[" * 501 + "]" * 501 + "\n").error
+    # La guarda cuenta niveles de colección (también el mapa raíz) y solo corre si el
+    # conteo crudo de `[`/`{` pasa de 500; los `y: []`/`z: []` sueltos lo garantizan.
+    def anidado(niveles: int) -> str:
+        return "x: " + "[" * niveles + "]" * niveles + "\ny: []\nz: []\n"
+
+    assert cargar(anidado(499)).ok  # raíz + 499 = profundidad 500: pasa
+    assert "anidada" in cargar(anidado(500)).error  # profundidad 501: se rechaza sin cargar
     assert "anidada" in cargar("x: " + "{a: " * 501 + "1" + "}" * 501 + "\n").error
-    # Los corchetes entre comillas o en un comentario no cuentan.
+    # Los corchetes entre comillas o en un comentario no cuentan (no abren colecciones).
     assert cargar('x: "' + "[" * 5_000 + '"\n').ok
     assert cargar("x: '" + "{" * 5_000 + "'\n").ok
     assert cargar("x: 1  # " + "[" * 5_000 + "\n").ok
@@ -208,6 +230,69 @@ def test_guarda_de_anidamiento_respeta_sus_limites(tmp_path) -> None:
     assert cargar("a:\n  - b: [1, 2, {c: d}]\n  - e: 'f'\n").value == {
         "a": [{"b": [1, 2, {"c": "d"}]}, {"e": "f"}]
     }
+
+
+def test_manifiesto_valido_con_miles_de_corchetes_se_carga_sin_rechazo(tmp_path) -> None:
+    """La guarda por eventos mide profundidad, no cantidad: 4 000 `{}`/`[]` planos no anidan."""
+    llamadas = "".join(
+        f"- stage: screening_ta\n  seed: {i}\n  usage: {{}}\n  tags: []\n" for i in range(2_000)
+    )
+    texto = f"slug: demo\nmodels_used: [m/x]\nllm_calls:\n{llamadas}"
+    assert texto.count("[") + texto.count("{") > 500  # el recorrido de eventos sí se ejecuta
+    (tmp_path / "manifest.yml").write_text(texto, encoding="utf-8")
+    cargado = read_yaml(tmp_path, "manifest.yml")
+    assert cargado.ok, cargado.error
+    assert len(cargado.value["llm_calls"]) == 2_000
+    assert cargado.value["llm_calls"][1_999] == {
+        "stage": "screening_ta",
+        "seed": 1_999,
+        "usage": {},
+        "tags": [],
+    }
+
+
+# Una bomba de alias (`*a` nueve veces por nivel, diez niveles) carga en milisegundos porque
+# PyYAML comparte los nodos; lo que cuelga es recorrerla (`repr`, `str`, validar): 9**10
+# hojas. El auditor no puede imprimir el valor hostil del manifiesto (segunda revisión de
+# la Tarea 4).
+def _bomba_de_alias(niveles: int = 10) -> str:
+    base = "a0: &a0 [x, x, x, x, x, x, x, x, x]\n"
+    return base + "".join(
+        f"a{i}: &a{i} [{', '.join([f'*a{i - 1}'] * 9)}]\n" for i in range(1, niveles)
+    )
+
+
+@pytest.mark.parametrize(
+    ("cola", "fila_afectada", "estado"),
+    [
+        pytest.param("provenance: *a9\n", "provenance", "FAIL", id="provenance"),
+        pytest.param(
+            "models_used: [*a9]\nllm_calls:\n- {stage: screening_ta, prompt_sha256: ab}\n",
+            "manifest",
+            "PASS",
+            id="models_used",
+        ),
+    ],
+)
+def test_bomba_de_alias_no_cuelga_el_auditor_ni_llena_el_detalle(
+    corrida, cola: str, fila_afectada: str, estado: str
+) -> None:
+    (corrida / "manifest.yml").write_text(_bomba_de_alias() + cola, encoding="utf-8")
+    filas = _auditar_en_subproceso(corrida, timeout=60)
+    assert filas[fila_afectada][0] == estado
+    assert len(filas[fila_afectada][1]) < 500  # un `repr` acotado, no la bomba expandida
+    assert [i for i, (_, detalle) in filas.items() if "error interno" in detalle] == []
+    assert len(filas) == len(CHECKS)
+
+
+def test_short_repr_acota_coste_y_longitud() -> None:
+    assert short_repr("pipeline") == "'pipeline'"
+    assert short_repr([1, 2]) == "[1, 2]"
+    assert len(short_repr(list(range(1_000)))) <= 120
+    assert len(short_repr("x" * 10_000)) <= 120
+    ciclica: list = []
+    ciclica.append(ciclica)  # YAML permite referencias circulares con `&a [*a]`
+    assert len(short_repr(ciclica)) <= 120
 
 
 def test_ledger_con_separadores_unicode_en_el_texto_conserva_la_entrada(corrida) -> None:

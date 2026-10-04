@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
-from revisia.audit.artifacts import AuditContext
+from collections.abc import Iterable
+from typing import Any
+
+from revisia.audit.artifacts import AuditContext, short_repr
 from revisia.audit.model import Verdict
 from revisia.orchestration.run_context import PROVENANCE_PIPELINE
 
 _NA_MANIFIESTO = "no aplica: el manifiesto no se pudo leer (ver `manifest`)."
+
+
+def _nombres(models: Iterable[Any]) -> str:
+    """Los modelos del manifiesto en una línea; lo que no es texto, con ``short_repr``.
+
+    ``str`` de una lista anidada hostil (bomba de alias) cuelga el auditor.
+    """
+    return ", ".join(m if isinstance(m, str) else short_repr(m) for m in models)
 
 
 def check_manifest(ctx: AuditContext) -> Verdict:
@@ -19,7 +30,7 @@ def check_manifest(ctx: AuditContext) -> Verdict:
     calls = ctx.llm_calls
     if models and calls:
         return "PASS", (
-            f"manifest.yml con {len(calls)} llamada(s) IA y modelos: {', '.join(map(str, models))}."
+            f"manifest.yml con {len(calls)} llamada(s) IA y modelos: {_nombres(models)}."
         )
     if calls or models:
         return "WARN", "manifest.yml presente pero con procedencia IA incompleta."
@@ -36,7 +47,8 @@ def check_provenance(ctx: AuditContext) -> Verdict:
             "El manifiesto declara `provenance: pipeline` (marca escrita por el motor; "
             "no es una firma)."
         )
-    found = "ausente" if provenance is None else repr(provenance)
+    # El manifiesto es entrada no confiable: `short_repr`, no `repr` (bomba de alias).
+    found = "ausente" if provenance is None else short_repr(provenance)
     return "FAIL", (
         f"Procedencia {found}: el manifiesto no declara `provenance: pipeline`. "
         "Una corrida reconstruida, o generada antes de que el motor registrara "
