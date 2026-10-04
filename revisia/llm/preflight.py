@@ -27,6 +27,7 @@ from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from revisia.agents import search_backends
 from revisia.llm.deprecations import retirement_for
 from revisia.llm.providers.agent import get_agent_callback
 from revisia.llm.registry import _EFFORT_PROVIDERS, available_providers
@@ -43,6 +44,9 @@ Which = Callable[[str], str | None]
 # `find_spec` y `which` explícitos; los del CLI sustituyen estos con monkeypatch.
 _default_find_spec: FindSpec = importlib.util.find_spec
 _default_which: Which = shutil.which
+
+# Extensiones que `ingest.manual_import.import_directory` sabe leer.
+_IMPORT_SUFFIXES = frozenset({".ris", ".bib", ".bibtex"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,6 +279,87 @@ def check_provider(
     return issues
 
 
+def check_databases(
+    protocol: ReviewProtocol, protocol_dir: str | Path, *, find_spec: FindSpec
+) -> list[PreflightIssue]:
+    """Bases declaradas, cadenas de búsqueda, importación manual y ``httpx``."""
+    base = Path(protocol_dir)
+    issues: list[PreflightIssue] = []
+    databases = list(protocol.databases)
+    with_backend: list[str] = []
+    manual: list[str] = []
+    if not databases:
+        issues.append(
+            _warning(
+                "databases",
+                "`databases` está vacío: se buscará solo en OpenAlex (por defecto). "
+                "Declara las bases en protocol.yml para que PRISMA-S las liste.",
+            )
+        )
+        with_backend.append("OpenAlex")
+    for db in databases:
+        key = search_backends.db_key(db)
+        where = f"databases.{db}"
+        if key in search_backends.BACKENDS:
+            with_backend.append(db)
+            string_file = base / "search_strings" / f"{key}.txt"
+            text = string_file.read_text(encoding="utf-8") if string_file.exists() else ""
+            if not text.strip():
+                issues.append(
+                    _warning(
+                        where,
+                        f"sin cadena en search_strings/{key}.txt (o el fichero está vacío): "
+                        "se usará la pregunta como cadena. PRISMA-S 8 pide la cadena exacta "
+                        "de cada base.",
+                    )
+                )
+        elif key in search_backends.MANUAL_ONLY:
+            manual.append(db)
+        else:
+            issues.append(
+                _error(
+                    where,
+                    f"base desconocida {db!r} (clave {key!r}): no tiene backend ni es de "
+                    "importación manual. Revisa la ortografía; si la consultas en su web y "
+                    "exportas a RIS/BibTeX, deja el fichero en imported/ y quítala de "
+                    "`databases` (o pide añadirla a MANUAL_ONLY).",
+                )
+            )
+    imported = base / "imported"
+    has_imports = imported.is_dir() and any(
+        p.suffix.lower() in _IMPORT_SUFFIXES for p in imported.iterdir()
+    )
+    if not has_imports:
+        for db in manual:
+            issues.append(
+                _warning(
+                    f"databases.{db}",
+                    f"{db!r} es de importación manual y no hay ficheros .ris/.bib en "
+                    "imported/: exporta sus resultados ahí o no aportará registros.",
+                )
+            )
+    if not _importable("httpx", find_spec):
+        if with_backend:
+            issues.append(
+                _error(
+                    "busqueda",
+                    "falta httpx (extra `search`): fallarían todas las bases con backend "
+                    f"({', '.join(with_backend)}) y la recuperación de texto completo. "
+                    "Instálalo con `uv sync --extra search`.",
+                )
+            )
+        else:
+            issues.append(
+                _warning(
+                    "texto_completo",
+                    "falta httpx (extra `search`): no se recuperará ningún texto completo y "
+                    "todos los registros quedarán como no recuperados. "
+                    "`uv sync --extra search`.",
+                )
+            )
+    return issues
+
+
 def _configured_models(protocol: ReviewProtocol) -> list[str]:
     """Ids de modelo de todas las etapas y miembros de ensemble del protocolo."""
     models = {cfg.model for cfg in protocol.llm.values()}
@@ -357,4 +442,14 @@ def preflight(
             cfg, where=where, context=context, env=env, find_spec=find_spec, which=which
         )
     issues += check_retired(protocol, today)
+    if context != "resume":
+        issues += check_databases(protocol, protocol_dir, find_spec=find_spec)
+        if context == "run" and not mailto:
+            issues.append(
+                _warning(
+                    "mailto",
+                    "sin --mailto no se consultan Unpaywall ni el ID Converter de PMC: más "
+                    "registros quedarán como no recuperados.",
+                )
+            )
     return PreflightReport(_merge(issues))

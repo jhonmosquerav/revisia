@@ -214,3 +214,85 @@ def test_preflight_modelo_retirado_es_error_y_futuro_aviso() -> None:
     futuro = _proto(llm={"default": {"provider": "fake", "model": "gemini-3.1-flash-lite"}})
     aviso = check_retired(futuro, HOY)
     assert aviso[0].level == "warning" and "2027-05-07" in aviso[0].message
+
+
+# ── Bases y búsqueda ─────────────────────────────────────────────────────
+
+
+def _sin_httpx(name: str) -> object | None:
+    return None if name == "httpx" else object()
+
+
+def test_preflight_base_desconocida_es_error(proto_dir: Path) -> None:
+    report = _run(_proto(databases=["OpenAlex", "Scopuss"]), proto_dir)
+    assert "base desconocida 'Scopuss'" in _messages(report.errors)
+
+
+@pytest.mark.parametrize(
+    "db",
+    [
+        "CINAHL",
+        "Cochrane",
+        "Cochrane Library",
+        "CENTRAL",
+        "ProQuest",
+        "EconLit",
+        "JSTOR",
+        "IEEE Xplore",
+        "ACM",
+        "ScienceDirect",
+        "EBSCO",
+        "Ovid",
+    ],
+)
+def test_preflight_bases_de_suscripcion_son_manuales(proto_dir: Path, db: str) -> None:
+    report = _run(_proto(databases=["OpenAlex", db]), proto_dir)
+    assert report.ok, _messages(report.errors)
+
+
+def test_preflight_manual_sin_imported_avisa(proto_dir: Path) -> None:
+    protocol = _proto(databases=["OpenAlex", "Scopus"])
+    assert "imported/" in _messages(_run(protocol, proto_dir).warnings)
+    (proto_dir / "imported").mkdir()
+    (proto_dir / "imported" / "scopus.ris").write_text("TY  - JOUR\nER  -\n", "utf-8")
+    assert "imported/" not in _messages(_run(protocol, proto_dir).warnings)
+
+
+def test_preflight_backend_sin_cadena_avisa(proto_dir: Path) -> None:
+    (proto_dir / "search_strings" / "europepmc.txt").write_text("   \n", "utf-8")
+    protocol = _proto(databases=["OpenAlex", "Crossref", "Europe PMC"])
+    avisos = _messages(_run(protocol, proto_dir).warnings)
+    assert "search_strings/crossref.txt" in avisos
+    assert "search_strings/europepmc.txt" in avisos  # vacío cuenta como ausente
+    assert "search_strings/openalex.txt" not in avisos
+
+
+def test_preflight_databases_vacio_avisa_openalex(proto_dir: Path) -> None:
+    avisos = _messages(_run(_proto(databases=[]), proto_dir).warnings)
+    assert "OpenAlex" in avisos
+
+
+def test_preflight_httpx_ausente_es_error_con_bases_con_backend(proto_dir: Path) -> None:
+    report = _run(_proto(databases=["OpenAlex"]), proto_dir, find_spec=_sin_httpx)
+    assert "uv sync --extra search" in _messages(report.errors)
+    # Solo bases manuales: no hay búsqueda programática, pero todo quedará como
+    # no recuperado → aviso, no error.
+    (proto_dir / "imported").mkdir()
+    (proto_dir / "imported" / "wos.ris").write_text("TY  - JOUR\nER  -\n", "utf-8")
+    solo_manual = _run(_proto(databases=["Web of Science"]), proto_dir, find_spec=_sin_httpx)
+    assert solo_manual.ok
+    assert "no recuperados" in _messages(solo_manual.warnings)
+
+
+def test_preflight_sin_mailto_avisa(proto_dir: Path) -> None:
+    assert "--mailto" in _messages(_run(_proto(), proto_dir, context="run").warnings)
+    assert "--mailto" not in _messages(
+        _run(_proto(), proto_dir, context="run", mailto="x@y.z").warnings
+    )
+    assert "--mailto" not in _messages(_run(_proto(), proto_dir, context="validate").warnings)
+
+
+def test_preflight_resume_salta_bases_y_busqueda(proto_dir: Path) -> None:
+    # Al reanudar, la búsqueda está congelada en 01_search/: ni bases ni httpx.
+    report = _run(_proto(databases=["Scopuss"]), proto_dir, context="resume", find_spec=_sin_httpx)
+    assert report.ok
