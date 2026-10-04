@@ -20,6 +20,7 @@ import json
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 
 import yaml
@@ -64,7 +65,7 @@ from revisia.llm.registry import build_provider
 from revisia.meta_analysis import MetaAnalysisResult, meta_analyze
 from revisia.metrics import ScreeningMetrics, compute_screening_metrics
 from revisia.orchestration.hitl import DecisionFileError, GateResult, review_gate
-from revisia.orchestration.journal import JournalError
+from revisia.orchestration.journal import JournalError, StageJournal, journaled
 from revisia.orchestration.run_context import (
     LegacyRunError,
     RunContext,
@@ -320,13 +321,20 @@ def _load_gold(run: _Run, gold_labels: dict[str, bool] | None) -> dict[str, bool
     return gold
 
 
+def _member_role(i: int) -> str:
+    """Rol de la llamada ``i`` del ensemble de T/A en ``llm_calls.jsonl``."""
+    return f"member:{i}"
+
+
 def _screen_ta(
     run: _Run, deduped: list[SearchRecord], gold: dict[str, bool]
 ) -> list[ScreeningDecision]:
     """Cribado T/A (A1): ensemble multi-modelo con voto sesgado a recall.
 
-    Deja las métricas frente al gold (Recall/Lost-Evidence, MCC, WMCC, kappa)
-    en ``run.metrics``.
+    Cada registro pasa por el diario de T/A (``03_screening/journal.jsonl``): al
+    reanudar, un registro ya cribado no se vuelve a llamar (A9). Deja las
+    métricas frente al gold (Recall/Lost-Evidence, MCC, WMCC, kappa) en
+    ``run.metrics``.
     """
     members = [
         screening_agent.ScreenerMember(
@@ -337,20 +345,33 @@ def _screen_ta(
         )
         for cfg in run.protocol.screeners_for("screening_ta")
     ]
+    miembros = [[m.model_name, m.temperature, m.seed] for m in members]
+    journal = StageJournal(run.ctx, "screening_ta")
     decisions = []
     for record in deduped:
-        decision, metas = screening_agent.screen_record(
-            members,
-            question=run.question,
-            criteria=run.criteria,
-            record=record,
+        decision = journaled(
+            journal,
+            record_id=record.record_id,
+            inputs={
+                "title": record.title,
+                "abstract": record.abstract,
+                "question": run.question,
+                "criteria": run.criteria,
+                "miembros": miembros,
+            },
+            model=ScreeningDecision,
+            compute=partial(
+                screening_agent.screen_record,
+                members,
+                question=run.question,
+                criteria=run.criteria,
+                record=record,
+            ),
+            run_ctx=run.ctx,
+            role_of=_member_role,
         )
         decision.final_label = decision.human_label or decision.ensemble_label
         decisions.append(decision)
-        for i, meta in enumerate(metas):
-            run.ctx.record_meta(
-                meta, stage="screening_ta", record_id=record.record_id, role=f"member:{i}"
-            )
     run.ctx.write_json("03_screening/decisions.json", [d.model_dump() for d in decisions])
 
     if gold:

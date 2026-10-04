@@ -16,6 +16,7 @@ from revisia.orchestration.flow import resume_review
 from revisia.orchestration.pipeline import run_pipeline
 from revisia.orchestration.run_context import RunContext, RunInterrupted
 from revisia.orchestration.snapshot import read_run_info
+from revisia.schemas.artifacts import JournalEntry
 from revisia.schemas.records import SearchRecord
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "demo-mini-review"
@@ -113,3 +114,39 @@ def test_agent_driver_reanuda_con_run_dir(tmp_path: Path) -> None:
         None, callback, run_dir=pausa.run_dir, auto_approve=True, fetch_fn=fetch_disponible
     )
     assert (completa.status, completa.run_dir) == ("completed", pausa.run_dir)
+
+
+def _diario(ctx: RunContext, relpath: str) -> list[JournalEntry]:
+    path = ctx.run_dir / relpath
+    if not path.exists():
+        return []
+    return [JournalEntry.model_validate_json(x) for x in path.read_text("utf-8").splitlines()]
+
+
+def test_429_a_mitad_del_cribado_conserva_diario_y_reanuda(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A9: un 429 en cualquier registro perdía la etapa entera. Dos miembros por
+    # registro: la llamada 3 es la del primer miembro sobre rec-2.
+    proveedor = ScriptedProvider(fail_at=3)
+    monkeypatch.setattr(pipeline_mod, "build_provider", lambda _cfg: proveedor)
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+
+    with pytest.raises(RunInterrupted):
+        run_pipeline(protocol, EXAMPLE, ctx, search_fn=_busqueda)
+    assert [e.record_id for e in _diario(ctx, "03_screening/journal.jsonl")] == ["rec-1"]
+    assert len(ctx.llm_calls_path.read_text("utf-8").splitlines()) == 2
+
+    result = resume_review(ctx.run_dir)
+
+    assert (result.status, result.stage) == ("paused", "screening_ta")
+    # Cada registro se cribó una vez: rec-1 sale del diario; rec-2, al reanudar.
+    assert sum("LLM screening" in p for p in proveedor.prompts) == 2
+    assert sum("Active learning" in p for p in proveedor.prompts) == 3  # 1 fallida + 2
+    entradas = _diario(ctx, "03_screening/journal.jsonl")
+    assert [e.record_id for e in entradas] == ["rec-1", "rec-2"]
+    assert [len(e.metas) for e in entradas] == [2, 2]
+    assert len(ctx.llm_calls_path.read_text("utf-8").splitlines()) == 4
+    info = read_run_info(ctx.run_dir)
+    assert (info.status, len(info.interruptions), len(info.resumes)) == ("paused", 1, 1)
