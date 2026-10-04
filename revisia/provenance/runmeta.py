@@ -14,6 +14,7 @@ decisión" (vía el ledger) pero no "a nivel token".
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
@@ -27,6 +28,29 @@ def sha256_text(text: str) -> str:
 def utc_now_iso() -> str:
     """Timestamp ISO-8601 en UTC del instante actual."""
     return datetime.now(UTC).isoformat()
+
+
+def canonical_json(value: object) -> str:
+    """Serialización JSON canónica: claves ordenadas, sin espacios, UTF-8 literal.
+
+    Es la base de todos los hashes de contenido de la Ola 1 (``request_sha256``,
+    ``decision_sha256``, ``input_sha256`` del diario): dos estructuras iguales
+    dan el mismo texto sin importar el orden de inserción de sus claves.
+    ``allow_nan=False`` rechaza ``NaN``/``Infinity``, que no son JSON y harían
+    el hash irreproducible fuera de Python (spec 2026-10-04 §4.1).
+
+    Raises:
+        ValueError: si ``value`` contiene ``NaN`` o infinitos.
+        TypeError: si ``value`` no es serializable a JSON.
+    """
+    return json.dumps(
+        value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+    )
+
+
+def canonical_sha256(value: object) -> str:
+    """SHA-256 hexadecimal de ``canonical_json(value)`` codificado en UTF-8."""
+    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
 class RunMeta(BaseModel):
