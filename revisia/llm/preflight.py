@@ -288,6 +288,7 @@ def check_databases(
     databases = list(protocol.databases)
     with_backend: list[str] = []
     manual: list[str] = []
+    valid_keys = ", ".join(sorted(set(search_backends.BACKENDS) | search_backends.MANUAL_ONLY))
     if not databases:
         issues.append(
             _warning(
@@ -303,7 +304,21 @@ def check_databases(
         if key in search_backends.BACKENDS:
             with_backend.append(db)
             string_file = base / "search_strings" / f"{key}.txt"
-            text = string_file.read_text(encoding="utf-8") if string_file.exists() else ""
+            try:
+                text = string_file.read_text(encoding="utf-8") if string_file.exists() else ""
+            except (OSError, UnicodeDecodeError) as exc:
+                # El pipeline lee este mismo fichero (orchestration/pipeline.py) y se
+                # caería: es un error, no un aviso, y el preflight lo reporta en vez de
+                # romperse con un traceback (auditoría 2026-09-03, M6; D10). Un fichero
+                # ilegible no es además "cadena vacía": no se duplica el aviso.
+                issues.append(
+                    _error(
+                        where,
+                        f"search_strings/{key}.txt no se puede leer como UTF-8 "
+                        f"({type(exc).__name__}: {exc}); guárdalo en UTF-8.",
+                    )
+                )
+                continue
             if not text.strip():
                 issues.append(
                     _warning(
@@ -320,14 +335,17 @@ def check_databases(
                 _error(
                     where,
                     f"base desconocida {db!r} (clave {key!r}): no tiene backend ni es de "
-                    "importación manual. Revisa la ortografía; si la consultas en su web y "
-                    "exportas a RIS/BibTeX, deja el fichero en imported/ y quítala de "
-                    "`databases` (o pide añadirla a MANUAL_ONLY).",
+                    f"importación manual. Corrige el nombre (claves válidas: {valid_keys}) o, "
+                    "si es una base sin API, importa sus resultados por RIS/BibTeX en "
+                    "imported/ y declárala en `databases` con el nombre de una base manual; "
+                    "quitarla de `databases` la borraría del informe PRISMA-S.",
                 )
             )
     imported = base / "imported"
+    # Solo ficheros: un directorio `x.ris` no es una importación y `import_directory`
+    # fallaría con él.
     has_imports = imported.is_dir() and any(
-        p.suffix.lower() in _IMPORT_SUFFIXES for p in imported.iterdir()
+        p.is_file() and p.suffix.lower() in _IMPORT_SUFFIXES for p in imported.iterdir()
     )
     if not has_imports:
         for db in manual:

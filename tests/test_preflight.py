@@ -296,3 +296,64 @@ def test_preflight_resume_salta_bases_y_busqueda(proto_dir: Path) -> None:
     # Al reanudar, la búsqueda está congelada en 01_search/: ni bases ni httpx.
     report = _run(_proto(databases=["Scopuss"]), proto_dir, context="resume", find_spec=_sin_httpx)
     assert report.ok
+
+
+# ── Corrección de revisión: cadenas ilegibles, imported/ y consejo de base ──
+
+
+def test_preflight_cadena_ilegible_se_reporta_sin_romper(proto_dir: Path) -> None:
+    # Un fichero guardado en cp1252 con acentos no es UTF-8: el pipeline lo leería
+    # con `read_text(encoding="utf-8")` y se caería (auditoría 2026-09-03, M6; D10).
+    # El preflight existe para reportarlo, no para romperse con él.
+    (proto_dir / "search_strings" / "openalex.txt").write_bytes("búsqueda".encode("cp1252"))
+    report = _run(_proto(databases=["OpenAlex"]), proto_dir)  # no debe lanzar
+    errores = _messages(report.errors)
+    assert "search_strings/openalex.txt" in errores
+    assert "no se puede leer como UTF-8" in errores
+    assert "UnicodeDecodeError" in errores
+    assert "guárdalo en UTF-8" in errores
+    assert report.errors[0].where == "databases.OpenAlex"
+    # El caso ya es un error: no emite además el aviso de cadena vacía.
+    assert "sin cadena" not in _messages(report.warnings)
+
+
+def test_preflight_cadena_que_es_un_directorio_se_reporta(proto_dir: Path) -> None:
+    # `exists()` es verdadero para un directorio; leerlo lanza OSError (IsADirectoryError
+    # en POSIX, PermissionError en Windows), no UnicodeDecodeError.
+    (proto_dir / "search_strings" / "openalex.txt").unlink()
+    (proto_dir / "search_strings" / "openalex.txt").mkdir()
+    report = _run(_proto(databases=["OpenAlex"]), proto_dir)
+    assert "search_strings/openalex.txt no se puede leer" in _messages(report.errors)
+    assert "sin cadena" not in _messages(report.warnings)
+
+
+def test_preflight_imported_solo_cuenta_ficheros(proto_dir: Path) -> None:
+    # Un directorio llamado `x.ris` no es una importación: `import_directory` fallaría.
+    (proto_dir / "imported" / "x.ris").mkdir(parents=True)
+    avisos = _messages(_run(_proto(databases=["OpenAlex", "Scopus"]), proto_dir).warnings)
+    assert "no hay ficheros .ris/.bib en imported/" in avisos
+    # Con un fichero real junto al directorio, el aviso desaparece.
+    (proto_dir / "imported" / "scopus.ris").write_text("TY  - JOUR\nER  -\n", "utf-8")
+    avisos = _messages(_run(_proto(databases=["OpenAlex", "Scopus"]), proto_dir).warnings)
+    assert "imported/" not in avisos
+
+
+def test_preflight_databases_vacio_sin_httpx_es_error(proto_dir: Path) -> None:
+    # `databases: []` busca en OpenAlex (pipeline: `protocol.databases or ["openalex"]`),
+    # que es un backend con httpx: error de httpx además del aviso de lista vacía.
+    report = _run(_proto(databases=[]), proto_dir, find_spec=_sin_httpx)
+    errores = _messages(report.errors)
+    assert "uv sync --extra search" in errores
+    assert "OpenAlex" in errores
+    assert "`databases` está vacío" in _messages(report.warnings)
+
+
+def test_preflight_base_desconocida_aconseja_corregir_o_importar(proto_dir: Path) -> None:
+    # Quitarla de `databases` la borraría del informe PRISMA-S: el consejo es corregir
+    # el nombre (con las claves válidas a la vista) o declararla como base manual.
+    report = _run(_proto(databases=["OpenAlex", "Scopuss"]), proto_dir)
+    mensaje = next(i.message for i in report.errors if "Scopuss" in i.message)
+    assert "claves válidas" in mensaje
+    assert "openalex" in mensaje and "scopus" in mensaje and "cinahl" in mensaje
+    assert "RIS/BibTeX" in mensaje and "imported/" in mensaje
+    assert "quítala" not in mensaje
