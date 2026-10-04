@@ -95,6 +95,7 @@ from revisia.schemas.artifacts import (
     RetrievalOutcome,
     RunInterruption,
     RunStatus,
+    SearchLog,
 )
 from revisia.schemas.effects import EffectInput
 from revisia.schemas.extraction import ExtractionRecord
@@ -982,6 +983,9 @@ def _write_deliverables(
 ) -> Path:
     """Escribe el entregable completo (``deliverable/``) y devuelve su carpeta."""
     protocol = run.protocol
+    search_log = SearchLog.model_validate_json(
+        (run.ctx.run_dir / "01_search" / "log.json").read_text(encoding="utf-8")
+    )
     deliverable = run.ctx.deliverable_dir()
     (deliverable / "documento.md").write_text(
         f"# {protocol.title}\n\n## Síntesis narrativa (borrador)\n\n{narrative}\n",
@@ -1011,6 +1015,7 @@ def _write_deliverables(
             quantitative=meta_result is not None,
             exclusions=exclusion_breakdown,
             extraction_agreement=extraction_agreement,
+            search_log=search_log,
         ),
         encoding="utf-8",
     )
@@ -1027,6 +1032,7 @@ def _write_deliverables(
             databases=list(protocol.databases),
             search_window=protocol.search_window,
             counts=counts,
+            search_log=search_log,
         ),
         encoding="utf-8",
     )
@@ -1036,6 +1042,7 @@ def _write_deliverables(
             databases=list(protocol.databases),
             search_window=protocol.search_window,
             registration=protocol.registration,
+            search_log=search_log,
         ),
         encoding="utf-8",
     )

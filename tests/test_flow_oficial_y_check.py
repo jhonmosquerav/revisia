@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from revisia.check import AdherenceReport, ItemAdherence, render_adherence_md
+from revisia.config import ReviewProtocol
 from revisia.exports import (
     PrismaCounts,
     render_flow_diagram,
     render_flow_markdown,
     render_flow_updated,
+    render_methods,
+    render_prisma_abstracts_checklist,
     render_prisma_s_checklist,
 )
+from revisia.schemas.artifacts import SearchLog, SearchLogEntry
 
 _COUNTS = PrismaCounts(
     identified=120,
@@ -163,3 +167,68 @@ def test_cli_check_con_fake(tmp_path, capsys) -> None:
     assert "Pre-chequeo de adherencia PRISMA 2020" in content
     printed = capsys.readouterr().out
     assert "no sustituye la revisión editorial humana" in printed
+
+
+def test_prisma_s_desde_el_log_de_busqueda() -> None:
+    # M12: los ítems 8 y 13 decían lo declarado, no lo ejecutado.
+    hora = "2026-10-04T10:00:00+00:00"
+    log = SearchLog(
+        started_utc=hora,
+        finished_utc=hora,
+        max_results=50,
+        mailto_set=False,
+        entries=[
+            SearchLogEntry(
+                database="OpenAlex",
+                db_key="openalex",
+                kind="database",
+                declared=True,
+                status="ok",
+                query="cadena openalex",
+                query_origin="file",
+                query_file="00_protocol/search_strings/openalex.txt",
+                started_utc=hora,
+            ),
+            SearchLogEntry(
+                database="Europe PMC",
+                db_key="europepmc",
+                kind="database",
+                declared=True,
+                status="ok",
+                query="la pregunta",
+                query_origin="question_fallback",
+                started_utc=hora,
+            ),
+            SearchLogEntry(
+                database="Scopus",
+                db_key="scopus",
+                kind="database",
+                declared=True,
+                status="manual_only",
+            ),
+        ],
+    )
+    ventana = {"from": "2015-01-01", "to": "2026-12-31", "executed": "2026-06-26"}
+    markdown = render_prisma_s_checklist(
+        databases=["OpenAlex", "Europe PMC", "Scopus"], search_window=ventana, search_log=log
+    )
+    assert markdown.count("- [ ]") == 16
+    item_8 = next(x for x in markdown.splitlines() if x.startswith("- [ ] 8."))
+    assert "OpenAlex: «cadena openalex» (00_protocol/search_strings/openalex.txt)" in item_8
+    assert "Europe PMC: ⚠ sin cadena propia, se usó la pregunta «la pregunta»" in item_8
+    assert "Scopus: importación manual" in item_8
+    item_13 = next(x for x in markdown.splitlines() if x.startswith("- [ ] 13."))
+    assert "fecha del motor): 2026-10-04" in item_13
+    assert "Difiere de search_window.executed (2026-06-26)" in item_13
+
+    resumenes = render_prisma_abstracts_checklist(
+        databases=["OpenAlex"], search_window=ventana, search_log=log
+    )
+    assert "última búsqueda: 2026-10-04 (registrada por el motor)" in resumenes
+    protocolo = ReviewProtocol.model_validate(
+        {"slug": "d", "title": "D", "question": {"text": "¿X?", "framework": "PEO"}}
+    )
+    metodos = render_methods(protocol=protocolo, counts=_COUNTS, search_log=log)
+    assert "fecha registrada por el motor): 2026-10-04" in metodos
+    assert "00_protocol/search_strings/" in metodos
+    assert "Sin cadena propia en Europe PMC" in metodos

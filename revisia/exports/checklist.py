@@ -18,6 +18,7 @@ from revisia.provenance.runmeta import RunMeta
 if TYPE_CHECKING:
     from revisia.exclusions import ExclusionBreakdown
     from revisia.metrics import ScreeningMetrics
+    from revisia.schemas.artifacts import SearchLog
 
 # (sección, número, título corto). Numeración principal PRISMA 2020 (1–27).
 _PRISMA_2020_ITEMS: list[tuple[str, int, str]] = [
@@ -105,17 +106,68 @@ _PRISMA_S_ITEMS: list[tuple[int, str, str]] = [
 ]
 
 
+def engine_search_date(search_log: SearchLog) -> str:
+    """Fecha (UTC, ``AAAA-MM-DD``) en que el motor ejecutó la búsqueda.
+
+    La más temprana de las entradas del log; si ninguna tiene hora, la de
+    inicio del log. Es la fecha que se reporta, no la tecleada en
+    ``search_window.executed`` (PRISMA-S 13).
+    """
+    starts = [e.started_utc for e in search_log.entries if e.started_utc]
+    return min(starts or [search_log.started_utc])[:10]
+
+
+def _strings_evidence(search_log: SearchLog) -> str:
+    """PRISMA-S 8: la cadena efectiva de cada base, tal como se ejecutó."""
+    parts: list[str] = []
+    for entry in search_log.entries:
+        if entry.kind == "injected":
+            parts.append("búsqueda inyectada (search_fn): sin cadena por base")
+        elif entry.kind != "database":
+            continue
+        elif entry.status == "unknown":
+            parts.append(f"{entry.database}: base desconocida, sin búsqueda")
+        elif entry.query_origin == "file":
+            parts.append(f"{entry.database}: «{entry.query}» ({entry.query_file})")
+        elif entry.query_origin == "question_fallback":
+            parts.append(
+                f"{entry.database}: ⚠ sin cadena propia, se usó la pregunta «{entry.query}»"
+            )
+        else:
+            parts.append(f"{entry.database}: importación manual (imported/)")
+    return "Cadenas ejecutadas (01_search/log.json) — " + " · ".join(parts) + "."
+
+
+def _dates_evidence(search_log: SearchLog, search_window: dict[str, str] | None) -> str:
+    """PRISMA-S 13: fecha de ejecución registrada por el motor, por base."""
+    dated = [f"{e.database} {e.started_utc[:10]}" for e in search_log.entries if e.started_utc]
+    text = f"Búsqueda ejecutada (fecha del motor): {engine_search_date(search_log)}"
+    if dated:
+        text += f" ({' · '.join(dated)})"
+    declared = (search_window or {}).get("executed")
+    if declared and declared != engine_search_date(search_log):
+        text += (
+            f". ⚠ Difiere de search_window.executed ({declared}): reporta la fecha del "
+            "motor o explica la diferencia"
+        )
+    return text + "."
+
+
 def render_prisma_s_checklist(
     *,
     databases: list[str] | None = None,
     search_window: dict[str, str] | None = None,
     counts=None,
+    search_log: SearchLog | None = None,
 ) -> str:
     """Renderiza el checklist PRISMA-S (16 ítems) pre-rellenando lo que el motor sabe.
 
     La búsqueda es la etapa más automatizada del pipeline, así que la mayor
     parte de la evidencia sale sola: bases, cadenas versionadas, ventana,
-    fechas, totales por base y método de deduplicación.
+    fechas, totales por base y método de deduplicación. Con ``search_log``
+    (``01_search/log.json``, Ola 1) los ítems 8 y 13 salen de lo que el motor
+    ejecutó de verdad: la cadena de cada base (señalando dónde se usó la
+    pregunta) y la fecha registrada, no la tecleada (auditoría 2026-09-03, M12).
     """
     auto: dict[int, str] = {}
     if databases:
@@ -138,6 +190,9 @@ def render_prisma_s_checklist(
             f"Deduplicación determinista del motor (DOI/título normalizado): "
             f"{counts.duplicates_removed} duplicados eliminados."
         )
+    if search_log is not None:
+        auto[8] = _strings_evidence(search_log)
+        auto[13] = _dates_evidence(search_log, search_window)
     lines = [
         "# Checklist PRISMA-S · reporte de la búsqueda (16 ítems)",
         "",
@@ -179,16 +234,20 @@ def render_prisma_abstracts_checklist(
     databases: list[str] | None = None,
     search_window: dict[str, str] | None = None,
     registration: dict[str, str] | None = None,
+    search_log: SearchLog | None = None,
 ) -> str:
     """Renderiza el checklist PRISMA 2020 para resúmenes (12 ítems).
 
     Como el checklist principal, se emite de andamiaje: pre-rellena la
     evidencia que el pipeline conoce (fuentes, ventana, conteos, registro) y
-    deja el juicio editorial al humano.
+    deja el juicio editorial al humano. Con ``search_log``, la fecha de la
+    búsqueda (ítem 4) es la que registró el motor.
     """
     auto: dict[int, str] = {}
     if databases:
         executed = (search_window or {}).get("executed") or "(sin fecha ejecutada)"
+        if search_log is not None:
+            executed = f"{engine_search_date(search_log)} (registrada por el motor)"
         auto[4] = f"Bases: {', '.join(databases)} · última búsqueda: {executed}."
     if counts is not None:
         auto[7] = f"{counts.included} estudios incluidos (ver prisma_flow.md)."
