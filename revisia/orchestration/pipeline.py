@@ -82,7 +82,7 @@ from revisia.orchestration.snapshot import (
     read_run_info,
     write_run_info,
 )
-from revisia.provenance.runmeta import sha256_text, utc_now_iso
+from revisia.provenance.runmeta import RunMeta, sha256_text, utc_now_iso
 from revisia.rag.embed import Embedder, HashEmbedder
 from revisia.schemas.artifacts import (
     GATED_STAGES,
@@ -418,6 +418,92 @@ def _screen_ta(
     return decisions
 
 
+# Claves de `SearchRecord.extra` que usa la recuperación de texto completo
+# (`agents/fulltext.py`): entran en el `input_sha256` de su diario.
+_RETRIEVAL_EXTRA: tuple[str, ...] = ("fulltext_url", "oa_url", "pmcid", "pmid")
+
+
+def _fetch_one(
+    run: _Run, fetch: FetchFn, record: SearchRecord
+) -> tuple[RetrievalOutcome, list[RunMeta]]:
+    """Recupera un texto completo y, si lo hay, lo guarda en la caché de la corrida.
+
+    El fichero es ``04_fulltext/texts/<sha256(id)[:16]>.txt`` (ningún
+    ``record_id`` como nombre de fichero, spec §4.1), en bytes UTF-8 para que su
+    hash no dependa del fin de línea del sistema. Sin LLM: ninguna llamada.
+    """
+    ft = fetch(record)
+    if not ft.available:
+        # Un fetch_fn inyectado puede no dar motivo: el genérico es no_disponible.
+        outcome = RetrievalOutcome(
+            available=False,
+            source_url=ft.source_url,
+            reason=ft.reason or "no_disponible",
+            detail=ft.detail,
+        )
+        return outcome, []
+    text_file = f"04_fulltext/texts/{sha256_text(record.record_id)[:16]}.txt"
+    path = run.ctx.run_dir / text_file
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(ft.text.encode("utf-8"))
+    outcome = RetrievalOutcome(
+        available=True,
+        source_url=ft.source_url,
+        n_chars=len(ft.text),
+        text_sha256=sha256_text(ft.text),
+        text_file=text_file,
+    )
+    return outcome, []
+
+
+def _cached_text(run: _Run, outcome: RetrievalOutcome) -> str:
+    """Texto completo de la caché, verificado contra el hash de su diario."""
+    text = (run.ctx.run_dir / outcome.text_file).read_bytes().decode("utf-8")
+    if sha256_text(text) != outcome.text_sha256:
+        raise JournalError(
+            f"{outcome.text_file}: el texto en caché no coincide con el hash de su diario; "
+            "la corrida ya no es fiable."
+        )
+    return text
+
+
+def _retrieve(
+    run: _Run, passed_ta: list[SearchRecord], fetch_fn: FetchFn | None
+) -> tuple[dict[str, RetrievalOutcome], dict[str, str]]:
+    """Recuperación de texto completo con diario (``04_fulltext/retrieval.jsonl``).
+
+    Al reanudar no se vuelve a descargar nada: el resultado sale del diario y el
+    texto, de la caché. Escribe ``04_fulltext/retrieval.json`` en el orden de
+    ``passed_ta``.
+    """
+    fetch = fetch_fn or (lambda rec: fulltext_agent.fetch_fulltext(rec, mailto=run.mailto))
+    journal = StageJournal(run.ctx, "fulltext_retrieval")
+    outcomes: dict[str, RetrievalOutcome] = {}
+    texts: dict[str, str] = {}
+    for record in passed_ta:
+        outcome = journaled(
+            journal,
+            record_id=record.record_id,
+            inputs={
+                "record_id": record.record_id,
+                "doi": record.doi,
+                "extra": {k: record.extra[k] for k in _RETRIEVAL_EXTRA if k in record.extra},
+                "mailto_set": bool(run.mailto),
+            },
+            model=RetrievalOutcome,
+            compute=partial(_fetch_one, run, fetch, record),
+            run_ctx=run.ctx,
+        )
+        outcomes[record.record_id] = outcome
+        if outcome.available:
+            texts[record.record_id] = _cached_text(run, outcome)
+    run.ctx.write_json(
+        "04_fulltext/retrieval.json",
+        [{"record_id": rid, **o.model_dump(mode="json")} for rid, o in outcomes.items()],
+    )
+    return outcomes, texts
+
+
 def _fulltext(run: _Run, passed_ta: list[SearchRecord], fetch_fn: FetchFn | None) -> _FullTextStage:
     """Texto completo + cribado a texto completo (A0).
 
@@ -426,24 +512,13 @@ def _fulltext(run: _Run, passed_ta: list[SearchRecord], fetch_fn: FetchFn | None
     como evaluado). Queda como "no recuperado", con su motivo en
     04_fulltext/retrieval.json, y no llega a extracción.
     """
-    fetch = fetch_fn or (lambda rec: fulltext_agent.fetch_fulltext(rec, mailto=run.mailto))
+    outcomes, fulltexts = _retrieve(run, passed_ta, fetch_fn)
     ft_cfg = run.protocol.provider_for("screening_ft")
     ft_provider = build_provider(ft_cfg)
     ft_model = f"{ft_cfg.provider}:{ft_cfg.model}"
-    fulltexts: dict[str, str] = {}
     ft_decisions: list[ScreeningDecision] = []
-    retrieval: list[dict] = []
     for record in passed_ta:
-        ft = fetch(record)
-        if not ft.available:
-            # Un fetch_fn inyectado puede no dar motivo: el genérico es no_disponible.
-            outcome = RetrievalOutcome(
-                available=False,
-                source_url=ft.source_url,
-                reason=ft.reason or "no_disponible",
-                detail=ft.detail,
-            )
-            retrieval.append({"record_id": record.record_id, **outcome.model_dump()})
+        if not outcomes[record.record_id].available:
             ft_decisions.append(
                 ScreeningDecision(
                     record_id=record.record_id,
@@ -454,21 +529,13 @@ def _fulltext(run: _Run, passed_ta: list[SearchRecord], fetch_fn: FetchFn | None
                 )
             )
             continue
-        outcome = RetrievalOutcome(
-            available=True,
-            source_url=ft.source_url,
-            n_chars=len(ft.text),
-            text_sha256=sha256_text(ft.text),
-        )
-        retrieval.append({"record_id": record.record_id, **outcome.model_dump()})
-        fulltexts[record.record_id] = ft.text
         decision, meta = screening_ft_agent.screen_fulltext(
             ft_provider,
             ft_model,
             question=run.question,
             criteria=run.criteria,
             record=record,
-            text=ft.text,
+            text=fulltexts[record.record_id],
             temperature=ft_cfg.temperature,
             seed=ft_cfg.seed,
         )
@@ -476,7 +543,6 @@ def _fulltext(run: _Run, passed_ta: list[SearchRecord], fetch_fn: FetchFn | None
         decision.final_label = decision.human_label or decision.ensemble_label
         ft_decisions.append(decision)
         run.ctx.record_meta(meta, stage="screening_ft", record_id=record.record_id)
-    run.ctx.write_json("04_fulltext/retrieval.json", retrieval)
     run.ctx.write_json("04_fulltext/decisions.json", [d.model_dump() for d in ft_decisions])
     not_retrieved = sum(1 for d in ft_decisions if d.fulltext_status == "not_retrieved")
     return _FullTextStage(ft_decisions, fulltexts, not_retrieved)

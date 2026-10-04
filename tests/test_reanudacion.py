@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from fakes import ScriptedProvider, fetch_disponible
+from hitl_helpers import correr_hasta
 
 from revisia.agent_driver import run_review_with_agent
 from revisia.config import load_protocol
@@ -15,9 +16,11 @@ from revisia.llm.preflight import PreflightError
 from revisia.orchestration import pipeline as pipeline_mod
 from revisia.orchestration.flow import resume_review
 from revisia.orchestration.hitl import DecisionFileError
+from revisia.orchestration.journal import JournalError
 from revisia.orchestration.pipeline import run_pipeline
 from revisia.orchestration.run_context import RunContext, RunInterrupted
 from revisia.orchestration.snapshot import read_run_info
+from revisia.provenance.runmeta import sha256_text
 from revisia.schemas.artifacts import JournalEntry
 from revisia.schemas.records import SearchRecord
 
@@ -284,3 +287,33 @@ def test_decision_malformada_en_corrida_nueva_queda_interrumpida_sin_caida(
     info = read_run_info(ctx.run_dir)
     assert (info.status, info.stage) == ("interrupted", "screening_ta")
     assert info.interruptions == []
+
+
+def test_recuperacion_en_diario_y_texto_en_cache(tmp_path: Path) -> None:
+    descargas: list[str] = []
+
+    def fetch(record: SearchRecord):
+        descargas.append(record.record_id)
+        return fetch_disponible(record)
+
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    pausa = correr_hasta(
+        protocol, EXAMPLE, ctx, search_fn=_busqueda, fetch_fn=fetch, parar_en="screening_ft"
+    )
+    assert (pausa.status, pausa.stage) == ("paused", "screening_ft")
+    assert descargas == ["rec-1", "rec-2"]
+
+    # Reanudar no vuelve a descargar: el resultado sale del diario y el texto, de la caché.
+    otra = run_pipeline(protocol, EXAMPLE, RunContext.open(ctx.run_dir), fetch_fn=fetch)
+    assert (otra.status, otra.stage) == ("paused", "screening_ft")
+    assert descargas == ["rec-1", "rec-2"]
+    cache = ctx.run_dir / "04_fulltext" / "texts" / f"{sha256_text('rec-1')[:16]}.txt"
+    assert "LLM screening for systematic reviews" in cache.read_text(encoding="utf-8")
+    entradas = _diario(ctx, "04_fulltext/retrieval.jsonl")
+    assert [(e.record_id, e.metas) for e in entradas] == [("rec-1", []), ("rec-2", [])]
+
+    # Un texto en caché alterado no se usa en silencio.
+    cache.write_text("otro texto", encoding="utf-8")
+    with pytest.raises(JournalError, match="caché"):
+        run_pipeline(protocol, EXAMPLE, RunContext.open(ctx.run_dir), fetch_fn=fetch)
