@@ -75,8 +75,11 @@ def render_methods(
         f"Dos fases (título/abstract y texto completo) con ensemble multi-modelo "
         f"sesgado a recall y checkpoint humano (HITL). Acuerdo: {kappa}.",
         f"Flujo PRISMA: identificados={counts.identified} · duplicados={counts.duplicates_removed} "
-        f"· cribados={counts.screened} · texto completo={counts.fulltext_assessed} "
-        f"· incluidos={counts.included}.",
+        f"· cribados={counts.screened} · buscados a texto completo={counts.fulltext_sought} "
+        f"· no recuperados={counts.fulltext_not_retrieved} "
+        f"· evaluados para elegibilidad={counts.fulltext_assessed} "
+        f"· incluidos={counts.included}. Un informe sin texto completo no se evalúa "
+        "(PRISMA 2020: cuenta como no recuperado).",
     ]
 
     if exclusions is not None:

@@ -3,15 +3,24 @@
 from __future__ import annotations
 
 from revisia.config import ReviewProtocol
-from revisia.exclusions import compute_exclusion_breakdown
-from revisia.exports import PrismaCounts, render_methods
+from revisia.exclusions import (
+    RAZON_NO_ESPECIFICADA,
+    compute_exclusion_breakdown,
+    compute_ft_excluded,
+)
+from revisia.exports import (
+    PrismaCounts,
+    render_excluded_reports,
+    render_methods,
+    render_prisma_2020_checklist,
+)
 from revisia.extraction_agreement import (
     compute_extraction_agreement,
     select_double_extraction_subset,
 )
 from revisia.schemas.extraction import ExtractionField, ExtractionRecord
 from revisia.schemas.records import SearchRecord
-from revisia.schemas.screening import ScreeningDecision
+from revisia.schemas.screening import ScreeningDecision, ScreeningVote
 
 # ── Exclusiones humano vs IA ───────────────────────────────────────────
 
@@ -105,3 +114,114 @@ def test_render_methods_incluye_secciones_clave() -> None:
     assert "cuantitativa" in md  # quantitative=True
     assert "OSF: ABC" in md
     assert "executed: 2026-06-27" in md
+
+
+def test_methods_reporta_buscados_y_no_recuperados() -> None:
+    protocol = ReviewProtocol.model_validate(
+        {
+            "slug": "demo",
+            "title": "Demo",
+            "question": {"text": "¿X afecta Y?", "framework": "PEO", "components": {"P": "x"}},
+        }
+    )
+    counts = PrismaCounts(
+        identified=50,
+        screened=40,
+        fulltext_sought=12,
+        fulltext_not_retrieved=4,
+        fulltext_assessed=8,
+        included=5,
+    )
+    md = render_methods(protocol=protocol, counts=counts, models=["fake:fake-1"])
+    assert "buscados a texto completo=12" in md
+    assert "no recuperados=4" in md
+    assert "evaluados para elegibilidad=8" in md
+    assert "texto completo=8 " not in md  # la cifra ambigua de antes
+
+
+def test_excluidos_16b_con_razon_y_origen() -> None:
+    def ft(rid: str, ia: str, violados: list[str], humano=None, razon=None):
+        return ScreeningDecision(
+            record_id=rid,
+            phase="fulltext",
+            fulltext_status="retrieved",
+            votes=[
+                ScreeningVote(model="fake:x", label=ia, confidence=0.9, criteria_violated=violados)
+            ],
+            ensemble_label=ia,
+            human_label=humano,
+            human_reason=razon,
+            final_label=humano or ia,
+        )
+
+    records = [
+        SearchRecord(record_id="10.1/a", title="Estudio A | piloto", year=2021, doi="10.1/a"),
+        SearchRecord(record_id="b", title="Estudio B"),
+        SearchRecord(record_id="c", title="Estudio C"),
+        SearchRecord(record_id="d", title="Estudio D"),
+    ]
+    decisions = [
+        ft("10.1/a", "exclude", ["población incorrecta", "diseño"]),  # IA, primer criterio
+        ft("b", "exclude", []),  # IA sin criterio
+        ft("c", "include", [], humano="exclude", razon="sin grupo control"),  # humano
+        ft("d", "include", []),  # incluido: no aparece
+        ScreeningDecision(record_id="e", phase="fulltext", fulltext_status="not_retrieved"),
+    ]
+    reports = compute_ft_excluded(decisions, records)
+    assert [(r.record_id, r.reason, r.reason_source) for r in reports] == [
+        ("10.1/a", "población incorrecta", "ai"),
+        ("b", "criterio no especificado", "ai"),
+        ("c", "sin grupo control", "human"),
+    ]
+    assert (reports[0].year, reports[0].doi) == (2021, "10.1/a")
+
+    md = render_excluded_reports(reports)
+    assert "PRISMA 2020, ítem 16b" in md
+    assert "| Estudio A \\| piloto (`10.1/a`) | 2021 | 10.1/a | población incorrecta | IA |" in md
+    assert "| Estudio C (`c`) | — | — | sin grupo control | humano |" in md
+    assert "ningún informe excluido" in render_excluded_reports([])
+    assert "excluidos_texto_completo.md (16b)" in render_prisma_2020_checklist()
+
+
+def _ft_decision(
+    rid: str, violados: list[str], humano: str | None = None, razon: str | None = None
+) -> ScreeningDecision:
+    """Decisión a texto completo con un voto IA «exclude» y los criterios dados."""
+    return ScreeningDecision(
+        record_id=rid,
+        phase="fulltext",
+        fulltext_status="retrieved",
+        votes=[
+            ScreeningVote(
+                model="fake:x", label="exclude", confidence=0.9, criteria_violated=violados
+            )
+        ],
+        ensemble_label="exclude",
+        human_label=humano,
+        human_reason=razon,
+        final_label=humano or "exclude",
+    )
+
+
+def test_excluidos_16b_la_razon_ia_ignora_criterios_vacios() -> None:
+    """Un criterio ``""`` o ``"  "`` de un LLM no es razón: se salta y se recorta.
+
+    Sin el filtro, la celda de la tabla 16b quedaba vacía y ``ft_exclusion_reasons``
+    habría tenido la clave ``""`` (revisión de la pista B, Tarea 11).
+    """
+    decisions = [
+        _ft_decision("a", ["", "  ", " fuera de alcance "]),
+        _ft_decision("b", ["", " "]),
+    ]
+    reports = compute_ft_excluded(decisions, [])
+    assert [(r.record_id, r.reason, r.reason_source) for r in reports] == [
+        ("a", "fuera de alcance", "ai"),
+        ("b", RAZON_NO_ESPECIFICADA, "ai"),
+    ]
+
+
+def test_excluidos_16b_la_razon_humana_manda_sobre_la_ia() -> None:
+    """Si el humano excluye con razón, esa razón gana aunque la IA nombre otro criterio."""
+    decisions = [_ft_decision("a", ["y"], humano="exclude", razon="x")]
+    reports = compute_ft_excluded(decisions, [])
+    assert [(r.reason, r.reason_source) for r in reports] == [("x", "human")]

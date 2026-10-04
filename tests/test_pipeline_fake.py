@@ -10,10 +10,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import yaml
+from fakes import ScriptedProvider, fetch_disponible, fetch_no_disponible
 
 from revisia.audit import run_audit
 from revisia.config import load_protocol
+from revisia.orchestration import pipeline as pipeline_mod
 from revisia.orchestration.pipeline import run_pipeline
 from revisia.orchestration.run_context import RunContext
 from revisia.schemas.records import SearchRecord
@@ -55,12 +58,18 @@ def test_pipeline_end_to_end_offline(tmp_path) -> None:
         max_results=10,
         auto_approve=True,
         search_fn=_fake_search,
+        # PRISMA estricto (D2): sin texto completo nada llega a extracción, y los
+        # registros simulados no tienen texto en abierto.
+        fetch_fn=fetch_disponible,
     )
 
     assert result.status == "completed"
     assert result.counts.identified == 3
     assert result.counts.duplicates_removed == 1
     assert result.counts.screened == 2
+    assert result.counts.fulltext_sought == 2
+    assert result.counts.fulltext_not_retrieved == 0
+    assert result.counts.fulltext_assessed == 2
     assert result.counts.included == 2  # el proveedor fake incluye todo
     assert result.hallucination_flagged is False
 
@@ -70,6 +79,7 @@ def test_pipeline_end_to_end_offline(tmp_path) -> None:
     assert (deliverable / "prisma_flow.md").exists()
     assert (deliverable / "checklist_2020.md").exists()
     assert (deliverable / "checklist_traice.md").exists()
+    assert (deliverable / "excluidos_texto_completo.md").exists()
 
     # Manifiesto reproducible + ledger: 5 gates (screening_ta, screening_ft,
     # extraccion, rob, reporte).
@@ -162,3 +172,78 @@ def test_paused_run_final_gate_falla_en_auditoria(tmp_path) -> None:
     report = run_audit(ctx.run_dir)
     final_gate = next(c for c in report.checks if c.check_id == "final_gate")
     assert final_gate.status == "FAIL"
+
+
+def test_ft_no_recuperado_no_se_criba_con_ia(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # M11/D2: antes, un registro sin texto completo se cribaba con el abstract y
+    # contaba como evaluado.
+    proveedor = ScriptedProvider()
+    monkeypatch.setattr(pipeline_mod, "build_provider", lambda _cfg: proveedor)
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "TEST-NR")
+    result = run_pipeline(
+        protocol,
+        EXAMPLE,
+        ctx,
+        max_results=10,
+        auto_approve=True,
+        search_fn=_fake_search,
+        fetch_fn=fetch_no_disponible(["rec-2"]),
+    )
+
+    assert result.status == "completed"
+    c = result.counts
+    assert (c.screened, c.fulltext_sought, c.fulltext_not_retrieved) == (2, 2, 1)
+    assert (c.fulltext_assessed, c.included) == (1, 1)
+    # El proveedor de FT solo vio el registro recuperado.
+    prompts_ft = [p for p in proveedor.prompts if "TEXTO COMPLETO" in p]
+    assert len(prompts_ft) == 1
+    assert "Active learning with ASReview" not in prompts_ft[0]
+
+    run = ctx.run_dir
+    ft = json.loads((run / "04_fulltext" / "decisions.json").read_text(encoding="utf-8"))
+    no_recuperado = next(d for d in ft if d["record_id"] == "rec-2")
+    assert no_recuperado["fulltext_status"] == "not_retrieved"
+    assert no_recuperado["votes"] == []
+    assert no_recuperado["ensemble_label"] is None
+    assert no_recuperado["final_label"] is None
+    recuperacion = json.loads((run / "04_fulltext" / "retrieval.json").read_text(encoding="utf-8"))
+    assert {r["record_id"]: r["reason"] for r in recuperacion} == {
+        "rec-1": None,
+        "rec-2": "no_disponible",
+    }
+    # No entra en extracción ni en RoB.
+    extracciones = json.loads(
+        (run / "05_extraction" / "extractions.json").read_text(encoding="utf-8")
+    )
+    assert set(extracciones) == {"rec-1"}
+    flujo = (run / "deliverable" / "prisma_flow.md").read_text(encoding="utf-8")
+    assert "Informes no recuperados (n = 1)" in flujo
+
+
+def test_ft_exclusion_ia_llega_a_16b(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    proveedor = ScriptedProvider(criterio_exclusion="población incorrecta")
+    monkeypatch.setattr(pipeline_mod, "build_provider", lambda _cfg: proveedor)
+
+    def fetch(record: SearchRecord):
+        ft = fetch_disponible(record)
+        if record.record_id == "rec-2":
+            ft.text += " Este estudio es irrelevante para la pregunta."
+        return ft
+
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "TEST-16B")
+    result = run_pipeline(
+        protocol, EXAMPLE, ctx, auto_approve=True, search_fn=_fake_search, fetch_fn=fetch
+    )
+    c = result.counts
+    assert (c.excluded_ft, c.excluded_ft_ai, c.excluded_ft_human) == (1, 1, 0)
+    assert c.ft_exclusion_reasons == {"población incorrecta": 1}
+    excluidos = json.loads(
+        (ctx.run_dir / "04_fulltext" / "excluded.json").read_text(encoding="utf-8")
+    )
+    assert [(e["record_id"], e["reason_source"]) for e in excluidos] == [("rec-2", "ai")]
+    md = (ctx.run_dir / "deliverable" / "excluidos_texto_completo.md").read_text(encoding="utf-8")
+    assert "población incorrecta | IA |" in md
