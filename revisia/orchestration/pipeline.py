@@ -24,6 +24,7 @@ from pathlib import Path
 
 import yaml
 
+from revisia.agents import _http
 from revisia.agents import dedup as dedup_agent
 from revisia.agents import extraccion as extraccion_agent
 from revisia.agents import fulltext as fulltext_agent
@@ -58,20 +59,36 @@ from revisia.extraction_agreement import (
     compute_extraction_agreement,
     select_double_extraction_subset,
 )
+from revisia.llm.preflight import PreflightError, preflight
 from revisia.llm.registry import build_provider
 from revisia.meta_analysis import MetaAnalysisResult, meta_analyze
 from revisia.metrics import ScreeningMetrics, compute_screening_metrics
-from revisia.orchestration.hitl import GateResult, review_gate
-from revisia.orchestration.run_context import RunContext
+from revisia.orchestration.hitl import DecisionFileError, GateResult, review_gate
+from revisia.orchestration.journal import JournalError
+from revisia.orchestration.run_context import (
+    LegacyRunError,
+    RunContext,
+    RunDirExistsError,
+    RunInterrupted,
+)
 from revisia.orchestration.search_stage import multi_database_search, run_search
-from revisia.orchestration.snapshot import SEARCH_STRINGS_DIR, ensure_snapshot
-from revisia.provenance.runmeta import sha256_text
+from revisia.orchestration.snapshot import (
+    SEARCH_STRINGS_DIR,
+    SNAPSHOT_DIR,
+    ProtocolMismatchError,
+    ensure_snapshot,
+    read_run_info,
+    write_run_info,
+)
+from revisia.provenance.runmeta import sha256_text, utc_now_iso
 from revisia.rag.embed import Embedder, HashEmbedder
 from revisia.schemas.artifacts import (
     GATED_STAGES,
     DedupReport,
     ExcludedReport,
     RetrievalOutcome,
+    RunInterruption,
+    RunStatus,
 )
 from revisia.schemas.effects import EffectInput
 from revisia.schemas.extraction import ExtractionRecord
@@ -82,6 +99,18 @@ from revisia.schemas.verification import VerificationReport
 
 SearchFn = Callable[[str, int], list[SearchRecord]]
 FetchFn = Callable[[SearchRecord], fulltext_agent.FullText]
+
+# Errores de configuración o de entrada humana: se relanzan tal cual (rc 2 en el
+# CLI) y no cuentan como interrupción. Cualquier otro error a mitad de corrida
+# queda en run.json y se relanza como RunInterrupted (rc 3, D14).
+_CONFIG_ERRORS: tuple[type[BaseException], ...] = (
+    PreflightError,
+    ProtocolMismatchError,
+    JournalError,
+    DecisionFileError,
+    LegacyRunError,
+    RunDirExistsError,
+)
 
 
 @dataclass(slots=True)
@@ -180,9 +209,37 @@ class _Run:
     auto_approve: bool
     mailto: str | None
     metrics: ScreeningMetrics | None = None
+    # Etapa en curso (la que queda en run.json si la corrida se interrumpe).
+    stage: str | None = None
+
+    def finish(self, status: RunStatus, stage: str | None) -> None:
+        """Deja en ``run.json`` cómo termina esta invocación (spec §4.3)."""
+        info = read_run_info(self.ctx.run_dir)
+        if info is not None:
+            write_run_info(
+                self.ctx.run_dir, info.model_copy(update={"status": status, "stage": stage})
+            )
+
+    def interrupted(self, error: str) -> None:
+        """Registra una interrupción en ``run.json`` (estado ``interrupted``, D14)."""
+        info = read_run_info(self.ctx.run_dir)
+        if info is None:
+            return
+        interruption = RunInterruption(utc=utc_now_iso(), stage=self.stage, error=error)
+        write_run_info(
+            self.ctx.run_dir,
+            info.model_copy(
+                update={
+                    "interruptions": [*info.interruptions, interruption],
+                    "status": "interrupted",
+                    "stage": self.stage,
+                }
+            ),
+        )
 
     def gate(self, stage: str, payload: dict) -> GateResult:
         """Checkpoint humano de ``stage`` con la autonomía que fija el protocolo."""
+        self.stage = stage
         return review_gate(
             stage=stage,
             autonomy=self.protocol.autonomy_for(stage),
@@ -195,6 +252,7 @@ class _Run:
         """``None`` si el gate aprobó; si no, el resultado con el que se detiene."""
         if gate.status == "approved":
             return None
+        self.finish(gate.status, stage)
         return PipelineResult(
             gate.status, gate.message, metrics=self.metrics, run_dir=self.ctx.run_dir, stage=stage
         )
@@ -668,11 +726,29 @@ def run_pipeline(
     ``run.json``; una que se reanuda (``run.json`` ya existe) verifica su
     instantánea y toma ``max_results`` de ``run.json``. ``protocol_dir`` puede
     ser ``None`` al reanudar.
+
+    Antes de nada corre el preflight sin red (M6): con ``context="resume"`` si la
+    búsqueda ya está congelada (``01_search/log.json``) o la inyecta
+    ``search_fn`` (no hay bases que comprobar), y ``"run"`` si no.
+
+    Raises:
+        PreflightError, ProtocolMismatchError, JournalError, DecisionFileError:
+            errores de configuración o de entrada humana (rc 2 en el CLI).
+        RunInterrupted: cualquier otro error a mitad de corrida; queda en
+            ``run.json`` (``status: interrupted``) y se reanuda (D14).
     """
+    frozen = (run_ctx.run_dir / "01_search" / "log.json").exists()
+    report = preflight(
+        protocol,
+        protocol_dir if protocol_dir is not None else run_ctx.run_dir / SNAPSHOT_DIR,
+        context="resume" if frozen or search_fn is not None else "run",
+        mailto=mailto,
+    )
+    if report.errors:
+        raise PreflightError(report)
     snapshot_dir, run_info = ensure_snapshot(
         protocol_dir, run_ctx, max_results=max_results, mailto=mailto
     )
-    max_results = run_info.max_results
     ie = _load_yaml(snapshot_dir / "inclusion_exclusion.yml")
     form = _load_yaml(snapshot_dir / "extraction_form.yml")
     run = _Run(
@@ -686,9 +762,42 @@ def run_pipeline(
         auto_approve=auto_approve,
         mailto=mailto,
     )
+    try:
+        return _run_stages(
+            run,
+            max_results=run_info.max_results,
+            search_fn=search_fn,
+            fetch_fn=fetch_fn,
+            embedder=embedder,
+            gold_labels=gold_labels,
+        )
+    except _CONFIG_ERRORS:
+        raise
+    except KeyboardInterrupt:
+        run.interrupted("KeyboardInterrupt")
+        raise
+    except Exception as exc:
+        error = _http.redact_secrets(f"{type(exc).__name__}: {exc}")
+        run.interrupted(error)
+        raise RunInterrupted(run_ctx.run_dir, run.stage, error) from exc
 
+
+def _run_stages(
+    run: _Run,
+    *,
+    max_results: int,
+    search_fn: SearchFn | None,
+    fetch_fn: FetchFn | None,
+    embedder: Embedder | None,
+    gold_labels: dict[str, bool] | None,
+) -> PipelineResult:
+    """Encadena las etapas; ``run.stage`` dice cuál está en curso."""
+    protocol = run.protocol
+    run.stage = "busqueda"
     raw_records = _search(run, max_results=max_results, search_fn=search_fn)
+    run.stage = "dedup"
     deduped, discarded = _dedup(run, raw_records)
+    run.stage = "screening_ta"
     decisions = _screen_ta(run, deduped, _load_gold(run, gold_labels))
     passed = {d.record_id for d in decisions if d.final_label in {"include", "unclear"}}
     excluded_ta = sum(1 for d in decisions if d.final_label == "exclude")
@@ -702,6 +811,7 @@ def run_pipeline(
         return stop
 
     passed_ta = [r for r in deduped if r.record_id in passed]
+    run.stage = "screening_ft"
     ft = _fulltext(run, passed_ta, fetch_fn)
     # Hasta PR-D un `unclear` de FT sigue pasando (lo resolverá un humano, D1).
     included_ids = {d.record_id for d in ft.decisions if d.final_label in {"include", "unclear"}}
@@ -720,25 +830,29 @@ def run_pipeline(
     # Desglose de exclusiones humano vs IA (PRISMA-trAIce) sobre ambas fases; el
     # de solo T/A alimenta la nota ** del flow diagram oficial (trAIce R1).
     exclusion_breakdown = compute_exclusion_breakdown(decisions + ft.decisions)
-    run_ctx.write_json("03_screening/exclusions.json", exclusion_breakdown.model_dump())
+    run.ctx.write_json("03_screening/exclusions.json", exclusion_breakdown.model_dump())
     ta_breakdown = compute_exclusion_breakdown(decisions)
     # Informes excluidos en elegibilidad (16b) y sus razones (cajas "Reason 1..n"
     # del flow oficial): una sola lista para el diagrama, la tabla y el auditor.
     excluded_reports = compute_ft_excluded(ft.decisions, passed_ta)
-    run_ctx.write_json("04_fulltext/excluded.json", [r.model_dump() for r in excluded_reports])
+    run.ctx.write_json("04_fulltext/excluded.json", [r.model_dump() for r in excluded_reports])
     ft_exclusion_reasons = dict(Counter(r.reason for r in excluded_reports))
 
+    run.stage = "extraccion"
     extractions, extraction_agreement = _extract(run, included)
     extraction_gate = run.gate("extraccion", {"n_extraidos": len(extractions)})
     if (stop := run.stop(extraction_gate, "extraccion")) is not None:
         return stop
+    run.stage = "rob"
     assessments = _assess_rob(run, included, extractions, ft.texts)
     rob_gate = run.gate("rob", {"n_evaluados": len(assessments), "tool": protocol.rob_tool})
     if (stop := run.stop(rob_gate, "rob")) is not None:
         return stop
 
+    run.stage = "sintesis"
     meta_result, meta_display = _meta_analysis(run)
     narrative, verification = _synthesize_and_verify(run, included, extractions, ft.texts, embedder)
+    run.stage = "reporte"
     counts = _build_counts(
         raw_records=raw_records,
         deduped=deduped,
@@ -775,6 +889,14 @@ def run_pipeline(
             "deliverable": str(deliverable),
         },
     )
+    # Un reporte rechazado ya no se informa como "completed" (auditoría
+    # 2026-09-03, C1). El estado va a run.json antes del manifiesto, que lo copia.
+    status, message, stage = final_gate.status, final_gate.message, "reporte"
+    if final_gate.status == "approved":
+        status = "completed"
+        message = f"Revisión completada · {counts.included} estudios incluidos."
+        stage = None
+    run.finish(status, stage)
     manifest_extra: dict = {
         "verification": verification.model_dump(),
         "risk_of_bias": {k: v.model_dump() for k, v in assessments.items()},
@@ -786,20 +908,13 @@ def run_pipeline(
         manifest_extra["extraction_agreement"] = extraction_agreement.model_dump()
     if meta_result is not None:
         manifest_extra["meta_analysis"] = meta_result.model_dump()
-    run_ctx.write_manifest(
+    run.ctx.write_manifest(
         protocol_snapshot=protocol.model_dump(mode="json"),
         counts=counts.model_dump(),
         autonomy_effective={g: protocol.autonomy_for(g) for g in GATED_STAGES},
         final_gate={"forced_human": False, "reason": None},
         extra=manifest_extra,
     )
-    # Un reporte rechazado ya no se informa como "completed" (auditoría
-    # 2026-09-03, C1): el manifiesto queda escrito arriba como rastro.
-    status, message, stage = final_gate.status, final_gate.message, "reporte"
-    if final_gate.status == "approved":
-        status = "completed"
-        message = f"Revisión completada · {counts.included} estudios incluidos."
-        stage = None
     return PipelineResult(
         status=status,
         message=message,
@@ -808,6 +923,6 @@ def run_pipeline(
         narrative=narrative,
         hallucination_flagged=verification.hallucination_flagged,
         metrics=run.metrics,
-        run_dir=run_ctx.run_dir,
+        run_dir=run.ctx.run_dir,
         stage=stage,
     )
