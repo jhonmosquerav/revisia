@@ -41,6 +41,42 @@ REQUEST_FILE = "review_request.yml"
 TEMPLATE_FILE = "decision.template.yml"
 DECISION_FILE = "decision.yml"
 
+# Claves que review_gate pone él mismo en la solicitud (``request_sha256`` solo en el
+# fichero): un payload que las traiga las pisaría y cambiaría lo que se hashea.
+_CLAVES_COMUNES = ("schema_version", "stage", "autonomy", "request_sha256")
+
+# Saltos de línea de YAML 1.1 que PyYAML, con ``allow_unicode=True``, escribe CRUDOS en
+# estilo plano o con comillas simples. ``safe_load`` pliega el NEL (U+0085) a un
+# espacio: la cadena vuelve distinta y el hash ya no se recalcula desde el fichero
+# (spec 2026-10-04, relación 15). U+2028/U+2029 sobreviven en PyYAML pero YAML 1.2 no
+# los trata como saltos: se escapan para que ningún lector los lea de otra forma.
+_SALTOS_NO_FIABLES = frozenset("\x85\u2028\u2029")
+
+
+class _FielDumper(yaml.SafeDumper):
+    """``SafeDumper`` cuyo texto vuelve idéntico con ``yaml.safe_load``."""
+
+
+def _represent_str(dumper: yaml.SafeDumper, data: str) -> yaml.ScalarNode:
+    # Entre comillas dobles esos caracteres salen escapados (``\x85``, ``\u2028``) y el
+    # resto del texto (acentos, ñ…) sigue legible para el humano.
+    style = '"' if _SALTOS_NO_FIABLES.intersection(data) else None
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=style)
+
+
+_FielDumper.add_representer(str, _represent_str)
+
+
+def dump_yaml(data: dict) -> str:
+    """Vuelca ``data`` a YAML de forma que ``yaml.safe_load`` lo devuelva idéntico.
+
+    Es el volcado de todo YAML que el gate escribe para el humano y que se hashea
+    (``review_request.yml``): ``yaml.safe_dump`` no lo garantiza para cadenas con
+    U+0085, que son mojibake frecuente (un «…» de cp1252 leído como latin-1) y
+    llegarán en títulos y rationales (spec 2026-10-04, relación 15).
+    """
+    return yaml.dump(data, Dumper=_FielDumper, allow_unicode=True, sort_keys=False)
+
 
 @dataclass(slots=True)
 class GateResult:
@@ -85,7 +121,9 @@ def render_decision_template(*, stage: str, autonomy: str, request_sha256: str) 
     """``decision.template.yml``: la decisión a medio rellenar (D4).
 
     ``approved: null`` la hace inválida tal cual: aprobar tiene que ser un acto
-    deliberado. Las cadenas van entre comillas dobles (JSON es YAML válido).
+    deliberado. Las cadenas van entre comillas dobles (JSON es YAML válido) y no hay
+    texto libre: el hash es hexadecimal y ``stage``/``autonomy`` solo van en
+    comentarios, así que no necesita ``dump_yaml``.
     """
     lines = [
         f"# Decisión humana del gate '{stage}' (autonomía {autonomy}).",
@@ -138,6 +176,7 @@ def _register(
     autonomy: str,
     decision: HumanDecision,
     request_sha256: str,
+    decision_path: Path,
 ) -> None:
     """Registra la decisión en el ledger, una sola vez (idempotente al reanudar)."""
     decision_sha256 = canonical_sha256(decision.model_dump(mode="json"))
@@ -157,6 +196,15 @@ def _register(
         request_sha256=request_sha256,
         decision_sha256=decision_sha256,
     ):
+        if decision.actor == AUTO_APPROVE_ACTOR:
+            # La decisión es la sintética de --auto-approve: no hay decision.yml donde
+            # cambiar un `reason`; lo que falta es una decisión humana.
+            raise DecisionFileError(
+                f"{stage}: la aprobación de demostración (--auto-approve) ya se usó para esta "
+                "solicitud y después se registró otra decisión; el ledger no la repite. Para "
+                f"continuar, escribe una decisión humana en {decision_path} (parte de "
+                f"{TEMPLATE_FILE})."
+            )
         raise DecisionFileError(
             f"{stage}: esta misma decisión ya se registró antes y después se cambió; para "
             "volver a ella, cambia `reason` en decision.yml (el ledger no repite una "
@@ -193,7 +241,21 @@ def review_gate(
     A2/A3 no pausan (registran ``auto-proceed`` y continúan). A0/A1 requieren
     una decisión: ``decision.yml`` con el hash vigente, la ya registrada en el
     ledger para esa solicitud, o ``auto_approve``; si no hay ninguna, pausan.
+
+    Raises:
+        ValueError: si ``review_payload`` trae alguna clave común de la solicitud
+            (``schema_version``, ``stage``, ``autonomy``, ``request_sha256``): es un
+            error de programación, no se pisa en silencio.
+        DecisionFileError: si ``decision.yml`` es ilegible o inválido, o repite una
+            decisión que el ledger ya no admite repetir.
     """
+    pisadas = [clave for clave in _CLAVES_COMUNES if clave in review_payload]
+    if pisadas:
+        raise ValueError(
+            f"{stage}: review_payload no puede traer {', '.join(pisadas)}: son claves comunes "
+            "de la solicitud y pisarlas cambiaría en silencio lo que se hashea (error de "
+            "programación)."
+        )
     payload = {
         "schema_version": ARTIFACT_SCHEMA_VERSION,
         "stage": stage,
@@ -231,10 +293,7 @@ def review_gate(
     # A0/A1 → requiere humano.
     stage_dir = run_ctx.stage_dir(stage)
     run_ctx.write_text(
-        f"{stage}/{REQUEST_FILE}",
-        yaml.safe_dump(
-            {"request_sha256": request_sha256, **payload}, allow_unicode=True, sort_keys=False
-        ),
+        f"{stage}/{REQUEST_FILE}", dump_yaml({"request_sha256": request_sha256, **payload})
     )
     run_ctx.write_text(
         f"{stage}/{TEMPLATE_FILE}",
@@ -290,6 +349,7 @@ def review_gate(
         autonomy=autonomy,
         decision=decision,
         request_sha256=request_sha256,
+        decision_path=decision_path,
     )
     if decision.approved:
         return GateResult(
