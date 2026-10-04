@@ -638,27 +638,55 @@ def _fulltext(run: _Run, passed_ta: list[SearchRecord], fetch_fn: FetchFn | None
     return _FullTextStage(ft_decisions, fulltexts, not_retrieved)
 
 
+def _extraction_inputs(
+    run: _Run, record: SearchRecord, fulltexts: dict[str, str], cfg: ProviderConfig
+) -> dict:
+    """``inputs`` del diario de extracción (spec §7): registro, texto, formulario y proveedor."""
+    text = fulltexts.get(record.record_id)
+    return {
+        "record_id": record.record_id,
+        "text_sha256": sha256_text(text) if text is not None else None,
+        "form_fields": run.form_fields,
+        "proveedor": [f"{cfg.provider}:{cfg.model}", cfg.temperature, cfg.seed],
+    }
+
+
+def _extract_one(
+    run: _Run, provider: LLMProvider, cfg: ProviderConfig, record: SearchRecord
+) -> tuple[ExtractionRecord, list[RunMeta]]:
+    """Extracción de un estudio (``compute`` de su diario)."""
+    extraction, meta = extraccion_agent.extract_record(
+        provider,
+        record=record,
+        form_fields=run.form_fields,
+        temperature=cfg.temperature,
+        seed=cfg.seed,
+    )
+    return extraction, [meta]
+
+
 def _extract(
-    run: _Run, included: list[SearchRecord]
+    run: _Run, included: list[SearchRecord], fulltexts: dict[str, str]
 ) -> tuple[dict[str, ExtractionRecord], ExtractionAgreement | None]:
     """Extracción de datos (A0) y, si hay 2.º extractor, doble extracción (≥20 %).
 
     El 2.º extractor es el primero de ``ensemble_llm['extraccion']``; el acuerdo
-    entre extractores va a ``05_extraction/agreement.json`` (§6).
+    entre extractores va a ``05_extraction/agreement.json`` (§6). Cada extractor
+    tiene su diario (``05_extraction/journal.jsonl`` y ``journal_2.jsonl``).
     """
     extract_cfg = run.protocol.provider_for("extraccion")
     extract_provider = build_provider(extract_cfg)
+    journal = StageJournal(run.ctx, "extraccion")
     extractions: dict[str, ExtractionRecord] = {}
     for record in included:
-        extraction, meta = extraccion_agent.extract_record(
-            extract_provider,
-            record=record,
-            form_fields=run.form_fields,
-            temperature=extract_cfg.temperature,
-            seed=extract_cfg.seed,
+        extractions[record.record_id] = journaled(
+            journal,
+            record_id=record.record_id,
+            inputs=_extraction_inputs(run, record, fulltexts, extract_cfg),
+            model=ExtractionRecord,
+            compute=partial(_extract_one, run, extract_provider, extract_cfg, record),
+            run_ctx=run.ctx,
         )
-        extractions[record.record_id] = extraction
-        run.ctx.record_meta(meta, stage="extraccion", record_id=record.record_id)
     run.ctx.write_json(
         "05_extraction/extractions.json",
         {k: v.model_dump() for k, v in extractions.items()},
@@ -670,17 +698,17 @@ def _extract(
         subset = select_double_extraction_subset(included)
         second_cfg = second_extractors[0]
         second_provider = build_provider(second_cfg)
+        journal_2 = StageJournal(run.ctx, "extraccion_2")
         secondary: dict[str, ExtractionRecord] = {}
         for record in subset:
-            extraction2, meta2 = extraccion_agent.extract_record(
-                second_provider,
-                record=record,
-                form_fields=run.form_fields,
-                temperature=second_cfg.temperature,
-                seed=second_cfg.seed,
+            secondary[record.record_id] = journaled(
+                journal_2,
+                record_id=record.record_id,
+                inputs=_extraction_inputs(run, record, fulltexts, second_cfg),
+                model=ExtractionRecord,
+                compute=partial(_extract_one, run, second_provider, second_cfg, record),
+                run_ctx=run.ctx,
             )
-            secondary[record.record_id] = extraction2
-            run.ctx.record_meta(meta2, stage="extraccion_2", record_id=record.record_id)
         primary_subset = {r.record_id: extractions[r.record_id] for r in subset}
         extraction_agreement = compute_extraction_agreement(primary_subset, secondary)
         run.ctx.write_json("05_extraction/agreement.json", extraction_agreement.model_dump())
@@ -1060,7 +1088,7 @@ def _run_stages(
     ft_exclusion_reasons = dict(Counter(r.reason for r in excluded_reports))
 
     run.stage = "extraccion"
-    extractions, extraction_agreement = _extract(run, included)
+    extractions, extraction_agreement = _extract(run, included, ft.texts)
     extraction_gate = run.gate("extraccion", {"n_extraidos": len(extractions)})
     if (stop := run.stop(extraction_gate, "extraccion")) is not None:
         return stop

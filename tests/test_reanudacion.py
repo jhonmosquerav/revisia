@@ -545,3 +545,30 @@ def test_cribado_ft_en_diario_no_se_repite(tmp_path: Path, monkeypatch: pytest.M
     assert [(e.record_id, len(e.metas)) for e in entradas] == [("rec-1", 1), ("rec-2", 1)]
     assert all(e.output["fulltext_status"] == "retrieved" for e in entradas)
     assert all(e.output["final_label"] is None for e in entradas)  # sin campos humanos
+
+
+def test_extraccion_y_segundo_extractor_en_diario(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proveedor = ScriptedProvider()
+    monkeypatch.setattr(pipeline_mod, "build_provider", lambda _cfg: proveedor)
+    protocol = load_protocol(EXAMPLE)  # el demo declara un 2.º extractor
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    correr_hasta(
+        protocol,
+        EXAMPLE,
+        ctx,
+        search_fn=_busqueda,
+        fetch_fn=fetch_disponible,
+        parar_en="extraccion",
+    )
+    assert _llamadas(proveedor, "extractor de datos") == 3  # 2 + 1 de la doble extracción
+
+    run_pipeline(protocol, EXAMPLE, RunContext.open(ctx.run_dir), fetch_fn=fetch_disponible)
+
+    assert _llamadas(proveedor, "extractor de datos") == 3
+    primero = _diario(ctx, "05_extraction/journal.jsonl")
+    segundo = _diario(ctx, "05_extraction/journal_2.jsonl")
+    assert [e.record_id for e in primero] == ["rec-1", "rec-2"]
+    assert len(segundo) == 1
+    assert {(m.stage, len(e.metas)) for e in segundo for m in e.metas} == {("extraccion_2", 1)}
