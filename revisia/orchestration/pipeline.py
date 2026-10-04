@@ -16,6 +16,7 @@ de checkpoint casi iguales de antes. Es la base de la reanudación por diario.
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -66,7 +67,12 @@ from revisia.orchestration.search_stage import multi_database_search, run_search
 from revisia.orchestration.snapshot import SEARCH_STRINGS_DIR, ensure_snapshot
 from revisia.provenance.runmeta import sha256_text
 from revisia.rag.embed import Embedder, HashEmbedder
-from revisia.schemas.artifacts import GATED_STAGES, ExcludedReport, RetrievalOutcome
+from revisia.schemas.artifacts import (
+    GATED_STAGES,
+    DedupReport,
+    ExcludedReport,
+    RetrievalOutcome,
+)
 from revisia.schemas.effects import EffectInput
 from revisia.schemas.extraction import ExtractionRecord
 from revisia.schemas.records import SearchRecord
@@ -224,8 +230,22 @@ def _search(run: _Run, *, max_results: int, search_fn: SearchFn | None) -> list[
 
 
 def _dedup(run: _Run, raw_records: list[SearchRecord]) -> tuple[list[SearchRecord], int]:
-    """Deduplicación determinista (A2)."""
-    return dedup_agent.deduplicate(raw_records)
+    """Deduplicación determinista (A2), congelada en ``02_dedup/``.
+
+    ``records.json`` se escribe antes que ``dedup.json``, la marca de etapa
+    completa: al reanudar se cargan ambos sin recalcular.
+    """
+    dedup_dir = run.ctx.run_dir / "02_dedup"
+    if (dedup_dir / "dedup.json").exists():
+        raw = json.loads((dedup_dir / "records.json").read_text(encoding="utf-8"))
+        report = DedupReport.model_validate_json(
+            (dedup_dir / "dedup.json").read_text(encoding="utf-8")
+        )
+        return [SearchRecord.model_validate(r) for r in raw], len(report.duplicates)
+    deduped, report = dedup_agent.deduplicate_with_report(raw_records)
+    run.ctx.write_json("02_dedup/records.json", [r.model_dump(mode="json") for r in deduped])
+    run.ctx.write_json("02_dedup/dedup.json", report.model_dump(mode="json"))
+    return deduped, len(report.duplicates)
 
 
 def _load_gold(run: _Run, gold_labels: dict[str, bool] | None) -> dict[str, bool]:
