@@ -5,6 +5,13 @@ finalizar el reporte, corriendo el verificador anti-alucinación sobre la
 síntesis. Es ``orchestration/flow.py`` (Prefect) quien lo envuelve para una
 corrida "de producción"; aquí vive la lógica, sin dependencias pesadas, para
 poder testearla offline con el proveedor ``fake``.
+
+Estructura (Ola 1, spec 2026-10-04 §7): ``run_pipeline`` solo encadena; cada
+etapa vive en su función (``_search``, ``_dedup``, ``_screen_ta``,
+``_fulltext``, ``_extract``, ``_assess_rob``, ``_synthesize_and_verify``,
+``_build_counts``, ``_write_deliverables``) y comparte el estado de la
+invocación en un ``_Run``, cuyos ``gate``/``stop`` sustituyen los cinco bloques
+de checkpoint casi iguales de antes. Es la base de la reanudación por diario.
 """
 
 from __future__ import annotations
@@ -26,7 +33,7 @@ from revisia.agents import screening as screening_agent
 from revisia.agents import screening_ft as screening_ft_agent
 from revisia.agents import verificador as verificador_agent
 from revisia.config import ReviewProtocol
-from revisia.exclusions import compute_exclusion_breakdown, compute_ft_excluded
+from revisia.exclusions import ExclusionBreakdown, compute_exclusion_breakdown, compute_ft_excluded
 from revisia.exports import (
     PrismaCounts,
     render_bibtex,
@@ -47,23 +54,25 @@ from revisia.exports import (
     render_traice_checklist,
 )
 from revisia.extraction_agreement import (
+    ExtractionAgreement,
     compute_extraction_agreement,
     select_double_extraction_subset,
 )
 from revisia.ingest import import_directory
 from revisia.llm.registry import build_provider
-from revisia.meta_analysis import meta_analyze
+from revisia.meta_analysis import MetaAnalysisResult, meta_analyze
 from revisia.metrics import ScreeningMetrics, compute_screening_metrics
-from revisia.orchestration.hitl import review_gate
+from revisia.orchestration.hitl import GateResult, review_gate
 from revisia.orchestration.run_context import RunContext
 from revisia.provenance.runmeta import sha256_text
 from revisia.rag.embed import Embedder, HashEmbedder
-from revisia.schemas.artifacts import RetrievalOutcome
+from revisia.schemas.artifacts import ExcludedReport, RetrievalOutcome
 from revisia.schemas.effects import EffectInput
 from revisia.schemas.extraction import ExtractionRecord
 from revisia.schemas.records import SearchRecord
 from revisia.schemas.rob import RoBAssessment
 from revisia.schemas.screening import ScreeningDecision
+from revisia.schemas.verification import VerificationReport
 
 SearchFn = Callable[[str, int], list[SearchRecord]]
 FetchFn = Callable[[SearchRecord], fulltext_agent.FullText]
@@ -79,6 +88,8 @@ class PipelineResult:
     hallucination_flagged: bool = False
     metrics: ScreeningMetrics | None = None
     run_dir: Path | None = None
+    # Gate en el que se detuvo la corrida (pausa o rechazo); None si se completó.
+    stage: str | None = None
 
 
 def _criteria_to_text(ie: dict) -> str:
@@ -154,58 +165,102 @@ def _rob_table_md(tool: str, assessments: dict[str, RoBAssessment]) -> str:
     return "\n".join(lines)
 
 
-def run_pipeline(
-    protocol: ReviewProtocol,
-    protocol_dir: str | Path,
-    run_ctx: RunContext,
-    *,
-    max_results: int = 25,
-    auto_approve: bool = False,
-    mailto: str | None = None,
-    search_fn: SearchFn | None = None,
-    fetch_fn: FetchFn | None = None,
-    embedder: Embedder | None = None,
-    gold_labels: dict[str, bool] | None = None,
-) -> PipelineResult:
-    """Ejecuta el tracer bullet end-to-end y devuelve su resultado."""
-    protocol_dir = Path(protocol_dir)
-    ie = _load_yaml(protocol_dir / "inclusion_exclusion.yml")
-    form = _load_yaml(protocol_dir / "extraction_form.yml")
-    form_fields = form.get("fields", [])
-    criteria_text = _criteria_to_text(ie)
-    question_text = protocol.question.text
+@dataclass(slots=True)
+class _Run:
+    """Estado compartido de una invocación de ``run_pipeline``.
 
-    # Gold standard humano para métricas (opcional): gold.yml del protocolo +
-    # cualquier etiqueta pasada por código (estas últimas tienen prioridad).
-    gold: dict[str, bool] = {}
-    gold_file = _load_yaml(protocol_dir / "gold.yml")
-    for rid, val in (gold_file.get("gold", gold_file) or {}).items():
-        gold[rid] = bool(val)
-    if gold_labels:
-        gold.update(gold_labels)
+    Las funciones por etapa lo reciben en vez de una docena de argumentos.
+    ``gate`` aplica el checkpoint de una etapa con la autonomía del protocolo y
+    ``stop`` traduce un gate no aprobado en el ``PipelineResult`` con el que la
+    corrida se detiene (antes, cinco bloques casi iguales).
+    """
 
-    # ── 1. Búsqueda multi-base (A2) ─────────────────────────────────────
-    # ``search_fn`` inyectado (tests) tiene prioridad y conserva el contrato
-    # de una sola llamada; en producción se busca en todas las bases declaradas.
-    search_failures: list[dict[str, str]] = []
-    if search_fn is not None:
-        raw_records = search_fn(question_text, max_results)
-    else:
-        raw_records, search_failures = _multi_database_search(
-            protocol, protocol_dir, question_text, max_results, mailto
+    protocol: ReviewProtocol
+    protocol_dir: Path
+    ctx: RunContext
+    question: str
+    criteria: str
+    form_fields: list[dict]
+    auto_approve: bool
+    mailto: str | None
+    metrics: ScreeningMetrics | None = None
+
+    def gate(self, stage: str, payload: dict) -> GateResult:
+        """Checkpoint humano de ``stage`` con la autonomía que fija el protocolo."""
+        return review_gate(
+            stage=stage,
+            autonomy=self.protocol.autonomy_for(stage),
+            run_ctx=self.ctx,
+            review_payload=payload,
+            auto_approve=self.auto_approve,
         )
-    if search_failures:
-        run_ctx.write_json("01_search/failures.json", search_failures)
-        for failure in search_failures:
+
+    def stop(self, gate: GateResult, stage: str) -> PipelineResult | None:
+        """``None`` si el gate aprobó; si no, el resultado con el que se detiene."""
+        if gate.status == "approved":
+            return None
+        return PipelineResult(
+            gate.status, gate.message, metrics=self.metrics, run_dir=self.ctx.run_dir, stage=stage
+        )
+
+
+@dataclass(slots=True)
+class _FullTextStage:
+    """Resultado de la recuperación y el cribado a texto completo."""
+
+    decisions: list[ScreeningDecision]
+    texts: dict[str, str]
+    not_retrieved: int
+
+
+def _search(run: _Run, *, max_results: int, search_fn: SearchFn | None) -> list[SearchRecord]:
+    """Búsqueda multi-base (A2).
+
+    ``search_fn`` inyectado (tests) tiene prioridad y conserva el contrato de
+    una sola llamada; en producción se busca en todas las bases declaradas.
+    """
+    if search_fn is not None:
+        return search_fn(run.question, max_results)
+    raw_records, failures = _multi_database_search(
+        run.protocol, run.protocol_dir, run.question, max_results, run.mailto
+    )
+    if failures:
+        run.ctx.write_json("01_search/failures.json", failures)
+        for failure in failures:
             print(
                 f"⚠️  búsqueda · {failure['db']} no respondió ({failure['error']}); "
                 "se continúa sin esa base"
             )
+    return raw_records
 
-    # ── 2. Deduplicación (A2) ───────────────────────────────────────────
-    deduped, discarded = dedup_agent.deduplicate(raw_records)
 
-    # ── 3. Screening T/A (A1) · ensemble multi-modelo + voto a recall ───
+def _dedup(run: _Run, raw_records: list[SearchRecord]) -> tuple[list[SearchRecord], int]:
+    """Deduplicación determinista (A2)."""
+    return dedup_agent.deduplicate(raw_records)
+
+
+def _load_gold(run: _Run, gold_labels: dict[str, bool] | None) -> dict[str, bool]:
+    """Gold standard humano: ``gold.yml`` del protocolo + etiquetas por código.
+
+    Las pasadas por código tienen prioridad sobre las del fichero.
+    """
+    gold: dict[str, bool] = {}
+    gold_file = _load_yaml(run.protocol_dir / "gold.yml")
+    for rid, val in (gold_file.get("gold", gold_file) or {}).items():
+        gold[rid] = bool(val)
+    if gold_labels:
+        gold.update(gold_labels)
+    return gold
+
+
+def _screen_ta(
+    run: _Run, deduped: list[SearchRecord], gold: dict[str, bool]
+) -> list[ScreeningDecision]:
+    """Cribado T/A (A1): ensemble multi-modelo con voto sesgado a recall.
+
+    Deja las métricas frente al gold (Recall/Lost-Evidence, MCC, WMCC, kappa)
+    en ``run.metrics``.
+    """
     members = [
         screening_agent.ScreenerMember(
             provider=build_provider(cfg),
@@ -213,64 +268,40 @@ def run_pipeline(
             temperature=cfg.temperature,
             seed=cfg.seed,
         )
-        for cfg in protocol.screeners_for("screening_ta")
+        for cfg in run.protocol.screeners_for("screening_ta")
     ]
     decisions = []
     for record in deduped:
         decision, metas = screening_agent.screen_record(
             members,
-            question=question_text,
-            criteria=criteria_text,
+            question=run.question,
+            criteria=run.criteria,
             record=record,
         )
         decision.final_label = decision.human_label or decision.ensemble_label
         decisions.append(decision)
         for meta in metas:
-            run_ctx.record_meta(meta)
-    run_ctx.write_json("03_screening/decisions.json", [d.model_dump() for d in decisions])
+            run.ctx.record_meta(meta)
+    run.ctx.write_json("03_screening/decisions.json", [d.model_dump() for d in decisions])
 
-    # Métricas frente al gold standard humano (Recall/Lost-Evidence, MCC, WMCC, kappa).
-    screening_metrics: ScreeningMetrics | None = None
     if gold:
-        screening_metrics = compute_screening_metrics(
-            decisions, gold, fn_weight=protocol.thresholds.get("wmcc_fn_weight", 10.0)
+        run.metrics = compute_screening_metrics(
+            decisions, gold, fn_weight=run.protocol.thresholds.get("wmcc_fn_weight", 10.0)
         )
-        run_ctx.write_json("03_screening/metrics.json", screening_metrics.model_dump())
+        run.ctx.write_json("03_screening/metrics.json", run.metrics.model_dump())
+    return decisions
 
-    passed = {d.record_id for d in decisions if d.final_label in {"include", "unclear"}}
-    excluded_ta = sum(1 for d in decisions if d.final_label == "exclude")
 
-    # ── 4. Checkpoint humano tras screening ─────────────────────────────
-    gate = review_gate(
-        stage="screening_ta",
-        autonomy=protocol.autonomy_for("screening_ta"),
-        run_ctx=run_ctx,
-        review_payload={
-            "n_screened": len(deduped),
-            "n_pass": len(passed),
-            "n_excluded": excluded_ta,
-            "pass_ids": sorted(passed),
-        },
-        auto_approve=auto_approve,
-    )
-    if gate.status == "paused":
-        return PipelineResult(
-            "paused", gate.message, metrics=screening_metrics, run_dir=run_ctx.run_dir
-        )
-    if gate.status == "rejected":
-        return PipelineResult(
-            "rejected", gate.message, metrics=screening_metrics, run_dir=run_ctx.run_dir
-        )
+def _fulltext(run: _Run, passed_ta: list[SearchRecord], fetch_fn: FetchFn | None) -> _FullTextStage:
+    """Texto completo + cribado a texto completo (A0).
 
-    passed_ta = [r for r in deduped if r.record_id in passed]
-
-    # ── 5. Texto completo + cribado a full-text (A0) ────────────────────
-    # PRISMA estricto (D2; auditoría 2026-09-03, M11): un informe sin texto
-    # completo NO se criba con IA (antes se cribaba con el abstract y contaba
-    # como evaluado). Queda como "no recuperado", con su motivo en
-    # 04_fulltext/retrieval.json, y no llega a extracción.
-    fetch = fetch_fn or (lambda rec: fulltext_agent.fetch_fulltext(rec, mailto=mailto))
-    ft_cfg = protocol.provider_for("screening_ft")
+    PRISMA estricto (D2; auditoría 2026-09-03, M11): un informe sin texto
+    completo NO se criba con IA (antes se cribaba con el abstract y contaba
+    como evaluado). Queda como "no recuperado", con su motivo en
+    04_fulltext/retrieval.json, y no llega a extracción.
+    """
+    fetch = fetch_fn or (lambda rec: fulltext_agent.fetch_fulltext(rec, mailto=run.mailto))
+    ft_cfg = run.protocol.provider_for("screening_ft")
     ft_provider = build_provider(ft_cfg)
     ft_model = f"{ft_cfg.provider}:{ft_cfg.model}"
     fulltexts: dict[str, str] = {}
@@ -308,8 +339,8 @@ def run_pipeline(
         decision, meta = screening_ft_agent.screen_fulltext(
             ft_provider,
             ft_model,
-            question=question_text,
-            criteria=criteria_text,
+            question=run.question,
+            criteria=run.criteria,
             record=record,
             text=ft.text,
             temperature=ft_cfg.temperature,
@@ -318,70 +349,41 @@ def run_pipeline(
         decision.fulltext_status = "retrieved"
         decision.final_label = decision.human_label or decision.ensemble_label
         ft_decisions.append(decision)
-        run_ctx.record_meta(meta)
-    run_ctx.write_json("04_fulltext/retrieval.json", retrieval)
-    run_ctx.write_json("04_fulltext/decisions.json", [d.model_dump() for d in ft_decisions])
-
+        run.ctx.record_meta(meta)
+    run.ctx.write_json("04_fulltext/retrieval.json", retrieval)
+    run.ctx.write_json("04_fulltext/decisions.json", [d.model_dump() for d in ft_decisions])
     not_retrieved = sum(1 for d in ft_decisions if d.fulltext_status == "not_retrieved")
-    # Hasta PR-D un `unclear` de FT sigue pasando (lo resolverá un humano, D1).
-    included_ids = {d.record_id for d in ft_decisions if d.final_label in {"include", "unclear"}}
-    excluded_ft = sum(1 for d in ft_decisions if d.final_label == "exclude")
+    return _FullTextStage(ft_decisions, fulltexts, not_retrieved)
 
-    ft_gate = review_gate(
-        stage="screening_ft",
-        autonomy=protocol.autonomy_for("screening_ft"),
-        run_ctx=run_ctx,
-        review_payload={
-            "n_buscados": len(passed_ta),
-            "n_no_recuperados": not_retrieved,
-            "n_evaluados": len(passed_ta) - not_retrieved,
-            "n_incluidos": len(included_ids),
-            "n_excluidos": excluded_ft,
-        },
-        auto_approve=auto_approve,
-    )
-    if ft_gate.status != "approved":
-        return PipelineResult(
-            ft_gate.status, ft_gate.message, metrics=screening_metrics, run_dir=run_ctx.run_dir
-        )
 
-    included = [r for r in passed_ta if r.record_id in included_ids]
+def _extract(
+    run: _Run, included: list[SearchRecord]
+) -> tuple[dict[str, ExtractionRecord], ExtractionAgreement | None]:
+    """Extracción de datos (A0) y, si hay 2.º extractor, doble extracción (≥20 %).
 
-    # Desglose de exclusiones humano vs IA (PRISMA-trAIce) sobre ambas fases.
-    exclusion_breakdown = compute_exclusion_breakdown(decisions + ft_decisions)
-    run_ctx.write_json("03_screening/exclusions.json", exclusion_breakdown.model_dump())
-    # Solo fase T/A: alimenta la nota ** del flow diagram oficial (trAIce R1).
-    ta_breakdown = compute_exclusion_breakdown(decisions)
-
-    # Informes excluidos en elegibilidad (16b) y sus razones (cajas "Reason 1..n"
-    # del flow oficial): una sola lista para el diagrama, la tabla y el auditor.
-    excluded_reports = compute_ft_excluded(ft_decisions, passed_ta)
-    run_ctx.write_json("04_fulltext/excluded.json", [r.model_dump() for r in excluded_reports])
-    ft_exclusion_reasons = dict(Counter(r.reason for r in excluded_reports))
-
-    # ── 6. Extracción de datos (A0) ─────────────────────────────────────
-    extract_cfg = protocol.provider_for("extraccion")
+    El 2.º extractor es el primero de ``ensemble_llm['extraccion']``; el acuerdo
+    entre extractores va a ``05_extraction/agreement.json`` (§6).
+    """
+    extract_cfg = run.protocol.provider_for("extraccion")
     extract_provider = build_provider(extract_cfg)
     extractions: dict[str, ExtractionRecord] = {}
     for record in included:
         extraction, meta = extraccion_agent.extract_record(
             extract_provider,
             record=record,
-            form_fields=form_fields,
+            form_fields=run.form_fields,
             temperature=extract_cfg.temperature,
             seed=extract_cfg.seed,
         )
         extractions[record.record_id] = extraction
-        run_ctx.record_meta(meta)
-    run_ctx.write_json(
+        run.ctx.record_meta(meta)
+    run.ctx.write_json(
         "05_extraction/extractions.json",
         {k: v.model_dump() for k, v in extractions.items()},
     )
 
-    # Doble extracción independiente (≥20%) si hay un 2.º extractor configurado
-    # en ensemble_llm['extraccion'] · reporta acuerdo entre extractores (§6).
     extraction_agreement = None
-    second_extractors = protocol.ensemble_llm.get("extraccion", [])
+    second_extractors = run.protocol.ensemble_llm.get("extraccion", [])
     if second_extractors and included:
         subset = select_double_extraction_subset(included)
         second_cfg = second_extractors[0]
@@ -391,39 +393,32 @@ def run_pipeline(
             extraction2, meta2 = extraccion_agent.extract_record(
                 second_provider,
                 record=record,
-                form_fields=form_fields,
+                form_fields=run.form_fields,
                 temperature=second_cfg.temperature,
                 seed=second_cfg.seed,
             )
             secondary[record.record_id] = extraction2
-            run_ctx.record_meta(meta2)
+            run.ctx.record_meta(meta2)
         primary_subset = {r.record_id: extractions[r.record_id] for r in subset}
         extraction_agreement = compute_extraction_agreement(primary_subset, secondary)
-        run_ctx.write_json("05_extraction/agreement.json", extraction_agreement.model_dump())
+        run.ctx.write_json("05_extraction/agreement.json", extraction_agreement.model_dump())
+    return extractions, extraction_agreement
 
-    extract_gate = review_gate(
-        stage="extraccion",
-        autonomy=protocol.autonomy_for("extraccion"),
-        run_ctx=run_ctx,
-        review_payload={"n_extraidos": len(extractions)},
-        auto_approve=auto_approve,
-    )
-    if extract_gate.status != "approved":
-        return PipelineResult(
-            extract_gate.status,
-            extract_gate.message,
-            metrics=screening_metrics,
-            run_dir=run_ctx.run_dir,
-        )
 
-    # ── 7. Riesgo de sesgo (A0) ─────────────────────────────────────────
-    rob_cfg = protocol.provider_for("rob")
+def _assess_rob(
+    run: _Run,
+    included: list[SearchRecord],
+    extractions: dict[str, ExtractionRecord],
+    fulltexts: dict[str, str],
+) -> dict[str, RoBAssessment]:
+    """Riesgo de sesgo (A0) con la herramienta del protocolo."""
+    rob_cfg = run.protocol.provider_for("rob")
     rob_provider = build_provider(rob_cfg)
     assessments: dict[str, RoBAssessment] = {}
     for record in included:
         assessment, meta = rob_agent.assess_rob(
             rob_provider,
-            tool=protocol.rob_tool,
+            tool=run.protocol.rob_tool,
             record=record,
             extraction=extractions.get(record.record_id),
             text=fulltexts.get(record.record_id),
@@ -431,55 +426,60 @@ def run_pipeline(
             seed=rob_cfg.seed,
         )
         assessments[record.record_id] = assessment
-        run_ctx.record_meta(meta)
-    run_ctx.write_json(
+        run.ctx.record_meta(meta)
+    run.ctx.write_json(
         "07_rob/assessments.json",
         {k: v.model_dump() for k, v in assessments.items()},
     )
-    rob_gate = review_gate(
-        stage="rob",
-        autonomy=protocol.autonomy_for("rob"),
-        run_ctx=run_ctx,
-        review_payload={"n_evaluados": len(assessments), "tool": protocol.rob_tool},
-        auto_approve=auto_approve,
-    )
-    if rob_gate.status != "approved":
-        return PipelineResult(
-            rob_gate.status, rob_gate.message, metrics=screening_metrics, run_dir=run_ctx.run_dir
-        )
+    return assessments
 
-    # ── 7b. Meta-análisis cuantitativo (§8.1) · opcional, desde effects.yml ──
-    # Si el protocolo aporta tamaños de efecto, se sintetiza cuantitativamente
-    # (efectos fijos + aleatorios, I²/τ², Egger); si no, solo síntesis narrativa.
-    meta_result = None
-    effects_cfg = _load_yaml(protocol_dir / "effects.yml")
+
+def _meta_analysis(run: _Run) -> tuple[MetaAnalysisResult | None, str]:
+    """Meta-análisis cuantitativo (§8.1) · opcional, desde ``effects.yml``.
+
+    Si el protocolo aporta tamaños de efecto, se sintetiza cuantitativamente
+    (efectos fijos + aleatorios, I²/τ², Egger); si no, solo síntesis narrativa.
+    Devuelve el resultado y el modo de presentación del forest.
+    """
+    effects_cfg = _load_yaml(run.protocol_dir / "effects.yml")
     meta_display = effects_cfg.get("display", "raw")  # "proportion" → forest en 0–1
     raw_effects = effects_cfg.get("effects", [])
-    if raw_effects:
-        measure = effects_cfg.get("measure", "precomputed")
-        effects = [EffectInput.model_validate(e) for e in raw_effects]
-        meta_result = meta_analyze(effects, measure)
-        run_ctx.write_json("08_meta/meta_analysis.json", meta_result.model_dump())
+    if not raw_effects:
+        return None, meta_display
+    measure = effects_cfg.get("measure", "precomputed")
+    effects = [EffectInput.model_validate(e) for e in raw_effects]
+    meta_result = meta_analyze(effects, measure)
+    run.ctx.write_json("08_meta/meta_analysis.json", meta_result.model_dump())
+    return meta_result, meta_display
 
-    # ── 8. Síntesis narrativa (A1) ──────────────────────────────────────
-    synth_cfg = protocol.provider_for("sintesis")
+
+def _synthesize_and_verify(
+    run: _Run,
+    included: list[SearchRecord],
+    extractions: dict[str, ExtractionRecord],
+    fulltexts: dict[str, str],
+    embedder: Embedder | None,
+) -> tuple[str, VerificationReport]:
+    """Síntesis narrativa (A1) y verificador anti-alucinación (grounding).
+
+    Modo según ``protocol.grounding``: "agent" (un modelo juzga; cruza idiomas,
+    sin vectores), "existence" (solo id en corpus) o "embedder" (coseno léxico).
+    """
+    synth_cfg = run.protocol.provider_for("sintesis")
     synth_provider = build_provider(synth_cfg)
     narrative, meta = reporte_agent.synthesize_narrative(
         synth_provider,
-        question=question_text,
+        question=run.question,
         included=included,
         extractions=extractions,
         temperature=synth_cfg.temperature,
         seed=synth_cfg.seed,
     )
-    run_ctx.record_meta(meta)
+    run.ctx.record_meta(meta)
 
-    # ── 9. Verificador anti-alucinación (grounding) ─────────────────────
-    # Modo según protocol.grounding: "agent" (un modelo juzga; cruza idiomas,
-    # sin vectores), "existence" (solo id en corpus) o "embedder" (coseno léxico).
     sources = {r.record_id: (fulltexts.get(r.record_id) or r.abstract or "") for r in included}
     verify_kwargs: dict = {"sources": sources}
-    grounding_mode = getattr(protocol, "grounding", "embedder")
+    grounding_mode = getattr(run.protocol, "grounding", "embedder")
     if grounding_mode == "agent":
         from revisia.rag.grounding import make_provider_judge
 
@@ -494,13 +494,29 @@ def run_pipeline(
         [r.record_id for r in included],
         **verify_kwargs,
     )
-    run_ctx.write_json("06_synthesis/verification.json", verification.model_dump())
+    run.ctx.write_json("06_synthesis/verification.json", verification.model_dump())
+    return narrative, verification
 
-    # ── 10. Conteos PRISMA + entregables ────────────────────────────────
+
+def _build_counts(
+    *,
+    raw_records: list[SearchRecord],
+    deduped: list[SearchRecord],
+    discarded: int,
+    excluded_ta: int,
+    ta_breakdown: ExclusionBreakdown,
+    passed_ta: list[SearchRecord],
+    ft: _FullTextStage,
+    excluded_ft: int,
+    excluded_reports: list[ExcludedReport],
+    ft_exclusion_reasons: dict[str, int],
+    included: list[SearchRecord],
+) -> PrismaCounts:
+    """Conteos PRISMA 2020 de la corrida (diagrama, tabla, CSV y manifiesto)."""
     identified_by_source: dict[str, int] = {}
     for r in raw_records:
         identified_by_source[r.source_db] = identified_by_source.get(r.source_db, 0) + 1
-    counts = PrismaCounts(
+    return PrismaCounts(
         identified=len(raw_records),
         identified_by_source=identified_by_source,
         duplicates_removed=discarded,
@@ -509,16 +525,34 @@ def run_pipeline(
         excluded_ta_human=ta_breakdown.excluded_human,
         excluded_ta_ai=ta_breakdown.excluded_ai,
         fulltext_sought=len(passed_ta),
-        fulltext_not_retrieved=not_retrieved,
+        fulltext_not_retrieved=ft.not_retrieved,
         fulltext_rescued=0,  # los rescates humanos llegan con el HITL por registro (PR-D)
-        fulltext_assessed=len(passed_ta) - not_retrieved,
+        fulltext_assessed=len(passed_ta) - ft.not_retrieved,
         excluded_ft=excluded_ft,
         excluded_ft_human=sum(1 for r in excluded_reports if r.reason_source == "human"),
         excluded_ft_ai=sum(1 for r in excluded_reports if r.reason_source == "ai"),
         ft_exclusion_reasons=ft_exclusion_reasons,
         included=len(included),
     )
-    deliverable = run_ctx.deliverable_dir()
+
+
+def _write_deliverables(
+    run: _Run,
+    *,
+    counts: PrismaCounts,
+    included: list[SearchRecord],
+    extractions: dict[str, ExtractionRecord],
+    assessments: dict[str, RoBAssessment],
+    narrative: str,
+    excluded_reports: list[ExcludedReport],
+    exclusion_breakdown: ExclusionBreakdown,
+    extraction_agreement: ExtractionAgreement | None,
+    meta_result: MetaAnalysisResult | None,
+    meta_display: str,
+) -> Path:
+    """Escribe el entregable completo (``deliverable/``) y devuelve su carpeta."""
+    protocol = run.protocol
+    deliverable = run.ctx.deliverable_dir()
     (deliverable / "documento.md").write_text(
         f"# {protocol.title}\n\n## Síntesis narrativa (borrador)\n\n{narrative}\n",
         encoding="utf-8",
@@ -537,12 +571,12 @@ def run_pipeline(
         render_extraction_table(included, extractions), encoding="utf-8"
     )
     (deliverable / "referencias.bib").write_text(render_bibtex(included), encoding="utf-8")
-    models_used = sorted({f"{m.provider}:{m.model}" for m in run_ctx.metas})
+    models_used = sorted({f"{m.provider}:{m.model}" for m in run.ctx.metas})
     (deliverable / "metodologia.md").write_text(
         render_methods(
             protocol=protocol,
             counts=counts,
-            metrics=screening_metrics,
+            metrics=run.metrics,
             models=models_used,
             quantitative=meta_result is not None,
             exclusions=exclusion_breakdown,
@@ -577,16 +611,16 @@ def run_pipeline(
     )
     (deliverable / "checklist_traice.md").write_text(
         render_traice_checklist(
-            run_ctx.metas,
+            run.ctx.metas,
             dict(protocol.autonomy),
-            metrics=screening_metrics,
+            metrics=run.metrics,
             exclusions=exclusion_breakdown,
             search_window=protocol.search_window,
         ),
         encoding="utf-8",
     )
 
-    # ── Interop con herramientas OSS del ecosistema (docs/integraciones.md) ─
+    # Interop con herramientas OSS del ecosistema (docs/integraciones.md).
     interop_dir = deliverable / "interop"
     interop_dir.mkdir(parents=True, exist_ok=True)
     if assessments:
@@ -601,26 +635,132 @@ def run_pipeline(
         (interop_dir / "effects_metafor.csv").write_text(
             render_metafor_csv(meta_result), encoding="utf-8"
         )
+    return deliverable
 
-    # ── 11. Checkpoint final del reporte (A1) ───────────────────────────
-    final_gate = review_gate(
-        stage="reporte",
-        autonomy=protocol.autonomy_for("reporte"),
-        run_ctx=run_ctx,
-        review_payload={
+
+def run_pipeline(
+    protocol: ReviewProtocol,
+    protocol_dir: str | Path,
+    run_ctx: RunContext,
+    *,
+    max_results: int = 25,
+    auto_approve: bool = False,
+    mailto: str | None = None,
+    search_fn: SearchFn | None = None,
+    fetch_fn: FetchFn | None = None,
+    embedder: Embedder | None = None,
+    gold_labels: dict[str, bool] | None = None,
+) -> PipelineResult:
+    """Ejecuta el tracer bullet end-to-end y devuelve su resultado."""
+    protocol_dir = Path(protocol_dir)
+    ie = _load_yaml(protocol_dir / "inclusion_exclusion.yml")
+    form = _load_yaml(protocol_dir / "extraction_form.yml")
+    run = _Run(
+        protocol=protocol,
+        protocol_dir=protocol_dir,
+        ctx=run_ctx,
+        question=protocol.question.text,
+        criteria=_criteria_to_text(ie),
+        form_fields=form.get("fields", []),
+        auto_approve=auto_approve,
+        mailto=mailto,
+    )
+
+    raw_records = _search(run, max_results=max_results, search_fn=search_fn)
+    deduped, discarded = _dedup(run, raw_records)
+    decisions = _screen_ta(run, deduped, _load_gold(run, gold_labels))
+    passed = {d.record_id for d in decisions if d.final_label in {"include", "unclear"}}
+    excluded_ta = sum(1 for d in decisions if d.final_label == "exclude")
+    ta_payload = {
+        "n_screened": len(deduped),
+        "n_pass": len(passed),
+        "n_excluded": excluded_ta,
+        "pass_ids": sorted(passed),
+    }
+    if (stop := run.stop(run.gate("screening_ta", ta_payload), "screening_ta")) is not None:
+        return stop
+
+    passed_ta = [r for r in deduped if r.record_id in passed]
+    ft = _fulltext(run, passed_ta, fetch_fn)
+    # Hasta PR-D un `unclear` de FT sigue pasando (lo resolverá un humano, D1).
+    included_ids = {d.record_id for d in ft.decisions if d.final_label in {"include", "unclear"}}
+    excluded_ft = sum(1 for d in ft.decisions if d.final_label == "exclude")
+    ft_payload = {
+        "n_buscados": len(passed_ta),
+        "n_no_recuperados": ft.not_retrieved,
+        "n_evaluados": len(passed_ta) - ft.not_retrieved,
+        "n_incluidos": len(included_ids),
+        "n_excluidos": excluded_ft,
+    }
+    if (stop := run.stop(run.gate("screening_ft", ft_payload), "screening_ft")) is not None:
+        return stop
+    included = [r for r in passed_ta if r.record_id in included_ids]
+
+    # Desglose de exclusiones humano vs IA (PRISMA-trAIce) sobre ambas fases; el
+    # de solo T/A alimenta la nota ** del flow diagram oficial (trAIce R1).
+    exclusion_breakdown = compute_exclusion_breakdown(decisions + ft.decisions)
+    run_ctx.write_json("03_screening/exclusions.json", exclusion_breakdown.model_dump())
+    ta_breakdown = compute_exclusion_breakdown(decisions)
+    # Informes excluidos en elegibilidad (16b) y sus razones (cajas "Reason 1..n"
+    # del flow oficial): una sola lista para el diagrama, la tabla y el auditor.
+    excluded_reports = compute_ft_excluded(ft.decisions, passed_ta)
+    run_ctx.write_json("04_fulltext/excluded.json", [r.model_dump() for r in excluded_reports])
+    ft_exclusion_reasons = dict(Counter(r.reason for r in excluded_reports))
+
+    extractions, extraction_agreement = _extract(run, included)
+    extraction_gate = run.gate("extraccion", {"n_extraidos": len(extractions)})
+    if (stop := run.stop(extraction_gate, "extraccion")) is not None:
+        return stop
+    assessments = _assess_rob(run, included, extractions, ft.texts)
+    rob_gate = run.gate("rob", {"n_evaluados": len(assessments), "tool": protocol.rob_tool})
+    if (stop := run.stop(rob_gate, "rob")) is not None:
+        return stop
+
+    meta_result, meta_display = _meta_analysis(run)
+    narrative, verification = _synthesize_and_verify(run, included, extractions, ft.texts, embedder)
+    counts = _build_counts(
+        raw_records=raw_records,
+        deduped=deduped,
+        discarded=discarded,
+        excluded_ta=excluded_ta,
+        ta_breakdown=ta_breakdown,
+        passed_ta=passed_ta,
+        ft=ft,
+        excluded_ft=excluded_ft,
+        excluded_reports=excluded_reports,
+        ft_exclusion_reasons=ft_exclusion_reasons,
+        included=included,
+    )
+    deliverable = _write_deliverables(
+        run,
+        counts=counts,
+        included=included,
+        extractions=extractions,
+        assessments=assessments,
+        narrative=narrative,
+        excluded_reports=excluded_reports,
+        exclusion_breakdown=exclusion_breakdown,
+        extraction_agreement=extraction_agreement,
+        meta_result=meta_result,
+        meta_display=meta_display,
+    )
+
+    # Checkpoint final del reporte (A1).
+    final_gate = run.gate(
+        "reporte",
+        {
             "included": len(included),
             "hallucination_flagged": verification.hallucination_flagged,
             "deliverable": str(deliverable),
         },
-        auto_approve=auto_approve,
     )
     manifest_extra: dict = {
         "verification": verification.model_dump(),
         "risk_of_bias": {k: v.model_dump() for k, v in assessments.items()},
         "exclusions": exclusion_breakdown.model_dump(),
     }
-    if screening_metrics is not None:
-        manifest_extra["screening_metrics"] = screening_metrics.model_dump()
+    if run.metrics is not None:
+        manifest_extra["screening_metrics"] = run.metrics.model_dump()
     if extraction_agreement is not None:
         manifest_extra["extraction_agreement"] = extraction_agreement.model_dump()
     if meta_result is not None:
@@ -632,25 +772,19 @@ def run_pipeline(
     )
     # Un reporte rechazado ya no se informa como "completed" (auditoría
     # 2026-09-03, C1): el manifiesto queda escrito arriba como rastro.
-    if final_gate.status != "approved":
-        return PipelineResult(
-            final_gate.status,
-            final_gate.message,
-            counts=counts,
-            included=included,
-            narrative=narrative,
-            hallucination_flagged=verification.hallucination_flagged,
-            metrics=screening_metrics,
-            run_dir=run_ctx.run_dir,
-        )
-
+    status, message, stage = final_gate.status, final_gate.message, "reporte"
+    if final_gate.status == "approved":
+        status = "completed"
+        message = f"Revisión completada · {counts.included} estudios incluidos."
+        stage = None
     return PipelineResult(
-        status="completed",
-        message=f"Revisión completada · {counts.included} estudios incluidos.",
+        status=status,
+        message=message,
         counts=counts,
         included=included,
         narrative=narrative,
         hallucination_flagged=verification.hallucination_flagged,
-        metrics=screening_metrics,
+        metrics=run.metrics,
         run_dir=run_ctx.run_dir,
+        stage=stage,
     )

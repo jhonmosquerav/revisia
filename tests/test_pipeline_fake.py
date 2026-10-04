@@ -247,3 +247,23 @@ def test_ft_exclusion_ia_llega_a_16b(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert [(e["record_id"], e["reason_source"]) for e in excluidos] == [("rec-2", "ai")]
     md = (ctx.run_dir / "deliverable" / "excluidos_texto_completo.md").read_text(encoding="utf-8")
     assert "población incorrecta | IA |" in md
+
+
+def test_pipeline_result_indica_la_etapa_de_la_pausa(tmp_path: Path) -> None:
+    # Refactor de la Ola 1 (spec 2026-10-04 §7): el resultado dice en qué gate se
+    # detuvo la corrida; la reanudación (PR-C) y los helpers de test lo usan.
+    protocol = load_protocol(EXAMPLE)
+    pausa = run_pipeline(
+        protocol, EXAMPLE, RunContext(protocol.slug, tmp_path, "T-PAUSA"), search_fn=_fake_search
+    )
+    assert (pausa.status, pausa.stage) == ("paused", "screening_ta")
+
+    completa = run_pipeline(
+        protocol,
+        EXAMPLE,
+        RunContext(protocol.slug, tmp_path, "T-FIN"),
+        auto_approve=True,
+        search_fn=_fake_search,
+        fetch_fn=fetch_disponible,
+    )
+    assert (completa.status, completa.stage) == ("completed", None)
