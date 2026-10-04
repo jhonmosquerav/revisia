@@ -21,8 +21,11 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from revisia.agents import _http, search_backends
 from revisia.ingest.manual_import import IMPORT_SUFFIXES, import_file
+from revisia.orchestration.journal import JournalError
 from revisia.orchestration.run_context import RunContext
 from revisia.orchestration.snapshot import (
     SEARCH_STRINGS_DIR,
@@ -36,6 +39,11 @@ from revisia.schemas.records import SearchRecord
 SearchFn = Callable[[str, int], list[SearchRecord]]
 
 SEARCH_DIR = "01_search"
+
+# Consecuencia de un fallo, igual para una base y para un fichero importado.
+_FUERA = (
+    "queda fuera de esta corrida (búsqueda congelada): para incluirla, empieza una corrida nueva"
+)
 
 
 def _error(exc: BaseException) -> str:
@@ -108,9 +116,11 @@ def _import(path: Path) -> tuple[list[SearchRecord], SearchLogEntry]:
         declared=True,
         status="ok",
         started_utc=utc_now_iso(),
-        file_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
     )
     try:
+        # Dentro del `try`: un `PermissionError` al leer el fichero (p. ej. abierto en otro
+        # programa en Windows) queda como `failed` en el log y no tumba la búsqueda entera.
+        entry.file_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
         records = import_file(path)
     except Exception as exc:  # p. ej. un RIS exportado en UTF-16
         entry.status, entry.error = "failed", _error(exc)
@@ -119,6 +129,27 @@ def _import(path: Path) -> tuple[list[SearchRecord], SearchLogEntry]:
     entry.n_returned = len(records)
     entry.source_db = sorted({r.source_db for r in records})
     return records, entry
+
+
+def _report_failures(run_ctx: RunContext, entries: list[SearchLogEntry]) -> None:
+    """Escribe ``01_search/failures.json`` (derivado del log) y avisa de cada fallo.
+
+    No escribe nada si ninguna entrada falló. El aviso distingue una base de un fichero
+    de ``imported/``: lo segundo no es una fuente que «responda». En ambos casos la
+    fuente queda fuera de la corrida porque la búsqueda está congelada (D3): para
+    incluirla hay que empezar una corrida nueva.
+    """
+    failed = [e for e in entries if e.status == "failed"]
+    if not failed:
+        return
+    run_ctx.write_json(
+        f"{SEARCH_DIR}/failures.json", [{"db": e.database, "error": e.error or ""} for e in failed]
+    )
+    for entry in failed:
+        if entry.kind == "manual_import":
+            print(f"⚠️  búsqueda · no se pudo importar {entry.database} ({entry.error}); {_FUERA}")
+        else:
+            print(f"⚠️  búsqueda · {entry.database} falló ({entry.error}); {_FUERA}")
 
 
 def multi_database_search(
@@ -184,6 +215,19 @@ def run_search(
     search_dir = run_ctx.run_dir / SEARCH_DIR
     if (search_dir / "log.json").exists():
         raw = json.loads((search_dir / "records.json").read_text(encoding="utf-8"))
+        if not (search_dir / "failures.json").exists():
+            # `log.json` se escribe antes que `failures.json`: una caída entre medias dejaría
+            # los fallos sin registrar para siempre. Se re-derivan del log.
+            try:
+                log = SearchLog.model_validate_json(
+                    (search_dir / "log.json").read_text(encoding="utf-8")
+                )
+            except (ValidationError, UnicodeDecodeError) as exc:
+                raise JournalError(
+                    f"{search_dir / 'log.json'}: el log de búsqueda no es legible "
+                    f"({type(exc).__name__}); la corrida ya no es fiable: empieza una nueva."
+                ) from exc
+            _report_failures(run_ctx, log.entries)
         return [SearchRecord.model_validate(r) for r in raw]
 
     started = utc_now_iso()
@@ -231,12 +275,5 @@ def run_search(
         entries=entries,
     )
     run_ctx.write_json(f"{SEARCH_DIR}/log.json", log.model_dump(mode="json"))
-    failures = [{"db": e.database, "error": e.error or ""} for e in entries if e.status == "failed"]
-    if failures:
-        run_ctx.write_json(f"{SEARCH_DIR}/failures.json", failures)
-        for failure in failures:
-            print(
-                f"⚠️  búsqueda · {failure['db']} no respondió ({failure['error']}); "
-                "se continúa sin esa fuente"
-            )
+    _report_failures(run_ctx, entries)
     return records

@@ -13,6 +13,7 @@ import yaml
 
 from revisia.agents import search_backends
 from revisia.config import load_protocol
+from revisia.orchestration.journal import JournalError
 from revisia.orchestration.pipeline import run_pipeline
 from revisia.orchestration.run_context import RunContext
 from revisia.orchestration.search_stage import run_search
@@ -146,3 +147,131 @@ def test_search_no_se_repite_al_reanudar(tmp_path: Path) -> None:
     assert len(llamadas) == 1
     (entrada,) = _log(ctx).entries
     assert (entrada.kind, entrada.database, entrada.n_returned) == ("injected", "search_fn", 1)
+
+
+# ── Mensajes de fallo, importaciones ilegibles y failures.json al reanudar (revisión de B14) ──
+
+
+def _buscar(proto: Path, ctx: RunContext) -> list[SearchRecord]:
+    return run_search(
+        load_protocol(proto),
+        source_dir=proto,
+        strings_dir=proto / "search_strings",
+        question="q",
+        max_results=5,
+        mailto=None,
+        search_fn=None,
+        run_ctx=ctx,
+    )
+
+
+def _bvs_falla(monkeypatch: pytest.MonkeyPatch, llamadas: list[str] | None = None) -> None:
+    def fake_search_database(db, query, max_results, *, mailto=None):
+        if llamadas is not None:
+            llamadas.append(db)
+        if db == "BVS":
+            raise RuntimeError("503 Service Unavailable")
+        return [SearchRecord(record_id=f"{db}:0", title=f"{db} 0", source_db=db)]
+
+    monkeypatch.setattr(search_backends, "search_database", fake_search_database)
+
+
+def test_mensaje_de_fallo_distingue_base_de_importacion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Una importación ilegible decía «<fichero> no respondió»: no es una base que responda.
+    proto = _protocolo(tmp_path, ["OpenAlex", "BVS", "Scopus"])
+    (proto / "imported").mkdir()
+    (proto / "imported" / "a.ris").write_bytes(_RIS.encode("utf-16"))
+    _bvs_falla(monkeypatch)
+
+    _buscar(proto, RunContext("demo", tmp_path / "runs", "T"))
+
+    salida = capsys.readouterr().out
+    assert (
+        "⚠️  búsqueda · BVS falló (RuntimeError: 503 Service Unavailable); queda fuera de esta "
+        "corrida (búsqueda congelada): para incluirla, empieza una corrida nueva"
+    ) in salida
+    assert "⚠️  búsqueda · no se pudo importar imported/a.ris (UnicodeDecodeError: " in salida
+    assert "queda fuera de esta corrida (búsqueda congelada)" in salida.split("importar")[1]
+    assert "no respondió" not in salida
+    assert "se continúa sin esa fuente" not in salida
+
+
+def test_importacion_con_permiso_denegado_queda_en_el_log_y_no_tumba_la_busqueda(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `file_sha256` se calculaba fuera del `try`: un PermissionError al leer el fichero
+    # (p. ej. abierto por Excel en Windows) tumbaba la búsqueda entera.
+    proto = _protocolo(tmp_path, ["Scopus"])
+    (proto / "imported").mkdir()
+    (proto / "imported" / "a.ris").write_text(_RIS, encoding="utf-8")
+    (proto / "imported" / "b.bib").write_text("@article{k, title = {Desde BibTeX}}\n", "utf-8")
+    leer = Path.read_bytes
+
+    def read_bytes(self: Path) -> bytes:
+        if self.name == "a.ris":
+            raise PermissionError(13, "Permission denied", str(self))
+        return leer(self)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    ctx = RunContext("demo", tmp_path / "runs", "T")
+
+    records = _buscar(proto, ctx)
+
+    assert [r.title for r in records] == ["Desde BibTeX"]
+    por_base = {e.database: e for e in _log(ctx).entries}
+    assert por_base["imported/a.ris"].status == "failed"
+    assert por_base["imported/a.ris"].error.startswith("PermissionError")
+    assert por_base["imported/a.ris"].file_sha256 is None
+    assert por_base["imported/b.bib"].status == "ok"
+
+
+def test_failures_json_se_rederiva_del_log_al_reanudar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `log.json` se escribe antes que `failures.json`: una caída entre medias dejaba la
+    # búsqueda «completa» y los fallos sin registrar para siempre.
+    proto = _protocolo(tmp_path, ["OpenAlex", "BVS"])
+    llamadas: list[str] = []
+    _bvs_falla(monkeypatch, llamadas)
+    ctx = RunContext("demo", tmp_path / "runs", "T")
+    _buscar(proto, ctx)
+    ruta = ctx.run_dir / "01_search" / "failures.json"
+    esperado = json.loads(ruta.read_text("utf-8"))
+    assert esperado == [{"db": "BVS", "error": "RuntimeError: 503 Service Unavailable"}]
+    ruta.unlink()
+    capsys.readouterr()
+
+    _buscar(proto, ctx)
+
+    assert json.loads(ruta.read_text("utf-8")) == esperado  # misma forma
+    assert llamadas == ["OpenAlex", "BVS"]  # y sin repetir la búsqueda
+    assert "BVS falló" in capsys.readouterr().out
+
+
+def test_sin_fallos_la_reanudacion_no_crea_failures_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proto = _protocolo(tmp_path, ["OpenAlex"])
+    _bvs_falla(monkeypatch)
+    ctx = RunContext("demo", tmp_path / "runs", "T")
+    _buscar(proto, ctx)
+
+    _buscar(proto, ctx)
+
+    assert not (ctx.run_dir / "01_search" / "failures.json").exists()
+
+
+def test_log_de_busqueda_ilegible_al_reanudar_es_error_del_diario(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proto = _protocolo(tmp_path, ["OpenAlex", "BVS"])
+    _bvs_falla(monkeypatch)
+    ctx = RunContext("demo", tmp_path / "runs", "T")
+    _buscar(proto, ctx)
+    (ctx.run_dir / "01_search" / "failures.json").unlink()
+    (ctx.run_dir / "01_search" / "log.json").write_text('{"entries": 3}', encoding="utf-8")
+
+    with pytest.raises(JournalError, match=r"log\.json.*empieza una nueva"):
+        _buscar(proto, ctx)
