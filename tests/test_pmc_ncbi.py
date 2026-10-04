@@ -324,6 +324,7 @@ def test_fetch_fulltext_prefiere_bioc(monkeypatch) -> None:
     assert ft.available is True
     assert ft.text == "TEXTO COMPLETO OA"
     assert "PMC7654321" in (ft.source_url or "")
+    assert ft.reason is None
 
 
 def test_fetch_fulltext_resuelve_pmcid_por_doi(monkeypatch) -> None:
@@ -351,6 +352,8 @@ def test_fetch_fulltext_sin_pmcid_ni_mailto_no_toca_red(monkeypatch) -> None:
     ft = fulltext.fetch_fulltext(rec, mailto=None)
     assert ft.available is False
     assert ft.text == "solo abstract"
+    assert ft.reason == "sin_url_oa"
+    assert "--mailto" in (ft.detail or "")
 
 
 def test_fetch_fulltext_bioc_no_oa_cae_a_abstract(monkeypatch) -> None:
@@ -362,3 +365,4 @@ def test_fetch_fulltext_bioc_no_oa_cae_a_abstract(monkeypatch) -> None:
     rec = SearchRecord(record_id="10.1/abc", title="T", doi="10.1/abc", abstract="abs")
     ft = fulltext.fetch_fulltext(rec, mailto="x@y.z")
     assert ft.available is False and ft.text == "abs"
+    assert ft.reason == "sin_url_oa"
