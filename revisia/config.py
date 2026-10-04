@@ -50,6 +50,11 @@ AUTONOMY_LEVELS: tuple[str, ...] = ("A0", "A1", "A2", "A3")
 # Etapas de juicio (AGENTS.md): nunca superan A1; la decisión final es humana.
 JUDGMENT_STAGES: tuple[str, ...] = ("screening_ta", "screening_ft", "extraccion", "rob")
 
+# Claves de `thresholds` que el motor entiende (spec 2026-10-04 §4.5). El
+# auditor avisa de cualquier otra: una errata como `kapa_min` desactivaba el
+# umbral en silencio (auditoría 2026-09-03, A11; D7).
+KNOWN_THRESHOLDS: frozenset[str] = frozenset({"kappa_min", "recall_target", "wmcc_fn_weight"})
+
 
 class ReviewProtocol(BaseModel):
     """Protocolo de una revisión sistemática concreta (config validada).
