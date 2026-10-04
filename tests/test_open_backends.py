@@ -5,6 +5,8 @@ Los payloads son recortes de respuestas reales verificadas en vivo (2026-09-03).
 
 from __future__ import annotations
 
+import pytest
+
 from revisia.agents import _http, open_backends
 
 
@@ -18,6 +20,64 @@ def test_redact_secrets_oculta_keys_y_email() -> None:
     out = _http.redact_secrets(msg)
     assert "K1" not in out and "T2" not in out and "a%40b.c" not in out
     assert "search=q" in out and out.count("<redacted>") == 3
+
+
+@pytest.mark.parametrize(
+    ("msg", "secreto"),
+    [
+        (
+            "401 Unauthorized. Authorization: Bearer sk-ant-api03-AbCdEf0123456789xyz",
+            "sk-ant-api03-AbCdEf0123456789xyz",
+        ),
+        (
+            "fallo con cabeceras {'x-api-key': 'sk-or-v1-0123456789abcdef0123', 'accept': 'json'}",
+            "sk-or-v1-0123456789abcdef0123",
+        ),
+        (
+            "Incorrect API key provided: sk-proj-AbCdEf0123456789xyz. Revisa tu clave.",
+            "sk-proj-AbCdEf0123456789xyz",
+        ),
+        ('headers={"Authorization": "Basic dXNlcjpwYXNz"}', "dXNlcjpwYXNz"),
+        ("x-api-key: tokenSuelto123 rechazada", "tokenSuelto123"),
+        ("rechazado: Bearer abc.DEF-123_456~xyz+/=", "abc.DEF-123_456~xyz"),
+    ],
+)
+def test_redact_secrets_oculta_bearer_cabeceras_y_claves_de_proveedor(
+    msg: str, secreto: str
+) -> None:
+    out = _http.redact_secrets(msg)
+    assert secreto not in out
+    assert "<redacted>" in out
+
+
+def test_redact_secrets_conserva_el_contexto_de_cabeceras_y_bearer() -> None:
+    assert (
+        _http.redact_secrets("{'x-api-key': 'sk-or-v1-0123456789abcdef0123', 'accept': 'json'}")
+        == "{'x-api-key': '<redacted>', 'accept': 'json'}"
+    )
+    assert (
+        _http.redact_secrets("Incorrect API key provided: sk-proj-AbCdEf0123456789xyz.")
+        == "Incorrect API key provided: <redacted>."
+    )
+    assert _http.redact_secrets("Authorization: Bearer abc123") == "Authorization: <redacted>"
+    assert _http.redact_secrets("falla con Bearer abc123 hoy") == "falla con Bearer <redacted> hoy"
+    # En una query, la cabecera no se traga el resto de parámetros.
+    assert _http.redact_secrets("x-api-key=ABC123&page=2") == "x-api-key=<redacted>&page=2"
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "el prefijo sk- de las claves de OpenAI",
+        "sk-corto no es una clave",
+        "task-force-management-committee-2026",  # `sk-` dentro de una palabra
+        "risk-adjusted-outcome-measures",
+        "Authorization required for this resource",
+        "una nota sin credenciales: search=q&page=2",
+    ],
+)
+def test_redact_secrets_no_sobre_oculta_prosa(texto: str) -> None:
+    assert _http.redact_secrets(texto) == texto
 
 
 def test_strip_html_limpia_etiquetas() -> None:

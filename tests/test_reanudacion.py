@@ -10,9 +10,11 @@ from fakes import ScriptedProvider, fetch_disponible
 
 from revisia.agent_driver import run_review_with_agent
 from revisia.config import load_protocol
+from revisia.llm.base import LLMRequest
 from revisia.llm.preflight import PreflightError
 from revisia.orchestration import pipeline as pipeline_mod
 from revisia.orchestration.flow import resume_review
+from revisia.orchestration.hitl import DecisionFileError
 from revisia.orchestration.pipeline import run_pipeline
 from revisia.orchestration.run_context import RunContext, RunInterrupted
 from revisia.orchestration.snapshot import read_run_info
@@ -150,3 +152,135 @@ def test_429_a_mitad_del_cribado_conserva_diario_y_reanuda(
     assert len(ctx.llm_calls_path.read_text("utf-8").splitlines()) == 4
     info = read_run_info(ctx.run_dir)
     assert (info.status, len(info.interruptions), len(info.resumes)) == ("paused", 1, 1)
+
+
+# ── Clasificación de excepciones y contabilidad de run.json (revisión de B8) ──
+
+
+class _ProveedorQueFalla(ScriptedProvider):
+    """Proveedor cuya primera llamada lanza ``exc`` (cualquier excepción, también Ctrl+C)."""
+
+    def __init__(self, exc: BaseException) -> None:
+        super().__init__()
+        self._exc = exc
+
+    def _llamar(self, req: LLMRequest) -> None:
+        super()._llamar(req)
+        raise self._exc
+
+
+def _correr_con_fallo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exc: BaseException):
+    monkeypatch.setattr(pipeline_mod, "build_provider", lambda _cfg: _ProveedorQueFalla(exc))
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    return ctx, lambda: run_pipeline(protocol, EXAMPLE, ctx, search_fn=_busqueda)
+
+
+def _run_json_bloqueado(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Simula run.json bloqueado (p. ej. por un antivirus en Windows) tras la instantánea."""
+
+    def _bloqueado(*_args, **_kwargs):
+        raise PermissionError("run.json bloqueado")
+
+    monkeypatch.setattr(pipeline_mod, "write_run_info", _bloqueado)
+
+
+def test_run_json_bloqueado_no_tapa_el_error_del_proveedor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # I1: la contabilidad de run.json corre dentro del `except`; si falla, el 429
+    # salía como PermissionError y el CLI (rc 3) no lo reconocía.
+    _, correr = _correr_con_fallo(tmp_path, monkeypatch, RuntimeError("429 Too Many Requests"))
+    _run_json_bloqueado(monkeypatch)
+
+    with pytest.raises(RunInterrupted) as exc:
+        correr()
+
+    assert isinstance(exc.value.__cause__, RuntimeError)
+    assert exc.value.error == "RuntimeError: 429 Too Many Requests"
+    assert exc.value.stage == "screening_ta"
+
+
+def test_run_json_bloqueado_no_tapa_el_ctrl_c(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, correr = _correr_con_fallo(tmp_path, monkeypatch, KeyboardInterrupt())
+    _run_json_bloqueado(monkeypatch)
+
+    with pytest.raises(KeyboardInterrupt):
+        correr()
+
+
+def test_ctrl_c_queda_registrado_y_se_relanza_tal_cual(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx, correr = _correr_con_fallo(tmp_path, monkeypatch, KeyboardInterrupt())
+
+    with pytest.raises(KeyboardInterrupt):
+        correr()
+
+    info = read_run_info(ctx.run_dir)
+    assert (info.status, info.stage) == ("interrupted", "screening_ta")
+    (interrupcion,) = info.interruptions
+    assert (interrupcion.stage, interrupcion.error) == ("screening_ta", "KeyboardInterrupt")
+
+
+def test_el_error_interrumpido_no_deja_secretos_en_run_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    error = RuntimeError("fallo https://api.example/v1?q=x&api_key=SECRETO&token=OTRO")
+    ctx, correr = _correr_con_fallo(tmp_path, monkeypatch, error)
+
+    with pytest.raises(RunInterrupted) as exc:
+        correr()
+
+    crudo = (ctx.run_dir / "run.json").read_text(encoding="utf-8")
+    assert "SECRETO" not in crudo and "OTRO" not in crudo
+    assert "SECRETO" not in str(exc.value) and "OTRO" not in str(exc.value)
+    assert "api_key=<redacted>" in read_run_info(ctx.run_dir).interruptions[0].error
+
+
+def test_el_error_interrumpido_se_recorta_a_mil_caracteres(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx, correr = _correr_con_fallo(tmp_path, monkeypatch, RuntimeError("x" * 5000))
+
+    with pytest.raises(RunInterrupted) as exc:
+        correr()
+
+    (interrupcion,) = read_run_info(ctx.run_dir).interruptions
+    assert interrupcion.error.startswith("RuntimeError: xxx")
+    assert len(interrupcion.error) == 1000
+    assert exc.value.error == interrupcion.error
+
+
+def test_decision_malformada_al_reanudar_conserva_la_pausa(tmp_path: Path) -> None:
+    # I2: `ensure_snapshot` deja `running`; un decision.yml mal escrito (error de
+    # configuración) no debe dejar run.json en `running`/None ni perder la pausa.
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    assert run_pipeline(protocol, EXAMPLE, ctx, search_fn=_busqueda).status == "paused"
+    (ctx.run_dir / "screening_ta" / "decision.yml").write_text("approved: [\n", encoding="utf-8")
+
+    with pytest.raises(DecisionFileError):
+        resume_review(ctx.run_dir)
+
+    info = read_run_info(ctx.run_dir)
+    assert (info.status, info.stage) == ("paused", "screening_ta")
+    assert info.interruptions == []  # no fue una caída: el usuario corrige el fichero
+
+
+def test_decision_malformada_en_corrida_nueva_queda_interrumpida_sin_caida(
+    tmp_path: Path,
+) -> None:
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    (ctx.run_dir / "screening_ta").mkdir()
+    (ctx.run_dir / "screening_ta" / "decision.yml").write_text("approved: [\n", encoding="utf-8")
+
+    with pytest.raises(DecisionFileError):
+        run_pipeline(protocol, EXAMPLE, ctx, search_fn=_busqueda)
+
+    info = read_run_info(ctx.run_dir)
+    assert (info.status, info.stage) == ("interrupted", "screening_ta")
+    assert info.interruptions == []

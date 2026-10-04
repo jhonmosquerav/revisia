@@ -16,6 +16,7 @@ de checkpoint casi iguales de antes. Es la base de la reanudación por diario.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections import Counter
 from collections.abc import Callable
@@ -72,7 +73,7 @@ from revisia.orchestration.run_context import (
     RunDirExistsError,
     RunInterrupted,
 )
-from revisia.orchestration.search_stage import multi_database_search, run_search
+from revisia.orchestration.search_stage import SEARCH_DIR, multi_database_search, run_search
 from revisia.orchestration.snapshot import (
     SEARCH_STRINGS_DIR,
     SNAPSHOT_DIR,
@@ -112,6 +113,10 @@ _CONFIG_ERRORS: tuple[type[BaseException], ...] = (
     LegacyRunError,
     RunDirExistsError,
 )
+
+# Tope del error que se guarda en `run.json.interruptions` (y en RunInterrupted): un
+# cuerpo HTTP entero no debe volver run.json ilegible.
+_MAX_ERROR_CHARS = 1000
 
 
 @dataclass(slots=True)
@@ -212,6 +217,8 @@ class _Run:
     metrics: ScreeningMetrics | None = None
     # Etapa en curso (la que queda en run.json si la corrida se interrumpe).
     stage: str | None = None
+    # `status`/`stage` de run.json antes de esta invocación (`None`: corrida nueva).
+    previous: tuple[RunStatus, str | None] | None = None
 
     def finish(self, status: RunStatus, stage: str | None) -> None:
         """Deja en ``run.json`` cómo termina esta invocación (spec §4.3)."""
@@ -222,21 +229,47 @@ class _Run:
             )
 
     def interrupted(self, error: str) -> None:
-        """Registra una interrupción en ``run.json`` (estado ``interrupted``, D14)."""
-        info = read_run_info(self.ctx.run_dir)
-        if info is None:
-            return
-        interruption = RunInterruption(utc=utc_now_iso(), stage=self.stage, error=error)
-        write_run_info(
-            self.ctx.run_dir,
-            info.model_copy(
-                update={
-                    "interruptions": [*info.interruptions, interruption],
-                    "status": "interrupted",
-                    "stage": self.stage,
-                }
-            ),
-        )
+        """Registra una interrupción en ``run.json`` (estado ``interrupted``, D14).
+
+        Es contabilidad en el camino de error: si falla (``run.json`` bloqueado
+        en Windows, disco lleno), se ignora para que la excepción original
+        —un 429, un Ctrl+C— llegue intacta al CLI y no la tape un
+        ``PermissionError`` (revisión de B8, I1).
+        """
+        with contextlib.suppress(Exception):
+            info = read_run_info(self.ctx.run_dir)
+            if info is None:
+                return
+            interruption = RunInterruption(utc=utc_now_iso(), stage=self.stage, error=error)
+            write_run_info(
+                self.ctx.run_dir,
+                info.model_copy(
+                    update={
+                        "interruptions": [*info.interruptions, interruption],
+                        "status": "interrupted",
+                        "stage": self.stage,
+                    }
+                ),
+            )
+
+    def config_error(self) -> None:
+        """Deshace el ``running`` de ``ensure_snapshot`` tras un error de configuración.
+
+        Un ``decision.yml`` mal escrito o un diario corrupto no son una caída: el
+        usuario lo corrige y reanuda. Si la corrida ya existía, ``run.json``
+        recupera el ``status``/``stage`` con que llegó (p. ej. ``paused`` en
+        ``screening_ta``) en vez de quedarse en ``running``; si era nueva, queda
+        ``interrupted`` en la etapa en curso. En ambos casos sin entrada en
+        ``interruptions``. Best-effort, como ``interrupted`` (revisión de B8, I2).
+        """
+        with contextlib.suppress(Exception):
+            info = read_run_info(self.ctx.run_dir)
+            if info is None:
+                return
+            status, stage = self.previous or ("interrupted", self.stage)
+            write_run_info(
+                self.ctx.run_dir, info.model_copy(update={"status": status, "stage": stage})
+            )
 
     def gate(self, stage: str, payload: dict) -> GateResult:
         """Checkpoint humano de ``stage`` con la autonomía que fija el protocolo."""
@@ -758,7 +791,7 @@ def run_pipeline(
         RunInterrupted: cualquier otro error a mitad de corrida; queda en
             ``run.json`` (``status: interrupted``) y se reanuda (D14).
     """
-    frozen = (run_ctx.run_dir / "01_search" / "log.json").exists()
+    frozen = (run_ctx.run_dir / SEARCH_DIR / "log.json").exists()
     report = preflight(
         protocol,
         protocol_dir if protocol_dir is not None else run_ctx.run_dir / SNAPSHOT_DIR,
@@ -767,6 +800,10 @@ def run_pipeline(
     )
     if report.errors:
         raise PreflightError(report)
+    # Estado con que llega la corrida (si ya existía): `ensure_snapshot` lo pisa con
+    # `running` y un error de configuración tiene que poder devolverlo (I2).
+    before = read_run_info(run_ctx.run_dir)
+    previous = (before.status, before.stage) if before is not None else None
     snapshot_dir, run_info = ensure_snapshot(
         protocol_dir, run_ctx, max_results=max_results, mailto=mailto
     )
@@ -782,6 +819,7 @@ def run_pipeline(
         form_fields=form.get("fields", []),
         auto_approve=auto_approve,
         mailto=mailto,
+        previous=previous,
     )
     try:
         return _run_stages(
@@ -793,12 +831,15 @@ def run_pipeline(
             gold_labels=gold_labels,
         )
     except _CONFIG_ERRORS:
+        run.config_error()
         raise
     except KeyboardInterrupt:
         run.interrupted("KeyboardInterrupt")
         raise
     except Exception as exc:
-        error = _http.redact_secrets(f"{type(exc).__name__}: {exc}")
+        # Redactar antes de recortar: un secreto cortado a medias ya no casaría con
+        # el patrón y se filtraría.
+        error = _http.redact_secrets(f"{type(exc).__name__}: {exc}")[:_MAX_ERROR_CHARS]
         run.interrupted(error)
         raise RunInterrupted(run_ctx.run_dir, run.stage, error) from exc
 
