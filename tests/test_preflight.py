@@ -327,6 +327,29 @@ def test_preflight_cadena_que_es_un_directorio_se_reporta(proto_dir: Path) -> No
     assert "sin cadena" not in _messages(report.warnings)
 
 
+def test_preflight_cadena_ilegible_de_base_manual_tambien_es_error(proto_dir: Path) -> None:
+    # El pipeline lee `search_strings/<base>.txt` de TODA base declarada antes de mirar si
+    # tiene backend (`_multi_database_search`): un `scopus.txt` en cp1252 lo tumba aunque
+    # Scopus sea manual. El preflight lo reporta igual que para una base con backend.
+    (proto_dir / "search_strings" / "scopus.txt").write_bytes("búsqueda".encode("cp1252"))
+    report = _run(_proto(databases=["Scopus"]), proto_dir)  # no debe lanzar
+    errores = _messages(report.errors)
+    assert "search_strings/scopus.txt no se puede leer como UTF-8" in errores
+    assert "guárdalo en UTF-8" in errores
+    assert [i.where for i in report.errors] == ["databases.Scopus"]
+
+
+def test_preflight_base_manual_sin_cadena_no_avisa_de_cadena(proto_dir: Path) -> None:
+    # Los avisos de "sin cadena" / "cadena vacía" siguen siendo solo para bases con
+    # backend: una base manual no usa `search_strings/` (su búsqueda va por imported/).
+    (proto_dir / "search_strings" / "scopus.txt").write_text("  \n", "utf-8")
+    avisos = _messages(_run(_proto(databases=["Scopus"]), proto_dir).warnings)
+    assert "sin cadena" not in avisos
+    (proto_dir / "search_strings" / "scopus.txt").unlink()
+    avisos = _messages(_run(_proto(databases=["Scopus"]), proto_dir).warnings)
+    assert "sin cadena" not in avisos
+
+
 def test_preflight_imported_solo_cuenta_ficheros(proto_dir: Path) -> None:
     # Un directorio llamado `x.ris` no es una importación: `import_directory` fallaría.
     (proto_dir / "imported" / "x.ris").mkdir(parents=True)
@@ -349,11 +372,16 @@ def test_preflight_databases_vacio_sin_httpx_es_error(proto_dir: Path) -> None:
 
 
 def test_preflight_base_desconocida_aconseja_corregir_o_importar(proto_dir: Path) -> None:
-    # Quitarla de `databases` la borraría del informe PRISMA-S: el consejo es corregir
-    # el nombre (con las claves válidas a la vista) o declararla como base manual.
+    # Quitarla de `databases` la borraría del informe PRISMA-S, y declararla con el nombre
+    # de otra base manual la etiquetaría mal ahí: el consejo es corregir la errata (con
+    # las claves válidas a la vista) o, si es una base real sin API, importar por RIS/BibTeX
+    # y pedir su clave en MANUAL_ONLY para declararla con su propio nombre.
     report = _run(_proto(databases=["OpenAlex", "Scopuss"]), proto_dir)
     mensaje = next(i.message for i in report.errors if "Scopuss" in i.message)
     assert "claves válidas" in mensaje
     assert "openalex" in mensaje and "scopus" in mensaje and "cinahl" in mensaje
     assert "RIS/BibTeX" in mensaje and "imported/" in mensaje
+    assert "MANUAL_ONLY" in mensaje
+    assert "con el nombre de una base manual" not in mensaje
+    assert "quitarla de `databases`" in mensaje  # el aviso de no borrarla se conserva
     assert "quítala" not in mensaje

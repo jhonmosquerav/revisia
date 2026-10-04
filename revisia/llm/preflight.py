@@ -279,6 +279,24 @@ def check_provider(
     return issues
 
 
+def _read_search_string(base: Path, key: str, where: str) -> tuple[str, PreflightIssue | None]:
+    """Lee ``search_strings/<key>.txt``: (texto, error). Ausente cuenta como ``""``.
+
+    El pipeline lee este mismo fichero (orchestration/pipeline.py) y se caería con uno
+    ilegible: es un error, no un aviso, y el preflight lo reporta en vez de romperse con
+    un traceback (auditoría 2026-09-03, M6; D10).
+    """
+    string_file = base / "search_strings" / f"{key}.txt"
+    try:
+        return (string_file.read_text(encoding="utf-8") if string_file.exists() else ""), None
+    except (OSError, UnicodeDecodeError) as exc:
+        return "", _error(
+            where,
+            f"search_strings/{key}.txt no se puede leer como UTF-8 "
+            f"({type(exc).__name__}: {exc}); guárdalo en UTF-8.",
+        )
+
+
 def check_databases(
     protocol: ReviewProtocol, protocol_dir: str | Path, *, find_spec: FindSpec
 ) -> list[PreflightIssue]:
@@ -301,25 +319,18 @@ def check_databases(
     for db in databases:
         key = search_backends.db_key(db)
         where = f"databases.{db}"
+        # El pipeline lee `search_strings/<base>.txt` de TODA base declarada antes de mirar
+        # si tiene backend (`_multi_database_search`): una cadena ilegible tumba la corrida
+        # aunque la base sea manual, así que la legibilidad se comprueba para todas.
+        text, unreadable = _read_search_string(base, key, where)
+        if unreadable is not None:
+            issues.append(unreadable)
         if key in search_backends.BACKENDS:
             with_backend.append(db)
-            string_file = base / "search_strings" / f"{key}.txt"
-            try:
-                text = string_file.read_text(encoding="utf-8") if string_file.exists() else ""
-            except (OSError, UnicodeDecodeError) as exc:
-                # El pipeline lee este mismo fichero (orchestration/pipeline.py) y se
-                # caería: es un error, no un aviso, y el preflight lo reporta en vez de
-                # romperse con un traceback (auditoría 2026-09-03, M6; D10). Un fichero
-                # ilegible no es además "cadena vacía": no se duplica el aviso.
-                issues.append(
-                    _error(
-                        where,
-                        f"search_strings/{key}.txt no se puede leer como UTF-8 "
-                        f"({type(exc).__name__}: {exc}); guárdalo en UTF-8.",
-                    )
-                )
-                continue
-            if not text.strip():
+            # Un fichero ilegible no es además "cadena vacía": no se duplica el aviso. Y el
+            # aviso de cadena ausente/vacía es solo de las bases con backend: las manuales
+            # no usan la cadena (su búsqueda va por `imported/`).
+            if unreadable is None and not text.strip():
                 issues.append(
                     _warning(
                         where,
@@ -335,10 +346,11 @@ def check_databases(
                 _error(
                     where,
                     f"base desconocida {db!r} (clave {key!r}): no tiene backend ni es de "
-                    f"importación manual. Corrige el nombre (claves válidas: {valid_keys}) o, "
-                    "si es una base sin API, importa sus resultados por RIS/BibTeX en "
-                    "imported/ y declárala en `databases` con el nombre de una base manual; "
-                    "quitarla de `databases` la borraría del informe PRISMA-S.",
+                    "importación manual. Si es una errata, corrige el nombre (claves "
+                    f"válidas: {valid_keys}). Si es una base real sin API en RevisIA, importa "
+                    "sus resultados por RIS/BibTeX en imported/ y pide añadir su clave a "
+                    "MANUAL_ONLY (revisia/agents/search_backends.py) para declararla con su "
+                    "propio nombre; quitarla de `databases` la borraría del informe PRISMA-S.",
                 )
             )
     imported = base / "imported"
