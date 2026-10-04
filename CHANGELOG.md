@@ -11,6 +11,14 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   `high`, `xhigh`, `max`): en los modelos 5.5 sustituye a `temperature` como
   palanca de costo/calidad. Solo lo acepta `claude_code` (viaja como
   `--effort`); pedirlo en otro proveedor es un error de config.
+- **Contratos de artefactos de la Ola 1** (`revisia/schemas/artifacts.py`):
+  modelos y constantes que comparten el pipeline y el auditor (`RunInfo`,
+  `LLMCall`, `JournalEntry`, `SearchLog`, `DedupReport`, `RetrievalOutcome`,
+  `ExcludedReport`, `GateSummary`, `JOURNAL_PATHS`, `GATED_STAGES`), hashes
+  canónicos (`canonical_json`/`canonical_sha256`), el reductor único del ledger
+  (`summarize_gates`) y `KNOWN_THRESHOLDS`. `ScreeningDecision` y `PrismaCounts`
+  ganan campos opcionales, sin cambio de comportamiento. Diseño en
+  `docs/superpowers/specs/2026-10-04-ola-1-remediacion-design.md`.
 
 ### Fixed
 - **`claude_code` corre sin herramientas de verdad**: `--tools ""` sustituye a
