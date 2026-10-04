@@ -52,10 +52,13 @@ protocolo →[✋]→ búsqueda multi-base → dedup → screening T/A (ensemble
 - `meta_analisis.md` + `assets/forest.png`, `funnel.png` · síntesis cuantitativa
   (efectos fijos/aleatorios, I²/τ², Egger) **si el protocolo aporta `effects.yml`**
 - `prisma_flow.md` · diagrama de flujo con la estructura de la **plantilla
-  oficial** PRISMA 2020: desglose por base, exclusiones **humano vs IA**
-  (nota ** oficial · trAIce R1) y **razones de exclusión** en elegibilidad;
-  con `--brain` y memoria previa se emite además `prisma_flow_updated.md`
-  (plantilla v3 · living review)
+  oficial** PRISMA 2020: desglose por base, informes buscados / **no
+  recuperados** / evaluados, exclusiones **humano vs IA** (nota ** oficial ·
+  trAIce R1) y **razones de exclusión** en elegibilidad; con `--brain` y
+  memoria previa se emite además `prisma_flow_updated.md` (plantilla v3 ·
+  living review)
+- `excluidos_texto_completo.md` · informes excluidos al evaluar el texto
+  completo, con su razón y su origen humano/IA (PRISMA 2020, ítem 16b)
 - `tabla_extraccion.md` · características de los estudios incluidos
 - `risk_of_bias.md` · tabla de riesgo de sesgo
 - `referencias.bib` · bibliografía BibTeX
@@ -68,6 +71,17 @@ protocolo →[✋]→ búsqueda multi-base → dedup → screening T/A (ensemble
 
 …todo con un **manifiesto reproducible** (modelo, versión, seed, prompts
 hash-eados, exclusiones humano/IA, acuerdo de extracción, decisiones con timestamp).
+
+> **Texto completo: PRISMA estricto.** Un registro cuyo texto completo no se
+> puede recuperar en abierto (BioC-PMC, `oa_url`, Unpaywall) **no se criba con
+> IA**: queda en la caja «informes no recuperados» del diagrama, con su motivo
+> en `04_fulltext/retrieval.json`. Para recuperar más, instala el extra
+> `search` y pasa `--mailto` (Unpaywall e ID Converter de PMC). Con el demo sin
+> red puede no quedar ningún estudio incluido: es el resultado honesto.
+
+> **Las corridas no se versionan en este repositorio** (`runs/` está en
+> `.gitignore`): una corrida pertenece a su revisión, no al motor. Deposítala
+> completa (manifiesto, ledger, entregable) en OSF/Zenodo o junto a tu protocolo.
 
 Y al terminar, **audita la corrida** antes de usarla:
 
@@ -386,7 +400,7 @@ revisia/          # EL MOTOR (paquete instalable · provider-agnostic)
   prompts/            # prompts versionados y hash-eados
 protocols/_TEMPLATE/  # LA CONFIG (una carpeta por revisión · default: gemini)
   protocolo-prisma-p.md  #   plantilla de preregistro (17 ítems PRISMA-P)
-runs/                 # OUTPUTS reproducibles (una carpeta por ejecución)
+runs/                 # OUTPUTS de cada corrida (git las ignora: se depositan con la revisión)
 docs/                 # metodología (KB de fuentes primarias), integraciones, memoria
 examples/             # tracer bullet: revisión mini end-to-end (offline · fake)
 tests/                # golden tests por etapa
