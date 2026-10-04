@@ -8,6 +8,7 @@ entregables y manifiesto reproducible.
 from __future__ import annotations
 
 import json
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -267,3 +268,42 @@ def test_pipeline_result_indica_la_etapa_de_la_pausa(tmp_path: Path) -> None:
         fetch_fn=fetch_disponible,
     )
     assert (completa.status, completa.stage) == ("completed", None)
+
+
+def test_llm_calls_etiquetadas_por_etapa_y_registro(tmp_path: Path) -> None:
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T-CALLS")
+    run_pipeline(
+        protocol,
+        EXAMPLE,
+        ctx,
+        auto_approve=True,
+        search_fn=_fake_search,
+        fetch_fn=fetch_disponible,
+    )
+    lineas = (ctx.run_dir / "llm_calls.jsonl").read_text(encoding="utf-8").splitlines()
+    calls = [json.loads(x) for x in lineas]
+    assert Counter(c["stage"] for c in calls) == {
+        "screening_ta": 4,  # 2 registros × 2 miembros del ensemble
+        "screening_ft": 2,
+        "extraccion": 2,
+        "extraccion_2": 1,
+        "rob": 2,
+        "sintesis": 1,
+    }
+    ta = [(c["record_id"], c["role"]) for c in calls if c["stage"] == "screening_ta"]
+    assert ta == [
+        ("rec-1", "member:0"),
+        ("rec-1", "member:1"),
+        ("rec-2", "member:0"),
+        ("rec-2", "member:1"),
+    ]
+    manifest = yaml.safe_load((ctx.run_dir / "manifest.yml").read_text(encoding="utf-8"))
+    assert manifest["llm_calls"] == calls
+    assert manifest["autonomy_effective"] == {
+        "screening_ta": "A1",
+        "screening_ft": "A0",
+        "extraccion": "A0",
+        "rob": "A0",
+        "reporte": "A1",
+    }

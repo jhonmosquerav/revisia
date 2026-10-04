@@ -66,7 +66,7 @@ from revisia.orchestration.hitl import GateResult, review_gate
 from revisia.orchestration.run_context import RunContext
 from revisia.provenance.runmeta import sha256_text
 from revisia.rag.embed import Embedder, HashEmbedder
-from revisia.schemas.artifacts import ExcludedReport, RetrievalOutcome
+from revisia.schemas.artifacts import GATED_STAGES, ExcludedReport, RetrievalOutcome
 from revisia.schemas.effects import EffectInput
 from revisia.schemas.extraction import ExtractionRecord
 from revisia.schemas.records import SearchRecord
@@ -280,8 +280,10 @@ def _screen_ta(
         )
         decision.final_label = decision.human_label or decision.ensemble_label
         decisions.append(decision)
-        for meta in metas:
-            run.ctx.record_meta(meta)
+        for i, meta in enumerate(metas):
+            run.ctx.record_meta(
+                meta, stage="screening_ta", record_id=record.record_id, role=f"member:{i}"
+            )
     run.ctx.write_json("03_screening/decisions.json", [d.model_dump() for d in decisions])
 
     if gold:
@@ -349,7 +351,7 @@ def _fulltext(run: _Run, passed_ta: list[SearchRecord], fetch_fn: FetchFn | None
         decision.fulltext_status = "retrieved"
         decision.final_label = decision.human_label or decision.ensemble_label
         ft_decisions.append(decision)
-        run.ctx.record_meta(meta)
+        run.ctx.record_meta(meta, stage="screening_ft", record_id=record.record_id)
     run.ctx.write_json("04_fulltext/retrieval.json", retrieval)
     run.ctx.write_json("04_fulltext/decisions.json", [d.model_dump() for d in ft_decisions])
     not_retrieved = sum(1 for d in ft_decisions if d.fulltext_status == "not_retrieved")
@@ -376,7 +378,7 @@ def _extract(
             seed=extract_cfg.seed,
         )
         extractions[record.record_id] = extraction
-        run.ctx.record_meta(meta)
+        run.ctx.record_meta(meta, stage="extraccion", record_id=record.record_id)
     run.ctx.write_json(
         "05_extraction/extractions.json",
         {k: v.model_dump() for k, v in extractions.items()},
@@ -398,7 +400,7 @@ def _extract(
                 seed=second_cfg.seed,
             )
             secondary[record.record_id] = extraction2
-            run.ctx.record_meta(meta2)
+            run.ctx.record_meta(meta2, stage="extraccion_2", record_id=record.record_id)
         primary_subset = {r.record_id: extractions[r.record_id] for r in subset}
         extraction_agreement = compute_extraction_agreement(primary_subset, secondary)
         run.ctx.write_json("05_extraction/agreement.json", extraction_agreement.model_dump())
@@ -426,7 +428,7 @@ def _assess_rob(
             seed=rob_cfg.seed,
         )
         assessments[record.record_id] = assessment
-        run.ctx.record_meta(meta)
+        run.ctx.record_meta(meta, stage="rob", record_id=record.record_id)
     run.ctx.write_json(
         "07_rob/assessments.json",
         {k: v.model_dump() for k, v in assessments.items()},
@@ -475,7 +477,7 @@ def _synthesize_and_verify(
         temperature=synth_cfg.temperature,
         seed=synth_cfg.seed,
     )
-    run.ctx.record_meta(meta)
+    run.ctx.record_meta(meta, stage="sintesis", record_id="sintesis")
 
     sources = {r.record_id: (fulltexts.get(r.record_id) or r.abstract or "") for r in included}
     verify_kwargs: dict = {"sources": sources}
@@ -768,6 +770,8 @@ def run_pipeline(
     run_ctx.write_manifest(
         protocol_snapshot=protocol.model_dump(mode="json"),
         counts=counts.model_dump(),
+        autonomy_effective={g: protocol.autonomy_for(g) for g in GATED_STAGES},
+        final_gate={"forced_human": False, "reason": None},
         extra=manifest_extra,
     )
     # Un reporte rechazado ya no se informa como "completed" (auditoría
