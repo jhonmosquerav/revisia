@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from revisia.exports.checklist import engine_search_date
+from revisia.exports.checklist import engine_search_date, label_databases
 from revisia.metrics import fmt_metric
 
 if TYPE_CHECKING:
@@ -49,11 +49,13 @@ def render_methods(
     """Renderiza la sección de métodos (``metodologia.md``) de la revisión.
 
     Con ``search_log`` (Ola 1) la fecha de búsqueda es la registrada por el
-    motor y se dice en qué bases se usó la pregunta como cadena (PRISMA-S 8).
+    motor, se dice en qué bases se usó la pregunta como cadena (PRISMA-S 8) y las
+    bases cuya búsqueda falló se marcan en «Bases consultadas».
     """
     q = protocol.question
     components = "; ".join(f"{k}={v}" for k, v in q.components.items()) or "(no detallados)"
-    bases = ", ".join(protocol.databases) or "OpenAlex"
+    # Con log, una base que falló se marca: «consultada» sería falso (revisión de la pista C).
+    bases = ", ".join(label_databases(protocol.databases or ["OpenAlex"], search_log))
     kappa = (
         f"Cohen's kappa humano-IA = {fmt_metric(metrics.cohen_kappa)}"
         if metrics is not None

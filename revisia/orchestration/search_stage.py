@@ -190,6 +190,27 @@ def multi_database_search(
     return records, entries
 
 
+def read_search_log(run_dir: Path) -> SearchLog:
+    """``01_search/log.json`` de la corrida, validado.
+
+    Un log truncado o editado a mano es un error del diario (``JournalError``, rc 2),
+    no una caída que reintentar: con ``ValidationError`` pelado, quien lo lee tarde
+    (el entregable, al final de la corrida) lo veía como una interrupción y cada
+    reanudación repetía el mismo rc 3 (revisión de la pista C).
+
+    Raises:
+        JournalError: si el log no valida o no es UTF-8.
+    """
+    path = Path(run_dir) / SEARCH_DIR / "log.json"
+    try:
+        return SearchLog.model_validate_json(path.read_text(encoding="utf-8"))
+    except (ValidationError, UnicodeDecodeError) as exc:
+        raise JournalError(
+            f"{path}: el log de búsqueda no es legible ({type(exc).__name__}); "
+            "la corrida ya no es fiable: empieza una nueva."
+        ) from exc
+
+
 def run_search(
     protocol,
     *,
@@ -214,19 +235,13 @@ def run_search(
     """
     search_dir = run_ctx.run_dir / SEARCH_DIR
     if (search_dir / "log.json").exists():
+        # Se lee siempre, no solo cuando faltan los fallos: con `failures.json` presente un
+        # log corrupto pasaba hasta el entregable y allí daba un rc 3 que se repetía.
+        log = read_search_log(run_ctx.run_dir)
         raw = json.loads((search_dir / "records.json").read_text(encoding="utf-8"))
         if not (search_dir / "failures.json").exists():
             # `log.json` se escribe antes que `failures.json`: una caída entre medias dejaría
             # los fallos sin registrar para siempre. Se re-derivan del log.
-            try:
-                log = SearchLog.model_validate_json(
-                    (search_dir / "log.json").read_text(encoding="utf-8")
-                )
-            except (ValidationError, UnicodeDecodeError) as exc:
-                raise JournalError(
-                    f"{search_dir / 'log.json'}: el log de búsqueda no es legible "
-                    f"({type(exc).__name__}); la corrida ya no es fiable: empieza una nueva."
-                ) from exc
             _report_failures(run_ctx, log.entries)
         return [SearchRecord.model_validate(r) for r in raw]
 

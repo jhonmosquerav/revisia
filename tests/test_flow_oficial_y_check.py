@@ -403,3 +403,113 @@ def test_metodos_cita_search_strings_solo_si_se_usaron_cadenas_por_base() -> Non
         )
     # Sin log no se sabe qué se usó: se conserva la cita de siempre.
     assert "00_protocol/search_strings/" in render_methods(protocol=protocolo, counts=_COUNTS)
+
+
+# ── Bases fallidas y ramas de «sin bases declaradas» (revisión de la pista C) ──
+
+
+_FALLO = " (falló: no devolvió registros)"
+
+
+def _protocolo_con_bases(bases: list[str]) -> ReviewProtocol:
+    return ReviewProtocol.model_validate(
+        {
+            "slug": "d",
+            "title": "D",
+            "question": {"text": "¿X?", "framework": "PEO"},
+            "databases": bases,
+        }
+    )
+
+
+def _log_con_pubmed_fallida() -> SearchLog:
+    return _log(
+        _entrada(database="OpenAlex", db_key="openalex"),
+        _entrada(database="PubMed", db_key="pubmed", status="failed", error="RuntimeError: 503"),
+    )
+
+
+def test_metodos_marca_las_bases_cuya_busqueda_fallo() -> None:
+    # «Bases consultadas» listaba protocol.databases aunque una base hubiera fallado.
+    protocolo = _protocolo_con_bases(["OpenAlex", "PubMed"])
+
+    con_log = render_methods(
+        protocol=protocolo, counts=_COUNTS, search_log=_log_con_pubmed_fallida()
+    )
+
+    assert f"Bases consultadas: OpenAlex, PubMed{_FALLO}" in con_log
+    assert f"OpenAlex{_FALLO}" not in con_log
+    # Sin log no se sabe y sale como antes.
+    sin_log = render_methods(protocol=protocolo, counts=_COUNTS)
+    assert "Bases consultadas: OpenAlex, PubMed\n" in sin_log
+    assert "falló" not in sin_log
+
+
+def test_metodos_marca_la_base_por_defecto_si_fallo() -> None:
+    # Sin `databases:` el motor busca en OpenAlex (entrada `openalex`, en minúsculas).
+    protocolo = _protocolo_con_bases([])
+    log = _log(
+        _entrada(declared=False, database="openalex", status="failed", error="RuntimeError: 503")
+    )
+
+    assert f"Bases consultadas: OpenAlex{_FALLO}" in render_methods(
+        protocol=protocolo, counts=_COUNTS, search_log=log
+    )
+    assert "Bases consultadas: OpenAlex\n" in render_methods(protocol=protocolo, counts=_COUNTS)
+
+
+def test_resumenes_item_4_marca_las_bases_cuya_busqueda_fallo() -> None:
+    markdown = render_prisma_abstracts_checklist(
+        databases=["OpenAlex", "PubMed"], search_log=_log_con_pubmed_fallida()
+    )
+    item_4 = next(x for x in markdown.splitlines() if x.startswith("- [ ] 4."))
+    assert f"Bases: OpenAlex, PubMed{_FALLO} · última búsqueda: 2026-10-04" in item_4
+    # Sin log, como siempre.
+    sin_log = render_prisma_abstracts_checklist(databases=["OpenAlex", "PubMed"])
+    assert "Bases: OpenAlex, PubMed ·" in sin_log
+
+
+def test_resumenes_item_4_marca_la_fuente_fallida_sin_bases_declaradas() -> None:
+    log = _log(
+        _entrada(declared=False, database="openalex", status="failed", error="RuntimeError: 503")
+    )
+    item_4 = next(
+        x
+        for x in render_prisma_abstracts_checklist(search_log=log).splitlines()
+        if x.startswith("- [ ] 4.")
+    )
+    assert f"Bases: openalex{_FALLO} ·" in item_4
+
+
+def test_prisma_s_item_1_marca_las_bases_cuya_busqueda_fallo() -> None:
+    markdown = render_prisma_s_checklist(
+        databases=["OpenAlex", "PubMed"], search_log=_log_con_pubmed_fallida()
+    )
+    assert f"Bases: OpenAlex, PubMed{_FALLO} (APIs abiertas" in _item(markdown, 1)
+    sin_log = render_prisma_s_checklist(databases=["OpenAlex", "PubMed"])
+    assert "Bases: OpenAlex, PubMed (APIs abiertas" in _item(sin_log, 1)
+
+
+def test_resumenes_item_4_sin_bases_declaradas_nombra_la_busqueda_inyectada() -> None:
+    log = _log(_entrada(database="search_fn", db_key="search_fn", kind="injected", backend=None))
+    item_4 = next(
+        x
+        for x in render_prisma_abstracts_checklist(search_log=log).splitlines()
+        if x.startswith("- [ ] 4.")
+    )
+    assert "Bases: búsqueda inyectada (search_fn) · última búsqueda: 2026-10-04" in item_4
+
+
+def test_resumenes_item_4_sin_bases_ni_busqueda_del_motor_dice_ninguna_registrada() -> None:
+    # Solo una importación manual: el motor no ejecutó ninguna búsqueda.
+    log = _log(
+        _entrada(
+            database="imported/scopus.ris", db_key="imported", kind="manual_import", backend=None
+        )
+    )
+    item_4 = next(
+        x
+        for x in render_prisma_abstracts_checklist(search_log=log).splitlines()
+        if x.startswith("- [ ] 4.")
+    )
+    assert "Bases: (ninguna registrada) · última búsqueda:" in item_4

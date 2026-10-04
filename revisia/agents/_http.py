@@ -39,11 +39,12 @@ _SECRET_PARAM_RE = re.compile(
 )
 
 
-# Cabeceras `x-api-key` / `authorization`, en forma `clave: valor` o `'clave': 'valor'`
-# (el repr de un dict de cabeceras). El valor suelto puede llevar esquema
-# (`Bearer sk-…`): se tapa entero, no solo la palabra `Bearer`.
+# Cabeceras `x-api-key` / `authorization` y sus variantes con prefijo (`x-goog-api-key`,
+# `proxy-authorization`), en forma `clave: valor` o `'clave': 'valor'` (el repr de un dict
+# de cabeceras). El valor suelto puede llevar esquema (`Bearer sk-…`): se tapa entero, no
+# solo la palabra `Bearer`.
 _SECRET_HEADER_RE = re.compile(
-    r"(?i)((?:x-api-key|authorization)['\"]?\s*[:=]\s*)"
+    r"(?i)([\w-]*(?:api-key|authorization)['\"]?\s*[:=]\s*)"
     # valor entre comillas, o suelto (con esquema opcional) hasta un separador
     r"(?:(?P<q>['\"])[^'\"\r\n]*(?P=q)"
     r"|['\"]?(?:(?:bearer|basic|digest|token)\s+)?[^\s'\",;}&]+)"
@@ -53,6 +54,10 @@ _BEARER_RE = re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]+")
 # Claves con forma de proveedor: `sk-ant-…`, `sk-proj-…`, `sk-or-v1-…`. Con ≥ 16
 # caracteres tras `sk-` y sin alfanumérico delante, para no tocar prosa (`task-force-…`).
 _PROVIDER_KEY_RE = re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}")
+# Claves de Google (`AIza` + 35 caracteres) y tokens de Hugging Face (`hf_` + ≥ 30), con el
+# mismo cuidado de no tocar prosa: sin alfanumérico delante.
+_GOOGLE_KEY_RE = re.compile(r"(?<![A-Za-z0-9])AIza[0-9A-Za-z_-]{35}")
+_HF_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9])hf_[A-Za-z0-9]{30,}")
 
 
 def _redact_header(match: re.Match[str]) -> str:
@@ -66,13 +71,16 @@ def redact_secrets(text: str) -> str:
     Los errores de ``httpx`` incluyen la URL completa con su query string
     (``api_key=…``, ``email=…``) y los de los SDK de LLM, la cabecera o la clave
     (``Authorization: Bearer …``, ``{'x-api-key': …}``, ``Incorrect API key
-    provided: sk-…``). Antes de escribirlos en disco (``01_search/failures.json``,
+    provided: sk-…``; también ``AIza…`` de Google y ``hf_…`` de Hugging Face sueltas).
+    Antes de escribirlos en disco (``01_search/failures.json``,
     ``run.json``) o en consola se pasa por aquí para que ninguna key acabe en un
     artefacto que se comparte.
     """
     text = _SECRET_HEADER_RE.sub(_redact_header, text)
     text = _BEARER_RE.sub(r"\1<redacted>", text)
     text = _PROVIDER_KEY_RE.sub("<redacted>", text)
+    text = _GOOGLE_KEY_RE.sub("<redacted>", text)
+    text = _HF_TOKEN_RE.sub("<redacted>", text)
     return _SECRET_PARAM_RE.sub(r"\1<redacted>", text)
 
 

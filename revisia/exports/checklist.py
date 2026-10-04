@@ -128,6 +128,34 @@ def engine_search_date(search_log: SearchLog) -> str:
     return min(starts or [search_log.started_utc])[:10]
 
 
+_FAILED_DATABASE = " (falló: no devolvió registros)"
+
+
+def label_databases(databases: Iterable[str], search_log: SearchLog | None) -> list[str]:
+    """Nombres de las bases para un texto que las da por consultadas, marcando las fallidas.
+
+    Con ``search_log``, una base cuya búsqueda falló no devolvió registros y no se
+    puede decir que se consultó sin más (``PubMed (falló: no devolvió registros)``); el
+    error concreto queda en ``01_search/log.json`` y en los ítems 8 y 13 de PRISMA-S.
+    Sin log no se sabe y la lista sale como está.
+    """
+    if search_log is None:
+        return list(databases)
+    failed = {
+        e.database.casefold()
+        for e in search_log.entries
+        if e.kind == "database" and e.status == "failed"
+    }
+    return [f"{db}{_FAILED_DATABASE}" if db.casefold() in failed else db for db in databases]
+
+
+def _engine_source(entry: SearchLogEntry) -> str:
+    """Fuente que ejecutó el motor, para listarla cuando el protocolo no declara bases."""
+    if entry.kind == "injected":
+        return "búsqueda inyectada (search_fn)"
+    return f"{entry.database}{_FAILED_DATABASE}" if entry.status == "failed" else entry.database
+
+
 def _flat(text: str) -> str:
     """Colapsa el espacio en blanco (saltos de línea incluidos) a un solo espacio.
 
@@ -225,7 +253,8 @@ def render_prisma_s_checklist(
     """
     auto: dict[int, str] = {}
     if databases:
-        auto[1] = f"Bases: {', '.join(databases)} (APIs abiertas; ver docs/integraciones.md)."
+        listed = ", ".join(label_databases(databases, search_log))
+        auto[1] = f"Bases: {listed} (APIs abiertas; ver docs/integraciones.md)."
         auto[2] = "Cada base se consulta por separado con su propia cadena."
         auto[7] = "Import RIS/BibTeX en protocols/<slug>/imported/ (Scopus/WoS/gestores)."
         auto[8] = "Cadenas completas versionadas en protocols/<slug>/search_strings/<base>.txt."
@@ -304,12 +333,10 @@ def render_prisma_abstracts_checklist(
         sources = list(databases or [])
         if search_log is not None:
             executed = f"{engine_search_date(search_log)} (registrada por el motor)"
-            if not sources:
-                sources = [
-                    "búsqueda inyectada (search_fn)" if e.kind == "injected" else e.database
-                    for e in search_log.entries
-                    if _ran_in_engine(e)
-                ]
+            if sources:
+                sources = label_databases(sources, search_log)
+            else:
+                sources = [_engine_source(e) for e in search_log.entries if _ran_in_engine(e)]
         listed = ", ".join(sources) or "(ninguna registrada)"
         auto[4] = f"Bases: {listed} · última búsqueda: {executed}."
     if counts is not None:

@@ -295,6 +295,27 @@ def test_decision_malformada_en_corrida_nueva_queda_interrumpida_sin_caida(
     assert info.interruptions == []
 
 
+def test_run_json_bloqueado_no_tapa_el_error_de_configuracion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `config_error` es contabilidad en el camino de error, como `interrupted`: si falla
+    # (run.json bloqueado), la DecisionFileError original tiene que llegar al CLI (rc 2),
+    # no un PermissionError.
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    assert run_pipeline(protocol, EXAMPLE, ctx, search_fn=_busqueda).status == "paused"
+    (ctx.run_dir / "screening_ta" / "decision.yml").write_text("approved: [\n", encoding="utf-8")
+    _run_json_bloqueado(monkeypatch)
+
+    with pytest.raises(DecisionFileError):
+        resume_review(ctx.run_dir)
+
+    # La entrada de `resumes` que añadió `ensure_snapshot` se conserva: registra el intento.
+    info = read_run_info(ctx.run_dir)
+    assert len(info.resumes) == 1
+    assert info.interruptions == []
+
+
 def test_recuperacion_en_diario_y_texto_en_cache(tmp_path: Path) -> None:
     descargas: list[str] = []
 

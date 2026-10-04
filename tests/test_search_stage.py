@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from fakes import fetch_disponible
 
 from revisia.agents import search_backends
 from revisia.config import load_protocol
@@ -17,6 +18,7 @@ from revisia.orchestration.journal import JournalError
 from revisia.orchestration.pipeline import run_pipeline
 from revisia.orchestration.run_context import RunContext
 from revisia.orchestration.search_stage import run_search
+from revisia.orchestration.snapshot import read_run_info
 from revisia.provenance.runmeta import sha256_text
 from revisia.schemas.artifacts import SearchLog
 from revisia.schemas.records import SearchRecord
@@ -275,3 +277,36 @@ def test_log_de_busqueda_ilegible_al_reanudar_es_error_del_diario(
 
     with pytest.raises(JournalError, match=r"log\.json.*empieza una nueva"):
         _buscar(proto, ctx)
+
+
+def test_log_ilegible_con_failures_json_presente_es_error_del_diario_y_no_caida(
+    tmp_path: Path,
+) -> None:
+    # `failures.json` presente hacía que el log no se leyera al reanudar: el error salía
+    # al escribir el entregable como ValidationError, que el pipeline tomaba por una caída
+    # (rc 3, con una interrupción nueva en run.json) y cada reanudación lo repetía.
+    def busqueda(query: str, n: int) -> list[SearchRecord]:
+        return [SearchRecord(record_id="rec-1", title="LLM screening", source_db="OpenAlex")]
+
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    resultado = run_pipeline(
+        protocol, EXAMPLE, ctx, auto_approve=True, search_fn=busqueda, fetch_fn=fetch_disponible
+    )
+    assert resultado.status == "completed"
+    carpeta = ctx.run_dir / "01_search"
+    (carpeta / "failures.json").write_text("[]", encoding="utf-8")
+    (carpeta / "log.json").write_text('{"entries": 3}', encoding="utf-8")
+
+    for _ in range(2):  # y no en bucle: cada reanudación da el mismo error de configuración
+        with pytest.raises(JournalError, match=r"log\.json.*empieza una nueva"):
+            run_pipeline(
+                protocol,
+                EXAMPLE,
+                RunContext.open(ctx.run_dir),
+                auto_approve=True,
+                search_fn=busqueda,
+                fetch_fn=fetch_disponible,
+            )
+
+    assert read_run_info(ctx.run_dir).interruptions == []

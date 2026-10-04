@@ -167,6 +167,68 @@ DEFAULT_MAX_RESULTS = 50
 DEFAULT_RUNS_ROOT = "runs"
 # Recorte del error real que cita el aviso de un fichero dañado.
 _MAX_DETAIL_CHARS = 300
+# Fichero de la corrida que valida cada modelo de pydantic que puede fallar al leerla.
+_MODEL_FILES = {"RunInfo": "run.json", "ReviewProtocol": "00_protocol/protocol.yml"}
+
+
+def _describe_damage(
+    exc: ValidationError | yaml.YAMLError | UnicodeDecodeError,
+) -> tuple[str, str | None]:
+    """Qué fichero, campo o línea falló, y cuál es ese fichero si se sabe.
+
+    Devuelve ``(detalle, fichero)``. Con solo la primera línea de ``str(exc)`` un
+    ``RunInfo`` con ``{}`` decía «7 validation errors for RunInfo» sin el campo, y un
+    YAML roto, «while parsing a flow sequence» sin línea ni columna (revisión de la
+    pista C). ``fichero`` es ``None`` cuando no se puede saber: ``problem_mark.name`` es
+    ``<unicode string>`` si el YAML se cargó desde un ``str``, y un ``ValidationError``
+    solo trae el nombre del modelo.
+    """
+    if isinstance(exc, ValidationError):
+        fichero = _MODEL_FILES.get(exc.title)
+        errores = exc.errors()
+        primero = errores[0] if errores else {}
+        campo = ".".join(str(parte) for parte in primero.get("loc", ()))
+        motivo = primero.get("msg", "")
+        if campo:
+            motivo = f"{campo}: {motivo}"
+        mas = f" (+{len(errores) - 1} más)" if len(errores) > 1 else ""
+        sujeto = f"{fichero} no es válido" if fichero else "un fichero no es válido"
+        return f"{sujeto} ({exc.title}): {motivo}{mas}", fichero
+    if isinstance(exc, yaml.YAMLError):
+        problema = getattr(exc, "problem", None)
+        if not problema:
+            lineas = str(exc).splitlines()
+            problema = lineas[0] if lineas else type(exc).__name__
+        marca = getattr(exc, "problem_mark", None)
+        fichero = None
+        donde = ""
+        if marca is not None:
+            donde = f" (línea {marca.line + 1}, columna {marca.column + 1})"
+            nombre = getattr(marca, "name", None)
+            if nombre and not nombre.startswith("<"):
+                fichero = nombre
+        sujeto = f"{fichero}: YAML no válido" if fichero else "YAML no válido"
+        return f"{sujeto}: {problema}{donde}", fichero
+    return f"algún fichero de la corrida no es UTF-8 válido: {exc}", None
+
+
+def _damage_advice(exc: BaseException, fichero: str | None) -> str:
+    """Consejo según el fichero: uno de estado se puede arreglar a mano o rehacer."""
+    if fichero is None:
+        return (
+            "Si el fichero es run.json o está en 00_protocol/, la corrida no es reanudable: "
+            "empieza una nueva con `revisia run <protocolo>`."
+        )
+    ruta = Path(fichero)
+    if ruta.name == "run.json" or "00_protocol" in ruta.parts:
+        # Un `run.json` editado a mano con un campo mal se puede arreglar: no se afirma
+        # «no reanudable» de forma tajante.
+        indicado = "el campo" if isinstance(exc, ValidationError) else "la línea"
+        return (
+            f"Corrige {indicado} indicado si sabes lo que haces o empieza una corrida nueva "
+            "con `revisia run <protocolo>`."
+        )
+    return "Revisa ese fichero."
 
 
 def _run_guarded(command: Callable[[], int]) -> int:
@@ -209,19 +271,16 @@ def _run_guarded(command: Callable[[], int]) -> int:
         # mano llega aquí como el error crudo de pydantic/YAML, antes de que el
         # pipeline pueda convertirlo en `RunInterrupted`: es un error de uso, no un bug.
         # Pero también puede venir de otro fichero (p. ej. `manifest.yml` al sedimentar en
-        # el cerebro tras completar la corrida): se cita el error real y el consejo de
-        # empezar una corrida nueva solo vale para los ficheros de estado.
+        # el cerebro tras completar la corrida): se dice qué fichero, qué campo o qué línea
+        # cuando se sabe, y el consejo depende de si es un fichero de estado.
         from revisia.agents import _http
 
-        lineas = str(exc).splitlines()
+        detalle, fichero = _describe_damage(exc)
         # Redactar antes de recortar: un secreto cortado a medias ya no casaría con el patrón.
-        detalle = _http.redact_secrets(f"{type(exc).__name__}: {lineas[0] if lineas else ''}")
-        print(
-            f"error: un fichero está dañado o no es válido ({detalle[:_MAX_DETAIL_CHARS]}).\n"
-            "Si el fichero es run.json o está en 00_protocol/, la corrida no es reanudable: "
-            "empieza una nueva con `revisia run <protocolo>`.",
-            file=sys.stderr,
-        )
+        detalle = _http.redact_secrets(detalle)
+        if len(detalle) > _MAX_DETAIL_CHARS:
+            detalle = detalle[: _MAX_DETAIL_CHARS - 1] + "…"
+        print(f"error: {detalle}\n{_damage_advice(exc, fichero)}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
         print(

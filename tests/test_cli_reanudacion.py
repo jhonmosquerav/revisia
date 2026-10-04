@@ -4,6 +4,7 @@ spec 2026-10-04 §7)."""
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -354,28 +355,99 @@ def test_error_de_otro_fichero_no_se_atribuye_a_run_json(
 
     err = capsys.readouterr().err
     assert rc == 2
-    assert "YAMLError: manifest.yml ilegible" in err  # tipo y primera línea del error real
+    assert "YAML no válido: manifest.yml ilegible" in err  # el problema real, primera línea
     assert "SECRETO123" not in err and "api_key=<redacted>" in err
     assert max(len(linea) for linea in err.splitlines()) < 400  # recortado a ~300
     assert "Si el fichero es run.json o está en 00_protocol/, la corrida no es reanudable" in err
     assert "(run.json o 00_protocol/)" not in err  # ya no lo afirma sin condición
 
 
-def test_error_de_run_json_nombra_el_modelo_que_no_valida(
+def test_error_de_run_json_nombra_el_fichero_y_el_campo(
     tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
+    # Con solo la primera línea, `{}` decía «7 validation errors for RunInfo» sin el
+    # campo ni el fichero (revisión de la pista C, I1).
     run_dir = _corrida_en_pausa(tmp_path)
     (run_dir / "run.json").write_text("{}", encoding="utf-8")
 
     assert cli.main(["run", "--resume", str(run_dir)]) == 2
 
     err = capsys.readouterr().err
-    assert "ValidationError" in err and "RunInfo" in err
-    assert "la corrida no es reanudable: empieza una nueva con `revisia run <protocolo>`" in err
+    assert "run.json no es válido (RunInfo)" in err
+    assert "slug: Field required (+6 más)" in err
+    # Un run.json editado a mano se puede arreglar: el consejo no afirma «no reanudable».
+    assert "Corrige el campo indicado si sabes lo que haces o empieza una corrida nueva" in err
+    assert "no es reanudable" not in err
+
+
+def test_error_de_run_json_con_un_campo_de_tipo_erroneo_nombra_ese_campo(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    run_dir = _corrida_en_pausa(tmp_path)
+    datos = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    datos["max_results"] = "muchos"
+    (run_dir / "run.json").write_text(json.dumps(datos), encoding="utf-8")
+
+    assert cli.main(["run", "--resume", str(run_dir)]) == 2
+
+    err = capsys.readouterr().err
+    assert "run.json no es válido (RunInfo): max_results: " in err
+    assert "más)" not in err  # solo falla ese campo
+
+
+def test_error_de_yaml_roto_en_el_protocolo_de_la_corrida_da_linea_y_columna(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    # «while parsing a flow sequence» sin línea ni columna no deja encontrar el error.
+    run_dir = _corrida_en_pausa(tmp_path)
+    (run_dir / "00_protocol" / "protocol.yml").write_text(
+        "slug: demo\ndatabases: [OpenAlex, \n", encoding="utf-8"
+    )
+
+    assert cli.main(["run", "--resume", str(run_dir)]) == 2
+
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert re.search(r"YAML no válido: .+ \(línea \d+, columna \d+\)", err)
+    # Desde un `str`, PyYAML no sabe el nombre del fichero: el consejo es el condicional.
+    assert "Si el fichero es run.json o está en 00_protocol/" in err
+
+
+def test_error_de_un_fichero_que_no_es_utf8_lo_dice(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    run_dir = _corrida_en_pausa(tmp_path)
+    (run_dir / "00_protocol" / "protocol.yml").write_bytes(b"slug: caf\xe9\n")
+
+    assert cli.main(["run", "--resume", str(run_dir)]) == 2
+
+    err = capsys.readouterr().err
+    assert "algún fichero de la corrida no es UTF-8 válido" in err
+    assert "'utf-8' codec can't decode byte 0xe9 in position" in err  # codificación y posición
+
+
+def test_error_de_validacion_de_otro_modelo_no_inventa_el_fichero(
+    capsys: pytest.CaptureFixture,
+) -> None:
+    from pydantic import BaseModel
+
+    class Otro(BaseModel):
+        campo: int
+
+    def _falla() -> int:
+        Otro.model_validate({"campo": "x"})  # lanza ValidationError
+        return 0
+
+    assert cli._run_guarded(_falla) == 2
+
+    err = capsys.readouterr().err
+    assert "un fichero no es válido (Otro): campo: " in err
+    assert "Si el fichero es run.json o está en 00_protocol/" in err  # no se sabe cuál es
 
 
 def _excepciones_de_la_corrida(tmp_path: Path) -> list:
-    """Una instancia real de cada excepción que ``_run_guarded`` traduce, con su rc."""
+    """Una instancia real de cada excepción que ``_run_guarded`` traduce, con su rc y un
+    fragmento propio de lo que imprime."""
     from revisia.llm.preflight import PreflightError, PreflightIssue, PreflightReport
     from revisia.orchestration.hitl import DecisionFileError
     from revisia.orchestration.journal import JournalError
@@ -384,23 +456,41 @@ def _excepciones_de_la_corrida(tmp_path: Path) -> list:
 
     informe = PreflightReport(issues=(PreflightIssue("error", "llm.default", "sin API key"),))
     return [
-        (JournalError("diario corrupto"), 2),
-        (RunDirExistsError(f"{tmp_path} ya existe"), 2),
-        (ProtocolMismatchError("no coinciden", ["protocol.yml"]), 2),
-        (LegacyRunError(f"{tmp_path}: corrida anterior a la Ola 1"), 2),
-        (DecisionFileError("decision.yml ilegible"), 2),
-        (PreflightError(informe), 2),
-        (FileNotFoundError("No se encontró protocol.yml"), 2),
-        (RunInterrupted(tmp_path, "screening_ta", "RuntimeError: 429"), 3),
-        (KeyboardInterrupt(), 130),
+        (JournalError("diario corrupto"), 2, "error: diario corrupto"),
+        (RunDirExistsError(f"{tmp_path} ya existe"), 2, "ya existe"),
+        (ProtocolMismatchError("no coinciden", ["protocol.yml"]), 2, "no coinciden"),
+        (LegacyRunError(f"{tmp_path}: corrida anterior a la Ola 1"), 2, "anterior a la Ola 1"),
+        (DecisionFileError("decision.yml ilegible"), 2, "decision.yml ilegible"),
+        (PreflightError(informe), 2, "error [llm.default]: sin API key"),
+        (FileNotFoundError("No se encontró protocol.yml"), 2, "No se encontró protocol.yml"),
+        (
+            RunInterrupted(tmp_path, "screening_ta", "RuntimeError: 429"),
+            3,
+            "corrida interrumpida en 'screening_ta': RuntimeError: 429",
+        ),
+        (KeyboardInterrupt(), 130, "Reanuda con: revisia run --resume"),
     ]
 
 
-@pytest.mark.parametrize("indice", range(9), ids=lambda i: f"caso{i}")
+_GUARDADAS = [
+    "JournalError",
+    "RunDirExistsError",
+    "ProtocolMismatchError",
+    "LegacyRunError",
+    "DecisionFileError",
+    "PreflightError",
+    "FileNotFoundError",
+    "RunInterrupted",
+    "KeyboardInterrupt",
+]
+
+
+@pytest.mark.parametrize("indice", range(len(_GUARDADAS)), ids=_GUARDADAS)
 def test_run_guarded_traduce_cada_excepcion_en_su_codigo(
     tmp_path: Path, capsys: pytest.CaptureFixture, indice: int
 ) -> None:
-    excepcion, esperado = _excepciones_de_la_corrida(tmp_path)[indice]
+    excepcion, esperado, fragmento = _excepciones_de_la_corrida(tmp_path)[indice]
+    assert type(excepcion).__name__ == _GUARDADAS[indice]  # los ids no se desincronizan
 
     def _falla() -> int:
         raise excepcion
@@ -409,7 +499,7 @@ def test_run_guarded_traduce_cada_excepcion_en_su_codigo(
 
     err = capsys.readouterr().err
     assert "Traceback" not in err
-    assert err.strip()  # siempre dice algo
+    assert fragmento in err
 
 
 def test_brain_ya_sedimentada_no_dice_que_se_registrara(

@@ -76,7 +76,12 @@ from revisia.orchestration.run_context import (
     RunDirExistsError,
     RunInterrupted,
 )
-from revisia.orchestration.search_stage import SEARCH_DIR, multi_database_search, run_search
+from revisia.orchestration.search_stage import (
+    SEARCH_DIR,
+    multi_database_search,
+    read_search_log,
+    run_search,
+)
 from revisia.orchestration.snapshot import (
     SEARCH_STRINGS_DIR,
     SNAPSHOT_DIR,
@@ -95,7 +100,6 @@ from revisia.schemas.artifacts import (
     RetrievalOutcome,
     RunInterruption,
     RunStatus,
-    SearchLog,
 )
 from revisia.schemas.effects import EffectInput
 from revisia.schemas.extraction import ExtractionRecord
@@ -265,7 +269,9 @@ class _Run:
         recupera el ``status``/``stage`` con que llegó (p. ej. ``paused`` en
         ``screening_ta``) en vez de quedarse en ``running``; si era nueva, queda
         ``interrupted`` en la etapa en curso. En ambos casos sin entrada en
-        ``interruptions``. Best-effort, como ``interrupted`` (revisión de B8, I2).
+        ``interruptions``. La entrada de ``resumes`` que añadió ``ensure_snapshot`` se
+        conserva: registra el intento de reanudar, aunque no llegara a ejecutar nada.
+        Best-effort, como ``interrupted`` (revisión de B8, I2).
         """
         with contextlib.suppress(Exception):
             info = read_run_info(self.ctx.run_dir)
@@ -994,9 +1000,7 @@ def _write_deliverables(
 ) -> Path:
     """Escribe el entregable completo (``deliverable/``) y devuelve su carpeta."""
     protocol = run.protocol
-    search_log = SearchLog.model_validate_json(
-        (run.ctx.run_dir / SEARCH_DIR / "log.json").read_text(encoding="utf-8")
-    )
+    search_log = read_search_log(run.ctx.run_dir)
     deliverable = run.ctx.deliverable_dir()
     (deliverable / "documento.md").write_text(
         f"# {protocol.title}\n\n## Síntesis narrativa (borrador)\n\n{narrative}\n",

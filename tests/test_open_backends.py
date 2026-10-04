@@ -66,6 +66,42 @@ def test_redact_secrets_conserva_el_contexto_de_cabeceras_y_bearer() -> None:
 
 
 @pytest.mark.parametrize(
+    ("msg", "secreto"),
+    [
+        (
+            "400 API key not valid: AIzaSyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q. Revisa tu clave.",
+            "AIzaSyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q",
+        ),
+        (
+            "401 Invalid token: hf_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 (Hugging Face)",
+            "hf_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789",
+        ),
+        ("{'x-goog-api-key': 'valorSuelto123', 'accept': 'json'}", "valorSuelto123"),
+    ],
+    ids=["clave-google", "token-huggingface", "cabecera-x-goog-api-key"],
+)
+def test_redact_secrets_oculta_claves_de_google_y_huggingface(msg: str, secreto: str) -> None:
+    out = _http.redact_secrets(msg)
+    assert secreto not in out
+    assert "<redacted>" in out
+
+
+def test_redact_secrets_de_google_y_huggingface_conserva_el_contexto() -> None:
+    assert (
+        _http.redact_secrets("API key not valid: AIzaSyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q.")
+        == "API key not valid: <redacted>."
+    )
+    assert (
+        _http.redact_secrets("Invalid token hf_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 en la Hub")
+        == "Invalid token <redacted> en la Hub"
+    )
+    assert (
+        _http.redact_secrets("{'x-goog-api-key': 'valorSuelto123', 'accept': 'json'}")
+        == "{'x-goog-api-key': '<redacted>', 'accept': 'json'}"
+    )
+
+
+@pytest.mark.parametrize(
     "texto",
     [
         "el prefijo sk- de las claves de OpenAI",
@@ -74,6 +110,11 @@ def test_redact_secrets_conserva_el_contexto_de_cabeceras_y_bearer() -> None:
         "risk-adjusted-outcome-measures",
         "Authorization required for this resource",
         "una nota sin credenciales: search=q&page=2",
+        "las claves de Google empiezan por AIza y los tokens de Hugging Face por hf_",
+        "hf_transformers_cache_dir_no_es_un_token_de_acceso",  # los guiones bajos lo cortan
+        "OAIzaSyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q",  # `AIza` dentro de una palabra
+        "chf_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789",  # `hf_` dentro de una palabra
+        "api-key-rotation: mensual",  # no es la cabecera `api-key`
     ],
 )
 def test_redact_secrets_no_sobre_oculta_prosa(texto: str) -> None:
