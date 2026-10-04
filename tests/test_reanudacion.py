@@ -5,16 +5,18 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 from fakes import ScriptedProvider, fetch_disponible, fetch_no_disponible
-from hitl_helpers import correr_hasta
+from hitl_helpers import correr_hasta, responder_gate
 
 from revisia.agent_driver import run_review_with_agent
 from revisia.agents.fulltext import FullText
 from revisia.config import load_protocol
-from revisia.llm.base import LLMRequest
+from revisia.llm.base import LLMRequest, LLMResponse
 from revisia.llm.preflight import PreflightError
 from revisia.orchestration import pipeline as pipeline_mod
 from revisia.orchestration.flow import resume_review
@@ -24,7 +26,7 @@ from revisia.orchestration.pipeline import run_pipeline
 from revisia.orchestration.run_context import RunContext, RunInterrupted
 from revisia.orchestration.snapshot import read_run_info
 from revisia.provenance.runmeta import sha256_text
-from revisia.schemas.artifacts import JournalEntry
+from revisia.schemas.artifacts import GATED_STAGES, JournalEntry, LLMCall
 from revisia.schemas.records import SearchRecord
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "demo-mini-review"
@@ -589,3 +591,108 @@ def test_rob_en_diario_no_se_repite(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert _llamadas(proveedor, "RIESGO DE SESGO") == 2
     entradas = _diario(ctx, "07_rob/journal.jsonl")
     assert [(e.record_id, len(e.metas)) for e in entradas] == [("rec-1", 1), ("rec-2", 1)]
+
+
+def _proto_con(tmp_path: Path, **cambios) -> Path:
+    """Copia del demo con cambios en protocol.yml."""
+    proto = tmp_path / "proto"
+    shutil.copytree(EXAMPLE, proto)
+    raw = yaml.safe_load((proto / "protocol.yml").read_text(encoding="utf-8"))
+    raw.update(cambios)
+    (proto / "protocol.yml").write_text(yaml.safe_dump(raw, allow_unicode=True), "utf-8")
+    return proto
+
+
+def _llm_calls(ctx: RunContext) -> list[LLMCall]:
+    lineas = ctx.llm_calls_path.read_text(encoding="utf-8").splitlines()
+    return [LLMCall.model_validate_json(x) for x in lineas]
+
+
+def test_llamadas_del_juez_quedan_en_llm_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proveedor = ScriptedProvider(sintesis="La IA reduce el cribado [rec-1] y la carga [rec-2].")
+    monkeypatch.setattr(pipeline_mod, "build_provider", lambda _cfg: proveedor)
+    proto = _proto_con(tmp_path, grounding="agent")
+    protocol = load_protocol(proto)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+    run_pipeline(
+        protocol, proto, ctx, auto_approve=True, search_fn=_busqueda, fetch_fn=fetch_disponible
+    )
+
+    juez = [c for c in _llm_calls(ctx) if c.stage == "verificacion"]
+    assert [c.record_id for c in juez] == ["verificacion", "verificacion"]  # una por cita
+    (entrada,) = _diario(ctx, "06_synthesis/verification.jsonl")
+    assert entrada.metas == juez
+    assert len(entrada.output["checks"]) == 2
+
+
+class _SintesisCambiante(ScriptedProvider):
+    """Cada síntesis sale distinta: sin diario, el gate final no convergería."""
+
+    def complete(self, req: LLMRequest) -> LLMResponse:
+        resp = super().complete(req)
+        return LLMResponse(text=f"{resp.text} (versión {self.calls})", meta=resp.meta)
+
+
+def test_gate_final_converge_tras_reanudar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    proveedor = _SintesisCambiante()
+    monkeypatch.setattr(pipeline_mod, "build_provider", lambda _cfg: proveedor)
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    pausa = correr_hasta(
+        protocol, EXAMPLE, ctx, search_fn=_busqueda, fetch_fn=fetch_disponible, parar_en="reporte"
+    )
+    assert (pausa.status, pausa.stage) == ("paused", "reporte")
+    solicitud = (ctx.run_dir / "reporte" / "review_request.yml").read_text(encoding="utf-8")
+
+    otra = run_pipeline(protocol, EXAMPLE, RunContext.open(ctx.run_dir), fetch_fn=fetch_disponible)
+    assert (otra.status, otra.stage) == ("paused", "reporte")
+    assert (ctx.run_dir / "reporte" / "review_request.yml").read_text("utf-8") == solicitud
+
+    responder_gate(ctx.run_dir, "reporte")
+    final = run_pipeline(protocol, EXAMPLE, RunContext.open(ctx.run_dir), fetch_fn=fetch_disponible)
+    assert final.status == "completed"
+    assert _llamadas(proveedor, "SWiM") == 1  # la síntesis se pidió una sola vez
+
+
+def test_reanudar_no_repite_llamadas_llm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    proveedor = ScriptedProvider()
+    monkeypatch.setattr(pipeline_mod, "build_provider", lambda _cfg: proveedor)
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    primera = correr_hasta(protocol, EXAMPLE, ctx, search_fn=_busqueda, fetch_fn=fetch_disponible)
+    assert primera.status == "completed"
+    llamadas, lineas = proveedor.calls, len(_llm_calls(ctx))
+
+    segunda = run_pipeline(
+        protocol, EXAMPLE, RunContext.open(ctx.run_dir), fetch_fn=fetch_disponible
+    )
+
+    assert segunda.status == "completed"
+    assert proveedor.calls == llamadas  # 0 llamadas en la segunda pasada
+    assert len(_llm_calls(ctx)) == lineas
+    assert segunda.counts == primera.counts
+
+
+def test_payloads_estables_entre_reanudaciones_y_sin_rutas_absolutas(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proveedor = _SintesisCambiante()  # sin diario, cada invocación cambiaría el reporte
+    monkeypatch.setattr(pipeline_mod, "build_provider", lambda _cfg: proveedor)
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    correr_hasta(protocol, EXAMPLE, ctx, search_fn=_busqueda, fetch_fn=fetch_disponible)
+
+    def solicitudes() -> dict[str, str]:
+        return {
+            g: (ctx.run_dir / g / "review_request.yml").read_text(encoding="utf-8")
+            for g in GATED_STAGES
+        }
+
+    antes = solicitudes()
+    run_pipeline(protocol, EXAMPLE, RunContext.open(ctx.run_dir), fetch_fn=fetch_disponible)
+    assert solicitudes() == antes  # los cinco gates, byte a byte
+    for texto in antes.values():
+        assert str(tmp_path) not in texto
+        assert tmp_path.as_posix() not in texto

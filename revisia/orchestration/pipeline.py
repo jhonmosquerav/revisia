@@ -26,6 +26,7 @@ from functools import partial
 from pathlib import Path
 
 import yaml
+from pydantic import BaseModel
 
 from revisia.agents import _http
 from revisia.agents import dedup as dedup_agent
@@ -802,6 +803,69 @@ def _meta_analysis(run: _Run) -> tuple[MetaAnalysisResult | None, str]:
     return meta_result, meta_display
 
 
+class _Narrative(BaseModel):
+    """Salida del diario de síntesis: ``{narrative}`` (spec §4.3)."""
+
+    narrative: str
+
+
+def _synthesize_one(
+    run: _Run,
+    provider: LLMProvider,
+    cfg: ProviderConfig,
+    included: list[SearchRecord],
+    extractions: dict[str, ExtractionRecord],
+) -> tuple[_Narrative, list[RunMeta]]:
+    """Síntesis narrativa (``compute`` del diario de síntesis)."""
+    narrative, meta = reporte_agent.synthesize_narrative(
+        provider,
+        question=run.question,
+        included=included,
+        extractions=extractions,
+        temperature=cfg.temperature,
+        seed=cfg.seed,
+    )
+    return _Narrative(narrative=narrative), [meta]
+
+
+def _verify_one(
+    run: _Run,
+    narrative: str,
+    included: list[SearchRecord],
+    sources: dict[str, str],
+    *,
+    provider: LLMProvider,
+    cfg: ProviderConfig,
+    embedder: Embedder | None,
+) -> tuple[VerificationReport, list[RunMeta]]:
+    """Verificación anti-alucinación (``compute`` de su diario).
+
+    En modo ``agent`` cada juicio es una llamada al LLM: ``on_meta`` las recoge
+    para que el diario y ``llm_calls.jsonl`` las registren.
+    """
+    metas: list[RunMeta] = []
+    verify_kwargs: dict = {"sources": sources}
+    grounding_mode = getattr(run.protocol, "grounding", "embedder")
+    if grounding_mode == "agent":
+        from revisia.rag.grounding import make_provider_judge
+
+        verify_kwargs["judge"] = make_provider_judge(
+            provider,
+            f"{cfg.provider}:{cfg.model}",
+            temperature=0.0,
+            on_meta=metas.append,
+        )
+    elif grounding_mode != "existence":  # "embedder" (default)
+        verify_kwargs["embedder"] = embedder or HashEmbedder()
+    verification = verificador_agent.verify_narrative(
+        "reporte",
+        narrative,
+        [r.record_id for r in included],
+        **verify_kwargs,
+    )
+    return verification, metas
+
+
 def _synthesize_and_verify(
     run: _Run,
     included: list[SearchRecord],
@@ -813,35 +877,52 @@ def _synthesize_and_verify(
 
     Modo según ``protocol.grounding``: "agent" (un modelo juzga; cruza idiomas,
     sin vectores), "existence" (solo id en corpus) o "embedder" (coseno léxico).
+    Las dos van al diario (``record_id`` ``"sintesis"`` y ``"verificacion"``):
+    sin él, reanudar volvería a llamar al LLM, cambiaría la narrativa y con ella
+    la solicitud del gate final, que no convergería nunca (spec §2, hallazgo 1).
     """
     synth_cfg = run.protocol.provider_for("sintesis")
     synth_provider = build_provider(synth_cfg)
-    narrative, meta = reporte_agent.synthesize_narrative(
-        synth_provider,
-        question=run.question,
-        included=included,
-        extractions=extractions,
-        temperature=synth_cfg.temperature,
-        seed=synth_cfg.seed,
-    )
-    run.ctx.record_meta(meta, stage="sintesis", record_id="sintesis")
+    narrative = journaled(
+        StageJournal(run.ctx, "sintesis"),
+        record_id="sintesis",
+        inputs={
+            "incluidos": [[r.record_id, r.title] for r in included],
+            "extracciones_sha256": canonical_sha256(
+                {k: v.model_dump(mode="json") for k, v in extractions.items()}
+            ),
+            "proveedor": [
+                f"{synth_cfg.provider}:{synth_cfg.model}",
+                synth_cfg.temperature,
+                synth_cfg.seed,
+            ],
+        },
+        model=_Narrative,
+        compute=partial(_synthesize_one, run, synth_provider, synth_cfg, included, extractions),
+        run_ctx=run.ctx,
+    ).narrative
 
     sources = {r.record_id: (fulltexts.get(r.record_id) or r.abstract or "") for r in included}
-    verify_kwargs: dict = {"sources": sources}
-    grounding_mode = getattr(run.protocol, "grounding", "embedder")
-    if grounding_mode == "agent":
-        from revisia.rag.grounding import make_provider_judge
-
-        verify_kwargs["judge"] = make_provider_judge(
-            synth_provider, f"{synth_cfg.provider}:{synth_cfg.model}", temperature=0.0
-        )
-    elif grounding_mode != "existence":  # "embedder" (default)
-        verify_kwargs["embedder"] = embedder or HashEmbedder()
-    verification = verificador_agent.verify_narrative(
-        "reporte",
-        narrative,
-        [r.record_id for r in included],
-        **verify_kwargs,
+    verification = journaled(
+        StageJournal(run.ctx, "verificacion"),
+        record_id="verificacion",
+        inputs={
+            "narrativa_sha256": sha256_text(narrative),
+            "fuentes_sha256": canonical_sha256(sources),
+            "modo": getattr(run.protocol, "grounding", "embedder"),
+        },
+        model=VerificationReport,
+        compute=partial(
+            _verify_one,
+            run,
+            narrative,
+            included,
+            sources,
+            provider=synth_provider,
+            cfg=synth_cfg,
+            embedder=embedder,
+        ),
+        run_ctx=run.ctx,
     )
     run.ctx.write_json("06_synthesis/verification.json", verification.model_dump())
     return narrative, verification
