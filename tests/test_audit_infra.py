@@ -198,9 +198,9 @@ def test_guarda_de_anidamiento_respeta_sus_limites(tmp_path) -> None:
     assert cargar('x: "' + "[" * 5_000 + '"\n').ok
     assert cargar("x: '" + "{" * 5_000 + "'\n").ok
     assert cargar("x: 1  # " + "[" * 5_000 + "\n").ok
-    # Una sangría de 2 000 espacios pasa; de 2 001 no.
-    assert cargar("x: |\n" + " " * 2_000 + "t\n").ok
-    assert "anidada" in cargar("x: |\n" + " " * 2_001 + "t\n").error
+    # Una sangría de 500 espacios pasa; de 501 no.
+    assert cargar("x: |\n" + " " * 500 + "t\n").ok
+    assert "anidada" in cargar("x: |\n" + " " * 501 + "t\n").error
     # Hasta 500 indicadores `- ` encadenados en una línea pasan; 501 no.
     assert cargar("- " * 500 + "x\n", root=list).ok
     assert "anidada" in cargar("- " * 501 + "x\n", root=list).error

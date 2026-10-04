@@ -54,14 +54,14 @@ _YAML_LOADER: type = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 # Guarda contra el anidamiento hostil. `CSafeLoader` compone los nodos con recursión
 # nativa de C, que `sys.setrecursionlimit` no limita: medido en Windows con Python
-# 3.13, a ~2 700 niveles (igual con `[`, con `- ` encadenados y con sangría de un
-# espacio por nivel) desborda la pila (0xC00000FD) y mata el proceso sin que ningún
-# `except` lo atrape. Los manifiestos reales tienen profundidad < 20, de modo que
-# los límites van con holgura y rechazan sin cargar. Se aplican también con el
-# `SafeLoader` de Python puro para que el veredicto no dependa de tener libyaml.
-_YAML_MAX_FLOW_DEPTH = 500  # niveles netos de `[`/`{` fuera de comillas y comentarios
-_YAML_MAX_INDENT = 2000  # espacios de sangría de una línea
-_YAML_MAX_BLOCK_CHAIN = 500  # indicadores `- `/`? `/`: ` encadenados al inicio de una línea
+# 3.13, a ~2 680 niveles desborda la pila (0xC00000FD) y mata el proceso sin que
+# ningún `except` lo atrape. Los límites dejan un margen 5× contra esa medida para
+# rechazo preventivo sin cargar. Los manifiestos reales tienen profundidad < 20.
+# Se aplican también con el `SafeLoader` de Python puro para que el veredicto no
+# dependa de tener libyaml.
+_YAML_MAX_FLOW_DEPTH = 500  # niveles de `[`/`{` (margen 5× contra ~2 680)
+_YAML_MAX_INDENT = 500  # espacios de sangría de una línea (margen 5× contra ~2 680)
+_YAML_MAX_BLOCK_CHAIN = 500  # indicadores `- `/`? `/`: ` encadenados (margen 5×)
 
 # Comillas (dobles o simples) y comentarios se consumen enteros: los corchetes que
 # contienen no abren niveles. Es una aproximación a la gramática de YAML (ignora
