@@ -62,8 +62,9 @@ from revisia.extraction_agreement import (
     compute_extraction_agreement,
     select_double_extraction_subset,
 )
+from revisia.llm.base import LLMProvider
 from revisia.llm.preflight import PreflightError, preflight
-from revisia.llm.registry import build_provider
+from revisia.llm.registry import ProviderConfig, build_provider
 from revisia.meta_analysis import MetaAnalysisResult, meta_analyze
 from revisia.metrics import ScreeningMetrics, compute_screening_metrics
 from revisia.orchestration.hitl import DecisionFileError, GateResult, review_gate
@@ -83,7 +84,7 @@ from revisia.orchestration.snapshot import (
     read_run_info,
     write_run_info,
 )
-from revisia.provenance.runmeta import canonical_sha256, sha256_text, utc_now_iso
+from revisia.provenance.runmeta import RunMeta, canonical_sha256, sha256_text, utc_now_iso
 from revisia.rag.embed import Embedder, HashEmbedder
 from revisia.schemas.artifacts import (
     GATED_STAGES,
@@ -558,6 +559,29 @@ def _retrieve(
     return outcomes, texts
 
 
+def _screen_ft_one(
+    run: _Run,
+    provider: LLMProvider,
+    model_name: str,
+    cfg: ProviderConfig,
+    record: SearchRecord,
+    text: str,
+) -> tuple[ScreeningDecision, list[RunMeta]]:
+    """Cribado a texto completo de un registro recuperado (``compute`` de su diario)."""
+    decision, meta = screening_ft_agent.screen_fulltext(
+        provider,
+        model_name,
+        question=run.question,
+        criteria=run.criteria,
+        record=record,
+        text=text,
+        temperature=cfg.temperature,
+        seed=cfg.seed,
+    )
+    decision.fulltext_status = "retrieved"
+    return decision, [meta]
+
+
 def _fulltext(run: _Run, passed_ta: list[SearchRecord], fetch_fn: FetchFn | None) -> _FullTextStage:
     """Texto completo + cribado a texto completo (A0).
 
@@ -570,6 +594,7 @@ def _fulltext(run: _Run, passed_ta: list[SearchRecord], fetch_fn: FetchFn | None
     ft_cfg = run.protocol.provider_for("screening_ft")
     ft_provider = build_provider(ft_cfg)
     ft_model = f"{ft_cfg.provider}:{ft_cfg.model}"
+    journal = StageJournal(run.ctx, "screening_ft")
     ft_decisions: list[ScreeningDecision] = []
     for record in passed_ta:
         if not outcomes[record.record_id].available:
@@ -583,20 +608,31 @@ def _fulltext(run: _Run, passed_ta: list[SearchRecord], fetch_fn: FetchFn | None
                 )
             )
             continue
-        decision, meta = screening_ft_agent.screen_fulltext(
-            ft_provider,
-            ft_model,
-            question=run.question,
-            criteria=run.criteria,
-            record=record,
-            text=fulltexts[record.record_id],
-            temperature=ft_cfg.temperature,
-            seed=ft_cfg.seed,
+        decision = journaled(
+            journal,
+            record_id=record.record_id,
+            inputs={
+                "title": record.title,
+                "abstract": record.abstract,
+                "question": run.question,
+                "criteria": run.criteria,
+                "miembros": [[ft_model, ft_cfg.temperature, ft_cfg.seed]],
+                "text_sha256": outcomes[record.record_id].text_sha256,
+            },
+            model=ScreeningDecision,
+            compute=partial(
+                _screen_ft_one,
+                run,
+                ft_provider,
+                ft_model,
+                ft_cfg,
+                record,
+                fulltexts[record.record_id],
+            ),
+            run_ctx=run.ctx,
         )
-        decision.fulltext_status = "retrieved"
         decision.final_label = decision.human_label or decision.ensemble_label
         ft_decisions.append(decision)
-        run.ctx.record_meta(meta, stage="screening_ft", record_id=record.record_id)
     run.ctx.write_json("04_fulltext/decisions.json", [d.model_dump() for d in ft_decisions])
     not_retrieved = sum(1 for d in ft_decisions if d.fulltext_status == "not_retrieved")
     return _FullTextStage(ft_decisions, fulltexts, not_retrieved)

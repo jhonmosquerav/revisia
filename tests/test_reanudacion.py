@@ -516,3 +516,32 @@ def test_la_cache_se_escribe_en_un_temporal_se_fuerza_a_disco_y_se_renombra(
         assert eventos[i - 1] == ("fsync", len(contenido))  # fsync del temporal justo antes
         assert destino.read_bytes() == contenido
     assert list((ctx.run_dir / "04_fulltext" / "texts").glob("*.tmp")) == []
+
+
+def _llamadas(proveedor: ScriptedProvider, marca: str) -> int:
+    """Llamadas del proveedor cuyo prompt contiene ``marca`` (identifica la etapa)."""
+    return sum(marca in p for p in proveedor.prompts)
+
+
+def test_cribado_ft_en_diario_no_se_repite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    proveedor = ScriptedProvider()
+    monkeypatch.setattr(pipeline_mod, "build_provider", lambda _cfg: proveedor)
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    correr_hasta(
+        protocol,
+        EXAMPLE,
+        ctx,
+        search_fn=_busqueda,
+        fetch_fn=fetch_disponible,
+        parar_en="screening_ft",
+    )
+    assert _llamadas(proveedor, "TEXTO COMPLETO") == 2
+
+    run_pipeline(protocol, EXAMPLE, RunContext.open(ctx.run_dir), fetch_fn=fetch_disponible)
+
+    assert _llamadas(proveedor, "TEXTO COMPLETO") == 2
+    entradas = _diario(ctx, "04_fulltext/journal.jsonl")
+    assert [(e.record_id, len(e.metas)) for e in entradas] == [("rec-1", 1), ("rec-2", 1)]
+    assert all(e.output["fulltext_status"] == "retrieved" for e in entradas)
+    assert all(e.output["final_label"] is None for e in entradas)  # sin campos humanos
