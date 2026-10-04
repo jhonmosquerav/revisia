@@ -2,11 +2,15 @@
 
 Los loaders **nunca lanzan**: devuelven un :class:`Loaded` con el valor o con
 el error (``OSError``, ``UnicodeDecodeError``, JSON/YAML inválido, raíz de tipo
-inesperado, ``ValidationError``, ``RecursionError``). Antes de la Ola 1 un
+inesperado, ``ValidationError``, ``RecursionError``, YAML demasiado anidado y
+cualquier otra excepción del parser). Antes de la Ola 1 un
 ``manifest.yml`` con raíz de lista reventaba el auditor con ``AttributeError``
 y una línea corrupta del ledger se descartaba en silencio (auditoría
 2026-09-03, A11/C3): un auditor que revienta o que ignora lo ilegible no
-verifica nada.
+verifica nada. «Nunca lanzan» incluye lo que ningún ``except`` atrapa: un YAML
+con miles de niveles de anidamiento desborda la pila nativa de ``CSafeLoader`` y
+mata el proceso sin informe, así que se rechaza antes de cargarlo (revisión de
+la Tarea 4).
 
 ``AuditContext`` reúne lo que los checks comparten (manifiesto, ledger,
 decisiones efectivas, estado, protocolo) y lo calcula una sola vez.
@@ -15,6 +19,7 @@ decisiones efectivas, estado, protocolo) y lo calcula una sola vez.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
@@ -46,6 +51,25 @@ T = TypeVar("T")
 # El loader en C es órdenes de magnitud más rápido con manifiestos de miles de
 # `llm_calls`; PyYAML sin libyaml no lo trae.
 _YAML_LOADER: type = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+# Guarda contra el anidamiento hostil. `CSafeLoader` compone los nodos con recursión
+# nativa de C, que `sys.setrecursionlimit` no limita: medido en Windows con Python
+# 3.13, a ~2 700 niveles (igual con `[`, con `- ` encadenados y con sangría de un
+# espacio por nivel) desborda la pila (0xC00000FD) y mata el proceso sin que ningún
+# `except` lo atrape. Los manifiestos reales tienen profundidad < 20, de modo que
+# los límites van con holgura y rechazan sin cargar. Se aplican también con el
+# `SafeLoader` de Python puro para que el veredicto no dependa de tener libyaml.
+_YAML_MAX_FLOW_DEPTH = 500  # niveles netos de `[`/`{` fuera de comillas y comentarios
+_YAML_MAX_INDENT = 2000  # espacios de sangría de una línea
+_YAML_MAX_BLOCK_CHAIN = 500  # indicadores `- `/`? `/`: ` encadenados al inicio de una línea
+
+# Comillas (dobles o simples) y comentarios se consumen enteros: los corchetes que
+# contienen no abren niveles. Es una aproximación a la gramática de YAML (ignora
+# los escapes `\"` y las comillas multilínea), suficiente para una guarda; una
+# comilla suelta sin pareja en su línea no casa, así que el escaneo es lineal.
+_YAML_FLOW_TOKEN = re.compile(r""""[^"\n]*"|'[^'\n]*'|(?<![^\s])#[^\n]*|[\[\]{}]""")
+_YAML_DEEP_INDENT = re.compile(rf"^ {{{_YAML_MAX_INDENT + 1},}}[^ \r\n]", re.MULTILINE)
+_YAML_DEEP_CHAIN = re.compile(rf"^ *(?:[-?:][ \t]+){{{_YAML_MAX_BLOCK_CHAIN + 1},}}", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -100,18 +124,29 @@ def format_validation(exc: ValidationError, *, limit: int = 3) -> str:
 
 
 def read_text(run_dir: Path, rel: str) -> Loaded[str]:
-    """Lee un fichero de texto UTF-8."""
+    """Lee un fichero de texto UTF-8.
+
+    ``exists()``/``is_file()`` también pueden fallar (permisos, rutas inválidas):
+    van dentro del ``try`` y un fallo que no sea de decodificación queda como
+    ``error`` con el tipo de la excepción, no como excepción.
+    """
     path = run_dir / rel
-    if not path.exists():
-        return Loaded(rel, False)
-    if not path.is_file():
-        return Loaded(rel, True, error="no es un fichero")
     try:
+        if not path.exists():
+            return Loaded(rel, False)
+        if not path.is_file():
+            return Loaded(rel, True, error="no es un fichero")
         return Loaded(rel, True, path.read_text(encoding="utf-8"))
     except UnicodeDecodeError:
         return Loaded(rel, True, error="no es texto UTF-8 (¿UTF-16 o binario?)")
-    except OSError as exc:
+    except Exception as exc:  # fail-closed: «nunca lanzan» (spec §9.1) vale para todo `Exception`
         return Loaded(rel, True, error=f"no se pudo leer ({type(exc).__name__})")
+
+
+def _json_error(exc: Exception) -> str:
+    """``JSON inválido`` con el mensaje del parser; de una excepción inesperada, su tipo."""
+    detail = str(exc) if isinstance(exc, ValueError | RecursionError) else type(exc).__name__
+    return f"JSON inválido ({detail})"
 
 
 def read_json(
@@ -123,21 +158,61 @@ def read_json(
         return Loaded(rel, text.present, error=text.error)
     try:
         value = json.loads(text.value)
-    except (ValueError, RecursionError) as exc:
-        return Loaded(rel, True, error=f"JSON inválido ({exc})")
+    except Exception as exc:  # `ValueError`/`RecursionError` son lo normal; ninguna debe escapar
+        return Loaded(rel, True, error=_json_error(exc))
     if not isinstance(value, root):
         return Loaded(rel, True, error=f"la raíz es {_root_name(value)}, no {_type_names(root)}")
     return Loaded(rel, True, value)
 
 
+def _yaml_nesting_problem(text: str) -> str | None:
+    """Por qué el YAML se rechaza sin cargarlo, o ``None`` si pasa la guarda.
+
+    Ver las constantes ``_YAML_MAX_*``: el desbordamiento de pila de
+    ``CSafeLoader`` no se puede atrapar, así que se previene con una pasada
+    barata sobre el texto (lineal; sin cargar nada).
+    """
+    if _YAML_DEEP_INDENT.search(text):
+        return f"una línea con más de {_YAML_MAX_INDENT} espacios de sangría"
+    if _YAML_DEEP_CHAIN.search(text):
+        return f"más de {_YAML_MAX_BLOCK_CHAIN} indicadores `- `/`? ` encadenados en una línea"
+    # `count` es de C y acota la profundidad: casi todo manifiesto se libra del escaneo.
+    if text.count("[") + text.count("{") > _YAML_MAX_FLOW_DEPTH:
+        depth = 0
+        for token in _YAML_FLOW_TOKEN.finditer(text):
+            char = token.group()
+            if char in "[{":
+                depth += 1
+                if depth > _YAML_MAX_FLOW_DEPTH:
+                    return f"más de {_YAML_MAX_FLOW_DEPTH} niveles de `[`/`{{`"
+            elif char in "]}":
+                depth = max(0, depth - 1)
+    return None
+
+
 def read_yaml(run_dir: Path, rel: str, *, root: type | tuple[type, ...] = dict) -> Loaded[Any]:
-    """Lee un YAML (``CSafeLoader`` si está disponible) y comprueba su raíz."""
+    """Lee un YAML (``CSafeLoader`` si está disponible) y comprueba su raíz.
+
+    Un YAML con miles de niveles de anidamiento se rechaza antes de cargarlo:
+    desbordaría la pila nativa del loader en C y mataría el proceso (revisión
+    de la Tarea 4). PyYAML tampoco lanza solo ``YAMLError``: una etiqueta
+    explícita como ``!!timestamp foo`` o ``!!bool maybe`` produce
+    ``AttributeError``/``KeyError``, por eso se captura ``Exception``.
+    """
     text = read_text(run_dir, rel)
     if not text.ok:
         return Loaded(rel, text.present, error=text.error)
+    problem = _yaml_nesting_problem(text.value)
+    if problem:
+        return Loaded(
+            rel,
+            True,
+            error=f"estructura YAML demasiado anidada ({problem}); no se carga para no "
+            "desbordar la pila del intérprete",
+        )
     try:
         value = yaml.load(text.value, Loader=_YAML_LOADER)
-    except (yaml.YAMLError, ValueError, RecursionError) as exc:
+    except Exception as exc:  # fail-closed: no solo `YAMLError` (ver la docstring)
         return Loaded(rel, True, error=f"YAML inválido ({type(exc).__name__})")
     if not isinstance(value, root):
         return Loaded(rel, True, error=f"la raíz es {_root_name(value)}, no {_type_names(root)}")
@@ -150,19 +225,25 @@ def read_jsonl(run_dir: Path, rel: str) -> Loaded[list[tuple[int, Any]]]:
     Una línea que no es JSON no se descarta en silencio: queda en ``error``,
     una por línea de texto y con su número de línea (las líneas en blanco se
     ignoran). Antes de la Ola 1 el auditor las saltaba (auditoría 2026-09-03).
+
+    Las líneas se parten **solo por** ``"\\n"``: ``str.splitlines`` también corta
+    en U+2028, U+2029 y U+0085, que ``model_dump_json`` escribe tal cual dentro
+    de un ``reason``, y partiría una entrada válida del ledger en dos «líneas
+    corruptas» (revisión de la Tarea 4).
     """
     text = read_text(run_dir, rel)
     if not text.ok:
         return Loaded(rel, text.present, error=text.error)
     lines: list[tuple[int, Any]] = []
     errors: list[str] = []
-    for number, line in enumerate(text.value.splitlines(), start=1):
+    for number, raw in enumerate(text.value.split("\n"), start=1):
+        line = raw.removesuffix("\r")  # CRLF; `read_text` ya normaliza, pero no se depende de ello
         if not line.strip():
             continue
         try:
             lines.append((number, json.loads(line)))
-        except (ValueError, RecursionError) as exc:
-            errors.append(f"línea {number}: JSON inválido ({exc})")
+        except Exception as exc:  # fail-closed: la línea queda como error, no como excepción
+            errors.append(f"línea {number}: {_json_error(exc)}")
     return Loaded(rel, True, lines, "\n".join(errors) or None)
 
 
@@ -176,6 +257,8 @@ def validate(loaded: Loaded[Any], adapter: TypeAdapter[T]) -> Loaded[T]:  # noqa
         return Loaded(loaded.path, True, error=format_validation(exc))
     except RecursionError:
         return Loaded(loaded.path, True, error="estructura demasiado anidada")
+    except Exception as exc:  # un validador propio puede lanzar algo que pydantic no envuelve
+        return Loaded(loaded.path, True, error=f"no se pudo validar ({type(exc).__name__})")
 
 
 # Artefactos JSON de la corrida y el modelo contra el que se validan.

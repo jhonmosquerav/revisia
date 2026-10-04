@@ -12,7 +12,9 @@ _NA_MANIFIESTO = "no aplica: el manifiesto no se pudo leer (ver `manifest`)."
 def check_manifest(ctx: AuditContext) -> Verdict:
     """trAIce M2: manifiesto con las llamadas IA y los modelos usados."""
     if ctx.manifest_dict is None:
-        return "FAIL", "manifest.yml ausente o ilegible: la corrida no es reproducible."
+        # El motivo (YAML inválido, demasiado anidado, raíz de otro tipo…) va en la fila.
+        motivo = f" ({ctx.manifest.error})" if ctx.manifest.error else ""
+        return "FAIL", f"manifest.yml ausente o ilegible{motivo}: la corrida no es reproducible."
     models = ctx.manifest_dict.get("models_used") or []
     calls = ctx.llm_calls
     if models and calls:

@@ -6,16 +6,35 @@ Spec 2026-10-04 §9.1-§9.2. Las corridas salen de la fixture ``corrida``
 
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Annotated
+
 import pytest
 from audit_fixtures import auditar, fila, pausar_en_screening_ft
+from pydantic import AfterValidator, TypeAdapter
 
 import revisia.audit as audit_pkg
 from revisia.audit import CHECKS, AuditCheck, AuditReport, CheckSpec, render_audit_md
-from revisia.audit.artifacts import read_json, read_jsonl, read_text, read_yaml
+from revisia.audit.artifacts import (
+    AuditContext,
+    Loaded,
+    load_run,
+    read_json,
+    read_jsonl,
+    read_text,
+    read_yaml,
+    validate,
+)
 from revisia.audit.render import _md_cell
 from revisia.audit.state import derive_state
 from revisia.config import STAGES
+from revisia.provenance.ledger import DecisionEntry, DecisionLedger
 from revisia.schemas.artifacts import GateSummary, RunInfo
+
+REPO = Path(__file__).resolve().parent.parent
 
 # ── Loaders: nunca lanzan ───────────────────────────────────────────────
 
@@ -66,6 +85,151 @@ def test_manifiesto_utf16_o_binario_no_revienta(corrida, contenido: bytes) -> No
     report = auditar(corrida)
     assert fila(report, "manifest").status == "FAIL"
     assert fila(report, "provenance").status == "N/A"
+
+
+# Los loaders no lanzan ni con YAML hostil (spec §9.1; revisión de la Tarea 4).
+
+
+@pytest.mark.parametrize(
+    "contenido",
+    ["x: !!timestamp foo\n", "x: !!bool maybe\n"],
+    ids=["timestamp-AttributeError", "bool-KeyError"],
+)
+def test_manifiesto_con_etiqueta_yaml_hostil_es_fail_y_no_error_interno(
+    corrida, contenido: str
+) -> None:
+    """PyYAML lanza ``AttributeError``/``KeyError`` (no ``YAMLError``) ante estas etiquetas."""
+    (corrida / "manifest.yml").write_text(contenido, encoding="utf-8")
+    cargado = read_yaml(corrida, "manifest.yml")
+    assert cargado.present and not cargado.ok
+    assert cargado.error.startswith("YAML inválido")
+    report = auditar(corrida)
+    manifiesto = fila(report, "manifest")
+    assert manifiesto.status == "FAIL"
+    assert "YAML inválido" in manifiesto.detail
+    assert [c.check_id for c in report.checks if "error interno" in c.detail] == []
+    assert len(report.checks) == len(CHECKS)
+
+
+def test_read_text_no_lanza_si_el_sistema_de_ficheros_falla(tmp_path, monkeypatch) -> None:
+    def _sin_acceso(self, *args, **kwargs):
+        raise PermissionError("sin acceso")
+
+    monkeypatch.setattr(Path, "exists", _sin_acceso)
+    cargado = read_text(tmp_path, "x.json")
+    assert cargado.present and not cargado.ok
+    assert "PermissionError" in cargado.error
+
+
+def test_read_json_y_read_jsonl_no_lanzan_ante_una_excepcion_inesperada(
+    tmp_path, monkeypatch
+) -> None:
+    (tmp_path / "x.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "x.jsonl").write_text("{}\n", encoding="utf-8")
+
+    def _roto(*args, **kwargs):
+        raise TypeError("json roto")
+
+    monkeypatch.setattr(json, "loads", _roto)
+    assert "TypeError" in read_json(tmp_path, "x.json").error
+    assert "línea 1" in read_jsonl(tmp_path, "x.jsonl").error
+
+
+def test_validate_no_lanza_si_el_validador_revienta() -> None:
+    def _revienta(_valor: int) -> int:
+        raise TypeError("validador roto")
+
+    adaptador = TypeAdapter(Annotated[int, AfterValidator(_revienta)])
+    resultado = validate(Loaded("x.json", True, 1), adaptador)
+    assert resultado.present and not resultado.ok
+    assert "TypeError" in resultado.error
+
+
+# Anidamiento profundo: `CSafeLoader` desborda la pila nativa a ~2 680 niveles y mata
+# el proceso (0xC00000FD en Windows) sin que ningún `except` lo atrape. Cada vector
+# corre en un subproceso: si el guarda falla, se ve un código de salida distinto de 0
+# y no se cae la sesión de pytest.
+_VECTORES_ANIDADOS = [
+    pytest.param(lambda: "x: " + "[" * 10_000 + "\n", id="corchetes"),
+    pytest.param(lambda: "- " * 10_000 + "x\n", id="indicadores-de-bloque-encadenados"),
+    pytest.param(
+        lambda: "".join(" " * i + "a:\n" for i in range(3_000)) + " " * 3_000 + "z: 1\n",
+        id="sangria",
+    ),
+]
+
+_SCRIPT_AUDITAR = (
+    "import json, sys\n"
+    "from revisia.audit import run_audit\n"
+    "informe = run_audit(sys.argv[1])\n"
+    "print(json.dumps([[c.check_id, c.status, c.detail] for c in informe.checks]))\n"
+)
+
+
+@pytest.mark.parametrize("texto", _VECTORES_ANIDADOS)
+def test_manifiesto_muy_anidado_no_tumba_el_proceso_del_auditor(corrida, texto) -> None:
+    (corrida / "manifest.yml").write_text(texto(), encoding="utf-8")
+    proceso = subprocess.run(
+        [sys.executable, "-c", _SCRIPT_AUDITAR, str(corrida)],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    mensaje = f"el auditor murió (código {proceso.returncode}): {proceso.stderr[-500:]}"
+    assert proceso.returncode == 0, mensaje
+    filas = {i: (status, detalle) for i, status, detalle in json.loads(proceso.stdout)}
+    assert filas["manifest"][0] == "FAIL"
+    assert "anidada" in filas["manifest"][1]
+    assert [i for i, (_, detalle) in filas.items() if "error interno" in detalle] == []
+    assert len(filas) == len(CHECKS)
+
+
+def test_guarda_de_anidamiento_respeta_sus_limites(tmp_path) -> None:
+    def cargar(texto: str, **kwargs) -> Loaded:
+        (tmp_path / "x.yml").write_text(texto, encoding="utf-8")
+        return read_yaml(tmp_path, "x.yml", **kwargs)
+
+    # 500 niveles de corchetes pasan; 501 se rechazan antes de cargar.
+    assert cargar("x: " + "[" * 500 + "]" * 500 + "\n").ok
+    assert "anidada" in cargar("x: " + "[" * 501 + "]" * 501 + "\n").error
+    assert "anidada" in cargar("x: " + "{a: " * 501 + "1" + "}" * 501 + "\n").error
+    # Los corchetes entre comillas o en un comentario no cuentan.
+    assert cargar('x: "' + "[" * 5_000 + '"\n').ok
+    assert cargar("x: '" + "{" * 5_000 + "'\n").ok
+    assert cargar("x: 1  # " + "[" * 5_000 + "\n").ok
+    # Una sangría de 2 000 espacios pasa; de 2 001 no.
+    assert cargar("x: |\n" + " " * 2_000 + "t\n").ok
+    assert "anidada" in cargar("x: |\n" + " " * 2_001 + "t\n").error
+    # Hasta 500 indicadores `- ` encadenados en una línea pasan; 501 no.
+    assert cargar("- " * 500 + "x\n", root=list).ok
+    assert "anidada" in cargar("- " * 501 + "x\n", root=list).error
+    # Un manifiesto normal (listas y mapas de profundidad < 20) no se toca.
+    assert cargar("a:\n  - b: [1, 2, {c: d}]\n  - e: 'f'\n").value == {
+        "a": [{"b": [1, 2, {"c": "d"}]}, {"e": "f"}]
+    }
+
+
+def test_ledger_con_separadores_unicode_en_el_texto_conserva_la_entrada(corrida) -> None:
+    """``str.splitlines`` también corta en U+2028/U+2029/U+0085; el ledger los escribe tal cual."""
+    ruta = corrida / "decisions_ledger.jsonl"
+    antes = len(AuditContext(load_run(corrida)).ledger.entries)
+    motivo = "uno\u2028dos\u2029tres\u0085cuatro"
+    DecisionLedger(ruta).append(
+        DecisionEntry(
+            stage="screening_ta",
+            actor="human:ana",
+            autonomy="A1",
+            action="label",
+            target="10.1000/llm-1",
+            detail={"reason": motivo},
+        )
+    )
+    assert "\u2028" in ruta.read_text(encoding="utf-8")  # el separador va crudo en el fichero
+    vista = AuditContext(load_run(corrida)).ledger
+    assert vista.errors == ()
+    assert len(vista.entries) == antes + 1
+    assert vista.entries[-1][1].detail["reason"] == motivo
 
 
 # ── Fail-closed e invariante N/A ⇒ FAIL ────────────────────────────────
