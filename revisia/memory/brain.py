@@ -95,6 +95,14 @@ class ResearchBrain:
     def _events_for(self, slug: str) -> list[dict[str, Any]]:
         return [e for e in self._read_events() if e.get("slug") == slug]
 
+    def has_run(self, slug: str, timestamp: str) -> bool:
+        """¿Ya está sedimentada la corrida ``<slug>-<timestamp>``?
+
+        Al reanudar una corrida ya completada, ``--brain`` la volvería a
+        registrar como actualización de sí misma (Ola 1, spec §7).
+        """
+        return any(str(e.get("timestamp")) == timestamp for e in self._events_for(slug))
+
     # ── escritura de alto nivel ─────────────────────────────────────────
     def record_review(
         self,
