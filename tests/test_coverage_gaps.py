@@ -105,3 +105,26 @@ def test_render_methods_incluye_secciones_clave() -> None:
     assert "cuantitativa" in md  # quantitative=True
     assert "OSF: ABC" in md
     assert "executed: 2026-06-27" in md
+
+
+def test_methods_reporta_buscados_y_no_recuperados() -> None:
+    protocol = ReviewProtocol.model_validate(
+        {
+            "slug": "demo",
+            "title": "Demo",
+            "question": {"text": "¿X afecta Y?", "framework": "PEO", "components": {"P": "x"}},
+        }
+    )
+    counts = PrismaCounts(
+        identified=50,
+        screened=40,
+        fulltext_sought=12,
+        fulltext_not_retrieved=4,
+        fulltext_assessed=8,
+        included=5,
+    )
+    md = render_methods(protocol=protocol, counts=counts, models=["fake:fake-1"])
+    assert "buscados a texto completo=12" in md
+    assert "no recuperados=4" in md
+    assert "evaluados para elegibilidad=8" in md
+    assert "texto completo=8 " not in md  # la cifra ambigua de antes
