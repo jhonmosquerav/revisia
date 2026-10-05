@@ -632,3 +632,75 @@ def test_thresholds_de_una_corrida_en_pausa_sin_manifiesto_no_aplica(detener_cor
     assert fila(report, "thresholds").detail == NA_PROTOCOLO
     assert fila(report, "final_gate").status == "FAIL"
     assert not report.publishable
+
+
+# ── Ramas de `thresholds` y `grounding` sin cubrir ──────────────────────
+
+
+def test_thresholds_recall_bajo_sin_decisiones_de_cribado_legibles_no_cuenta_las_exclusiones(
+    corrida,
+) -> None:
+    # Sin poder leer `03_screening/decisions.json` no se sabe cuántas exclusiones IA quedan sin
+    # etiqueta humana: el FAIL del recall bajo no inventa una cifra.
+    escribir_metricas(corrida, metricas_validas(18, 0, 2, 10))
+    (corrida / "03_screening" / "decisions.json").write_text("{no es json", encoding="utf-8")
+    thresholds = fila(auditar(corrida), "thresholds")
+    assert thresholds.status == "FAIL"
+    assert (
+        "un número no verificable de exclusiones IA de T/A sin etiqueta humana" in thresholds.detail
+    )
+    assert "error interno" not in thresholds.detail
+
+
+def test_thresholds_umbral_de_recall_1_nunca_tiene_potencia(corrida) -> None:
+    # Con `recall_target: 1.0` un solo fallo ya baja del umbral, sea cual sea el tamaño del gold.
+    editar_protocolo(corrida, lambda p: p.update(thresholds={"recall_target": 1.0}))
+    escribir_metricas(corrida, metricas_validas(20, 0, 0, 5))
+    thresholds = fila(auditar(corrida), "thresholds")
+    assert thresholds.status == "WARN"
+    assert "recall 1.00 [IC95 0.84–1.00] ≥ 1.00 con solo 20 positivos" in thresholds.detail
+    assert "con un umbral de 1 un solo fallo ya baja del umbral (gold sin potencia)" in (
+        thresholds.detail
+    )
+
+
+def test_thresholds_gold_sin_positivos_deja_el_recall_indefinido(corrida) -> None:
+    escribir_metricas(corrida, metricas_validas(0, 5, 0, 5))
+    thresholds = fila(auditar(corrida), "thresholds")
+    assert thresholds.status == "WARN"
+    assert thresholds.detail == (
+        "recall_target 0.95 no medible (recall indefinido: la matriz de confusión no tiene "
+        "positivos)."
+    )
+
+
+def test_thresholds_kappa_min_y_recall_declarados_sin_gold_advierten(corrida) -> None:
+    editar_protocolo(
+        corrida, lambda p: p.update(thresholds={"recall_target": 0.95, "kappa_min": 0.6})
+    )
+    (corrida / "03_screening" / "metrics.json").unlink()
+    thresholds = fila(auditar(corrida), "thresholds")
+    assert thresholds.status == "WARN"
+    assert "recall_target 0.95 no medible (sin gold)" in thresholds.detail
+    assert "kappa_min 0.60 no medible (sin gold)" in thresholds.detail
+
+
+def test_thresholds_kappa_min_con_metricas_que_no_validan_advierte(corrida) -> None:
+    editar_protocolo(corrida, lambda p: p.update(thresholds={"kappa_min": 0.6}))
+    edit_json(corrida / "03_screening" / "metrics.json", lambda m: m.pop("tp"))
+    thresholds = fila(auditar(corrida), "thresholds")
+    assert thresholds.status == "WARN"
+    assert "kappa_min 0.60 no medible (metrics.json no válido)" in thresholds.detail
+
+
+def test_grounding_sin_incluidos_ni_citas_pasa(corrida) -> None:
+    # La síntesis no cita nada y nada se incluyó: no hay citas que verificar, y no se confunde
+    # con «la síntesis no cita ningún estudio» (que sí hay incluidos y es un WARN).
+    def _ninguno_incluido(decisiones: list[dict]) -> None:
+        for decision in decisiones:
+            decision["final_label"] = "exclude"
+
+    edit_json(corrida / "04_fulltext" / "decisions.json", _ninguno_incluido)
+    grounding = fila(auditar(corrida), "grounding")
+    assert grounding.status == "PASS"
+    assert grounding.detail == "sin incluidos ni citas que verificar."

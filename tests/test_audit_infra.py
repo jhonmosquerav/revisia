@@ -153,10 +153,10 @@ def test_validate_no_lanza_si_el_validador_revienta() -> None:
     assert "TypeError" in resultado.error
 
 
-# Anidamiento profundo: `CSafeLoader` desborda la pila nativa a ~2 680 niveles y mata
-# el proceso (0xC00000FD en Windows) sin que ningún `except` lo atrape. Cada vector
-# corre en un subproceso: si el guarda falla, se ve un código de salida distinto de 0
-# y no se cae la sesión de pytest.
+# Anidamiento profundo: `CSafeLoader` desborda la pila nativa a ~2 670 niveles (2 669-2 673
+# según la sintaxis, medido con Python 3.13; ver `artifacts.py`) y mata el proceso (0xC00000FD
+# en Windows) sin que ningún `except` lo atrape. Cada vector corre en un subproceso: si el
+# guarda falla, se ve un código de salida distinto de 0 y no se cae la sesión de pytest.
 #
 # libyaml también trata U+2028, U+2029 y U+0085 como saltos de línea y salta el BOM: unas
 # guardas físicas por línea (`^` + `re.MULTILINE`) no los veían y el recorrido de eventos
@@ -335,12 +335,12 @@ def test_manifiesto_valido_con_miles_de_corchetes_se_carga_sin_rechazo(tmp_path)
             id="models_used",
         ),
         # Tercera revisión: `checks_search` interpolaba el valor crudo en dos f-strings. Con la
-        # Tarea 9 una fecha tecleada nunca es PASS (C3): el estado ya no se fija (`None`); lo que
+        # Tarea 9 una fecha tecleada nunca es PASS (C3): la fila es siempre WARN, y lo que
         # esta fila vigila es que el auditor termina, la fila existe y el detalle va acotado.
         pytest.param(
             "protocol:\n  search_window:\n    executed: *a9\n",
             "search_window",
-            None,
+            "WARN",
             id="search_window-executed",
         ),
         pytest.param(
@@ -359,13 +359,12 @@ def test_manifiesto_valido_con_miles_de_corchetes_se_carga_sin_rechazo(tmp_path)
         pytest.param("models_used: [*a9]\n", "schemas", "FAIL", id="models_used-schemas"),
     ],
 )
-def testbomba_de_alias_no_cuelga_el_auditor_ni_llena_el_detalle(
-    corrida, cola: str, fila_afectada: str, estado: str | None
+def test_bomba_de_alias_no_cuelga_el_auditor_ni_llena_el_detalle(
+    corrida, cola: str, fila_afectada: str, estado: str
 ) -> None:
     (corrida / "manifest.yml").write_text(bomba_de_alias() + cola, encoding="utf-8")
     filas = auditar_en_subproceso(corrida, timeout=60)
-    if estado is not None:
-        assert filas[fila_afectada][0] == estado
+    assert filas[fila_afectada][0] == estado
     assert len(filas[fila_afectada][1]) < 500  # un `repr` acotado, no la bomba expandida
     assert [i for i, (_, detalle) in filas.items() if "error interno" in detalle] == []
     assert len(filas) == len(CHECKS)
@@ -383,10 +382,12 @@ def _bomba_de_fusion(niveles: int) -> str:
 
 
 def test_bomba_de_claves_de_fusion_no_cuelga_la_carga(corrida) -> None:
+    # Sin la guarda, la carga del nivel 8 tarda ~6 s y termina: ni el `timeout` ni una cota de
+    # tiempo la distinguirían de forma fiable de una carga correcta (con 10 s pasaba igual). Lo
+    # que discrimina es el veredicto de la fila `manifest` («fusión»: rechazada sin cargar); el
+    # `timeout` de 60 s solo evita que una regresión con una bomba mayor cuelgue la sesión.
     (corrida / "manifest.yml").write_text(_bomba_de_fusion(8), encoding="utf-8")
-    inicio = time.monotonic()
-    filas = auditar_en_subproceso(corrida, timeout=10)
-    assert time.monotonic() - inicio < 10
+    filas = auditar_en_subproceso(corrida, timeout=60)
     assert filas["manifest"][0] == "FAIL"
     assert "fusión" in filas["manifest"][1]
     assert [i for i, (_, detalle) in filas.items() if "error interno" in detalle] == []

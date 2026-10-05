@@ -36,12 +36,15 @@ def test_audit_c3_reconstruccion_no_es_publicable_por_varias_vias(tmp_path) -> N
     assert len(fails) >= 7
     assert fila(report, "provenance").status == "PASS"  # la marca falsificada no basta
     assert not report.publishable
+    # Cada vía FAIL por lo que ve en los artefactos, no porque el auditor reviente.
+    assert [c.check_id for c in report.checks if "error interno" in c.detail] == []
 
 
 def test_audit_c3_con_su_procedencia_real_tambien_falla_provenance(tmp_path) -> None:
     report = auditar(write_c3_reconstruction(tmp_path, provenance="reconstruction"))
     assert fila(report, "provenance").status == "FAIL"
     assert {c.check_id for c in report.checks if c.status == "FAIL"} >= VIAS_C3
+    assert [c.check_id for c in report.checks if "error interno" in c.detail] == []
 
 
 def _accion_desconocida(run: Path) -> None:
@@ -80,24 +83,58 @@ def _fuentes_40_40_40(run: Path) -> None:
     edit_yaml(run / "manifest.yml", lambda m: m["counts"].update(identified_by_source=fuentes))
 
 
+def _sin_solicitud_del_reporte(run: Path) -> None:
+    (run / "reporte" / "review_request.yml").unlink()
+
+
+# (síntoma, fila, estado esperado, fragmento del detalle de esa fila): el fragmento fija que la
+# fila falla por lo que debe y no por otra causa.
 SINTOMAS: list = [
-    pytest.param(_accion_desconocida, "ledger", "FAIL", id="accion-desconocida"),
-    pytest.param(_metricas_sin_matriz, "schemas", "FAIL", id="metricas-sin-matriz"),
-    pytest.param(_sin_04_fulltext, "stage_artifacts", "FAIL", id="falta-04-fulltext"),
-    pytest.param(_excluded_human_3, "hitl", "FAIL", id="excluded-human-3"),
-    pytest.param(_ledger_una_semana_antes, "timing", "FAIL", id="ledger-una-semana-antes"),
-    pytest.param(_fuentes_40_40_40, "arithmetic", "FAIL", id="identified-by-source-40-40-40"),
+    pytest.param(_accion_desconocida, "ledger", "FAIL", "propose", id="accion-desconocida"),
+    pytest.param(_metricas_sin_matriz, "schemas", "FAIL", "metrics.json", id="metricas-sin-matriz"),
+    pytest.param(
+        _sin_04_fulltext, "stage_artifacts", "FAIL", "04_fulltext", id="falta-04-fulltext"
+    ),
+    pytest.param(_excluded_human_3, "hitl", "FAIL", "exclusiones humanas", id="excluded-human-3"),
+    pytest.param(
+        _ledger_una_semana_antes,
+        "timing",
+        "FAIL",
+        "anterior al inicio",
+        id="ledger-una-semana-antes",
+    ),
+    pytest.param(_fuentes_40_40_40, "arithmetic", "FAIL", "Σ", id="identified-by-source-40-40-40"),
+    pytest.param(
+        _sin_solicitud_del_reporte,
+        "final_gate",
+        "FAIL",
+        "review_request.yml",
+        id="reporte-sin-solicitud",
+    ),
     # Una heurística temporal nunca basta sola: 1,3 ms es WARN.
-    pytest.param(comprimir_llamadas, "timing", "WARN", id="llamadas-en-1-3-ms-solo-advierte"),
+    pytest.param(
+        comprimir_llamadas, "timing", "WARN", "mediana", id="llamadas-en-1-3-ms-solo-advierte"
+    ),
 ]
 
 
-@pytest.mark.parametrize(("sintoma", "check_id", "esperado"), SINTOMAS)
+@pytest.mark.parametrize(("sintoma", "check_id", "esperado", "fragmento"), SINTOMAS)
 def test_audit_c3_cada_sintoma_basta_solo(
-    corrida, sintoma: Callable[[Path], None], check_id: str, esperado: str
+    corrida, sintoma: Callable[[Path], None], check_id: str, esperado: str, fragmento: str
 ) -> None:
     assert auditar(corrida).publishable  # la corrida coherente de partida
     sintoma(corrida)
     report = auditar(corrida)
     assert fila(report, check_id).status == esperado
+    assert fragmento in fila(report, check_id).detail
     assert report.publishable is (esperado != "FAIL")
+
+
+def test_audit_c3_una_aprobacion_final_sin_solicitud_falla_solo_final_gate(corrida) -> None:
+    # La reconstrucción escribía un `approve` humano de `reporte` sin pasar por el gate: quitar
+    # `reporte/review_request.yml` de una corrida coherente deja ESA fila como única en FAIL.
+    assert auditar(corrida).publishable
+    _sin_solicitud_del_reporte(corrida)
+    report = auditar(corrida)
+    assert {c.check_id for c in report.checks if c.status == "FAIL"} == {"final_gate"}
+    assert not report.publishable

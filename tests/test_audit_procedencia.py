@@ -6,6 +6,8 @@ y ``ledger``). Cada test rompe una sola cosa de la corrida real.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from audit_fixtures import (
     auditar,
@@ -18,6 +20,7 @@ from audit_fixtures import (
 )
 
 from revisia.audit import CHECKS
+from revisia.audit.artifacts import ARTIFACT_ADAPTERS
 from revisia.config import STAGES
 
 ARTEFACTOS_JSON = (
@@ -30,7 +33,16 @@ ARTEFACTOS_JSON = (
     "06_synthesis/verification.json",
     "07_rob/assessments.json",
     "08_meta/meta_analysis.json",
+    # El motor lo escribe solo si alguna base no respondió (`pipeline.py`): no está en la corrida
+    # real, así que los tests lo crean (`01_search/` tampoco existe).
+    "01_search/failures.json",
 )
+
+
+def test_artefactos_json_de_los_tests_son_los_del_auditor() -> None:
+    # Si el auditor valida un artefacto nuevo y esta lista no lo sabe, nada lo prueba.
+    assert set(ARTEFACTOS_JSON) == set(ARTIFACT_ADAPTERS)
+
 
 # ── manifest ───────────────────────────────────────────────────────────
 
@@ -80,6 +92,7 @@ def test_schemas_corrida_real_pasa(corrida) -> None:
 
 @pytest.mark.parametrize("rel", ARTEFACTOS_JSON)
 def test_artefacto_json_invalido_falla_schemas(corrida, rel: str) -> None:
+    (corrida / rel).parent.mkdir(exist_ok=True)
     (corrida / rel).write_text("{no es json", encoding="utf-8")
     report = auditar(corrida)
     schemas = fila(report, "schemas")
@@ -123,6 +136,8 @@ def test_schemas_herramienta_rob_desconocida_falla(corrida) -> None:
     schemas = fila(auditar(corrida), "schemas")
     assert schemas.status == "FAIL"
     assert "07_rob/assessments.json" in schemas.detail
+    # El motivo, no solo la ruta: la herramienta no está entre las que el motor conoce.
+    assert ".tool: Input should be 'RoB2'" in schemas.detail
 
 
 def test_schemas_decision_con_approved_no_booleano_falla(corrida) -> None:
@@ -281,3 +296,58 @@ def test_ledger_volver_a_decidir_tras_un_rechazo_es_valido(corrida) -> None:
     report = auditar(corrida)
     assert fila(report, "ledger").status == "PASS"
     assert fila(report, "final_gate").status == "PASS"
+
+
+# ── Ramas de `schemas` y de `ledger` sin cubrir ─────────────────────────
+
+
+def test_schemas_failures_json_valido_pasa_y_cuenta_como_un_artefacto_mas(corrida) -> None:
+    antes = int(fila(auditar(corrida), "schemas").detail.split()[0])
+    (corrida / "01_search").mkdir()
+    fallos = [{"db": "OpenAlex", "error": "tiempo de espera agotado"}]
+    (corrida / "01_search" / "failures.json").write_text(json.dumps(fallos), encoding="utf-8")
+    schemas = fila(auditar(corrida), "schemas")
+    assert schemas.status == "PASS"
+    assert int(schemas.detail.split()[0]) == antes + 1
+
+
+def test_schemas_failures_json_sin_el_error_de_la_base_falla(corrida) -> None:
+    (corrida / "01_search").mkdir()
+    (corrida / "01_search" / "failures.json").write_text('[{"db": "OpenAlex"}]', encoding="utf-8")
+    schemas = fila(auditar(corrida), "schemas")
+    assert schemas.status == "FAIL"
+    assert "01_search/failures.json: 0.error: Field required" in schemas.detail
+
+
+def test_schemas_run_json_que_no_valida_falla(corrida) -> None:
+    # `run.json` ausente es lo normal en una corrida anterior a la Ola 1; presente y roto, no.
+    (corrida / "run.json").write_text('{"slug": 1}', encoding="utf-8")
+    schemas = fila(auditar(corrida), "schemas")
+    assert schemas.status == "FAIL"
+    assert "run.json: " in schemas.detail
+    assert "Field required" in schemas.detail
+
+
+@pytest.mark.parametrize(
+    ("contenido", "motivo"),
+    [
+        pytest.param("- no es un mapa\n", "la raíz es lista, no mapa", id="raiz-de-lista"),
+        pytest.param("a: [sin cerrar\n", "YAML inválido", id="yaml-invalido"),
+    ],
+)
+def test_schemas_review_request_ilegible_falla(corrida, contenido: str, motivo: str) -> None:
+    (corrida / "reporte" / "review_request.yml").write_text(contenido, encoding="utf-8")
+    schemas = fila(auditar(corrida), "schemas")
+    assert schemas.status == "FAIL"
+    assert f"reporte/review_request.yml: {motivo}" in schemas.detail
+
+
+def test_ledger_sin_protocolo_legible_pasa_y_avisa_de_que_no_verifica_la_autonomia(
+    detener_corrida,
+) -> None:
+    # Una corrida en pausa todavía no escribió el manifiesto: no hay protocolo con el que
+    # comparar la autonomía de cada entrada, y el detalle lo dice en vez de afirmar que cuadra.
+    corrida = detener_corrida(aprobados=("screening_ta", "screening_ft"))
+    ledger = fila(auditar(corrida), "ledger")
+    assert ledger.status == "PASS"
+    assert "(autonomía no verificable: sin protocolo legible)" in ledger.detail

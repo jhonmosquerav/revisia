@@ -499,3 +499,21 @@ def test_bomba_de_alias_en_las_marcas_y_los_modelos_no_cuelga_timing_ni_overlap(
     assert len(filas["timing"][1]) < 1_000
     assert filas["response_overlap"][0] == "PASS"
     assert [i for i, (_, detalle) in filas.items() if "error interno" in detalle] == []
+
+
+def test_timing_run_json_que_parsea_pero_no_valida_se_nombra_como_ilegible(corrida) -> None:
+    # JSON bien formado y con la forma de un mapa, pero que no es un `RunInfo`: no vale como
+    # límite inferior (se cae al `timestamp` del manifiesto, aquí ilegible) y el detalle lo dice.
+    (corrida / "run.json").write_text('{"slug": 1}', encoding="utf-8")
+    edit_yaml(corrida / "manifest.yml", lambda m: m.update(timestamp="TEST"))
+    timing = fila(auditar(corrida), "timing")
+    assert timing.status == "WARN"
+    assert "límite inferior no verificable (timestamp `TEST`, run.json ilegible)" in timing.detail
+
+
+def test_timing_run_json_que_no_valida_deja_el_limite_al_timestamp_del_manifiesto(corrida) -> None:
+    # Con el `timestamp` del manifiesto sano, un `run.json` roto no impide comprobar el límite.
+    (corrida / "run.json").write_text('{"slug": 1}', encoding="utf-8")
+    timing = fila(auditar(corrida), "timing")
+    assert timing.status == "PASS", timing.detail
+    assert "dentro de [inicio, manifiesto]" in timing.detail

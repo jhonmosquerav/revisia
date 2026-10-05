@@ -13,7 +13,10 @@ from types import SimpleNamespace
 import pytest
 from audit_fixtures import auditar, edit_json, edit_ledger, fila, pausar_en_screening_ft
 
-from revisia.audit.checks_hitl import de_la_decision_efectiva
+from revisia.audit.artifacts import AuditContext, load_run
+from revisia.audit.checks_hitl import check_final_gate, de_la_decision_efectiva
+from revisia.audit.state import RunState
+from revisia.config import STAGES
 from revisia.provenance.ledger import AUTO_APPROVE_ACTOR, DecisionEntry
 from revisia.schemas.artifacts import GATED_STAGES, GateSummary
 
@@ -428,3 +431,51 @@ def test_de_la_decision_efectiva_compara_decision_y_solicitud(
 
 def test_de_la_decision_efectiva_de_una_etapa_sin_decision_es_falso() -> None:
     assert de_la_decision_efectiva(_contexto(), _label(stage="rob")) is False
+
+
+# ── Ramas defensivas y fallback anterior a PR-D, de punta a punta ─────────
+
+
+def test_hitl_etiqueta_con_hash_frente_a_una_aprobacion_sin_hash_no_respalda(corrida) -> None:
+    # Sentido inverso del fallback anterior a PR-D: la aprobación de la corrida real no lleva
+    # hashes, así que una `label` que sí lleva `decision_sha256` es de otra decisión.
+    def _etiqueta_con_hash(entries: list[dict]) -> list[dict]:
+        etiqueta = {**entries[0], "action": "label", "target": "10.1000/cocina"}
+        return [{**etiqueta, "detail": _detalle()}, *entries]
+
+    edit_ledger(corrida, _etiqueta_con_hash)
+    edit_json(corrida / "03_screening" / "exclusions.json", lambda e: e.update(excluded_human=1))
+    hitl = fila(auditar(corrida), "hitl")
+    assert hitl.status == "FAIL"
+    assert "exclusions.json declara 1 exclusiones humanas" in hitl.detail
+    assert "además, 1 etiqueta(s) `exclude` ajenas a esa decisión no cuentan" in hitl.detail
+
+
+def test_hitl_con_el_estado_desconocido_exige_cada_etapa_de_juicio(corrida) -> None:
+    # Con una línea ilegible el estado queda en `unknown` y se exige todo: las etapas de juicio
+    # sin decisión (y sin otra posterior decidida) son «alcanzadas sin decisión».
+    edit_ledger(corrida, lambda entries: [e for e in entries if e["stage"] == "screening_ta"])
+    with (corrida / "decisions_ledger.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write("esto no es json\n")
+    report = auditar(corrida)
+    assert report.state is not None and report.state.status == "unknown"
+    hitl = fila(report, "hitl")
+    assert hitl.status == "FAIL"
+    for etapa in ("screening_ft", "extraccion", "rob"):
+        assert f"`{etapa}` alcanzada sin decisión" in hitl.detail
+    assert "gate saltado" not in hitl.detail
+
+
+def test_final_gate_rechazo_sin_decision_efectiva_nombra_un_actor_desconocido(corrida) -> None:
+    # Rama defensiva: `state` sale de `gates`, así que un rechazo siempre tiene decisión. Con un
+    # estado inyectado que no la tiene, el detalle no revienta ni inventa un actor.
+    ctx = AuditContext(load_run(corrida))
+    ctx.__dict__["state"] = RunState("rejected", frozenset(STAGES), "reporte")
+    ctx.__dict__["gates"] = {}
+    status, detalle = check_final_gate(ctx)
+    assert status == "FAIL"
+    assert detalle == "El reporte final fue rechazado por un actor desconocido."
+    ctx.__dict__["state"] = RunState("rejected", frozenset(STAGES), "rob")
+    status, detalle = check_final_gate(ctx)
+    assert status == "FAIL"
+    assert "por un actor desconocido: sin decisión final" in detalle
