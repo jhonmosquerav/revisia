@@ -157,20 +157,25 @@ def corrida(_corrida_auditoria: Path, tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def correr_hasta(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..., Path]:
+def detener_corrida(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Callable[..., Path]:
     """Fábrica de corridas reales detenidas en un gate (pausadas o rechazadas).
 
-    ``correr_hasta(aprobados=("screening_ta", "screening_ft"))`` aprueba esos gates y deja la
+    ``detener_corrida(aprobados=("screening_ta", "screening_ft"))`` aprueba esos gates y deja la
     corrida en pausa en el siguiente; con ``rechazar="extraccion"`` ese gate se rechaza. Es el
     mismo pipeline y el mismo proveedor que ``corrida``, pero sin llegar al gate final: en esas
     corridas el manifiesto y el entregable todavía no existen (spec 2026-10-04 §4.2), y lo que
     el auditor exige de ellas no puede inventarse editando una corrida terminada.
     """
+    counter = [0]
 
     def _correr(*, aprobados: Sequence[str], rechazar: str | None = None) -> Path:
+        counter[0] += 1
         protocol = load_protocol(DEMO)
         timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-        ctx = RunContext(protocol.slug, tmp_path / "detenida", timestamp)
+        base_dir = tmp_path_factory.mktemp(f"detenida-{counter[0]}")
+        ctx = RunContext(protocol.slug, base_dir, timestamp)
         for stage in aprobados:
             (ctx.stage_dir(stage) / "decision.yml").write_text(DECISION_HUMANA, encoding="utf-8")
         if rechazar is not None:

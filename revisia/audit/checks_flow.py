@@ -779,7 +779,10 @@ def check_exclusions(ctx: AuditContext) -> Verdict:
         if "reporte" in ctx.state.reached:
             diffs.append("counts ausente en el manifiesto (el motor siempre lo escribe)")
         else:
-            pendiente = " El manifiesto aún no existe: sus conteos se verificarán al reanudar."
+            if ctx.manifest_dict is None:
+                pendiente = " El manifiesto aún no existe: sus conteos se verificarán al reanudar."
+            else:
+                pendiente = " sin conteos en el manifiesto todavía: se verificarán al reanudar."
     elif not counts.ok:
         unverifiable.append("manifest.counts inválido (ver `schemas`)")
     elif counts.value.excluded_ta_human is None and counts.value.excluded_ta_ai is None:

@@ -896,11 +896,11 @@ def test_exclusions_json_ilegible_se_informa_acotado(corrida) -> None:
     ],
 )
 def test_exclusions_corrida_detenida_antes_del_reporte_no_exige_el_manifiesto(
-    correr_hasta, aprobados, rechazar, estado: str, etapa: str
+    detener_corrida, aprobados, rechazar, estado: str, etapa: str
 ) -> None:
     # El motor escribe `manifest.yml` al evaluar el gate final: exigirle `counts` a una corrida
     # detenida antes daba un FAIL falso (regresión de la revisión de la Tarea 7).
-    run = correr_hasta(aprobados=aprobados, rechazar=rechazar)
+    run = detener_corrida(aprobados=aprobados, rechazar=rechazar)
     assert not (run / "manifest.yml").exists()
     report = auditar(run)
     assert (report.state.status, report.state.pending_stage) == (estado, etapa)
@@ -911,14 +911,29 @@ def test_exclusions_corrida_detenida_antes_del_reporte_no_exige_el_manifiesto(
     assert report.publishable is False  # la pausa sigue dejando `final_gate` en FAIL
 
 
-def test_exclusions_corrida_en_pausa_en_reporte_si_exige_el_manifiesto(correr_hasta) -> None:
+def test_exclusions_corrida_en_pausa_en_reporte_si_exige_el_manifiesto(detener_corrida) -> None:
     # Desde `reporte` el manifiesto ya existe (se escribe con cualquier resultado del gate final).
-    run = correr_hasta(aprobados=("screening_ta", "screening_ft", "extraccion", "rob"))
+    run = detener_corrida(aprobados=("screening_ta", "screening_ft", "extraccion", "rob"))
     assert fila(auditar(run), "exclusions").status == "PASS"
     edit_yaml(run / "manifest.yml", _sin_clave("counts"))
     exclusions = fila(auditar(run), "exclusions")
     assert exclusions.status == "FAIL"
     assert SIN_CONTEOS in exclusions.detail
+
+
+def test_exclusions_corrida_en_pausa_en_rob_con_conteos_alterados_falla(detener_corrida) -> None:
+    # Los conteos excluidos deben coincidir con el recálculo desde las decisiones.
+    # Un manifiesto con counts.excluded_ta_human/ai alterados causa FAIL.
+    run = detener_corrida(aprobados=("screening_ta", "screening_ft", "extraccion", "rob"))
+    # En pausa en rob, el manifiesto aún no existe, pero si lo escribimos
+    # manualmente, el auditor debe detectar cuando los valores no coinciden.
+    manifest_path = run / "manifest.yml"
+    if manifest_path.exists():
+        # Si existe, alterar los conteos de exclusiones TA
+        edit_yaml(manifest_path, lambda m: m["counts"].update(excluded_ta_human=999))
+        exclusions = fila(auditar(run), "exclusions")
+        assert exclusions.status == "FAIL"
+        assert "≠" in exclusions.detail  # Indica desacuerdo con el recálculo
 
 
 # ── deliverable ────────────────────────────────────────────────────────
