@@ -548,10 +548,21 @@ def test_force_human_acepta_un_actor_humano(tmp_path: Path) -> None:
     assert (result.status, result.actor) == ("approved", "human:ana")
 
 
-_SIN_NOMBRE = ["human:", "human:   ", "human:\t", "human:" + chr(0xA0)]
+# «Sin nombre» incluye lo que no se ve: un espacio de ancho cero (Cf) o un NUL no dicen
+# quién decidió.
+_SIN_NOMBRE = [
+    "human:",
+    "human:   ",
+    "human:\t",
+    "human:" + chr(0xA0),
+    "human:" + chr(0x200B),
+    "human:" + chr(0),
+]
 
 
-@pytest.mark.parametrize("actor", _SIN_NOMBRE, ids=["vacio", "espacios", "tab", "nbsp"])
+@pytest.mark.parametrize(
+    "actor", _SIN_NOMBRE, ids=["vacio", "espacios", "tab", "nbsp", "zwsp", "nul"]
+)
 @pytest.mark.parametrize("approved", [True, False])
 def test_force_human_rechaza_un_actor_humano_sin_nombre(
     tmp_path: Path, actor: str, approved: bool

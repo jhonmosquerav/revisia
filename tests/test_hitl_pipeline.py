@@ -3,6 +3,7 @@ spec 2026-10-04 §8)."""
 
 from __future__ import annotations
 
+import ast
 import json
 import math
 import shutil
@@ -17,7 +18,7 @@ from pydantic import BaseModel
 
 from revisia import cli
 from revisia.agents.fulltext import FullText
-from revisia.config import load_protocol
+from revisia.config import effective_autonomy, load_protocol
 from revisia.exports import PrismaCounts, render_methods, render_traice_checklist
 from revisia.exports.checklist import describe_gate, human_validation_summary
 from revisia.extraction_agreement import ExtractionAgreement
@@ -41,7 +42,6 @@ from revisia.orchestration.hitl import (
     FlaggedClaim,
     FlagPolicy,
     RecordLabel,
-    effective_autonomy,
     render_decision_template,
 )
 from revisia.orchestration.pipeline import PipelineResult, run_pipeline
@@ -99,7 +99,7 @@ def _sin_huella_humana(decisiones: dict[str, dict]) -> None:
         assert huella == (None, None, None), f"{rid}: {huella}"
 
 
-def _proto_a0(tmp_path: Path, autonomia: str = "A0") -> Path:
+def _proto_con_autonomia(tmp_path: Path, autonomia: str = "A0") -> Path:
     """Copia del demo con ``screening_ta`` en ``autonomia`` (por defecto A0: el humano
     etiqueta cada registro, D1)."""
     proto = tmp_path / "proto"
@@ -230,7 +230,7 @@ def test_ta_a1_aprobar_en_bloque_cuenta_la_exclusion_como_ia(tmp_path: Path, pro
 
 
 def test_ta_a0_etiquetar_todo_marca_a_cada_registro_como_humano(tmp_path: Path, proveedor) -> None:
-    proto = _proto_a0(tmp_path)
+    proto = _proto_con_autonomia(tmp_path)
     protocol = load_protocol(proto)
     ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
     pausa = run_pipeline(protocol, proto, ctx, search_fn=_busqueda, fetch_fn=fetch_disponible)
@@ -289,7 +289,7 @@ def test_ta_a0_etiquetar_todo_marca_a_cada_registro_como_humano(tmp_path: Path, 
 def test_ta_a0_corte_humano_saca_un_registro_del_texto_completo(tmp_path: Path, proveedor) -> None:
     # La etiqueta humana manda sobre la propuesta: un corte (la IA incluía) no llega a FT
     # y un rescate (la IA excluía) sí.
-    proto = _proto_a0(tmp_path)
+    proto = _proto_con_autonomia(tmp_path)
     protocol = load_protocol(proto)
     ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
 
@@ -329,7 +329,7 @@ def test_ta_a0_corte_humano_saca_un_registro_del_texto_completo(tmp_path: Path, 
 def test_auto_approve_nunca_escribe_human_label(tmp_path: Path, proveedor, autonomia: str) -> None:
     # D5: --auto-approve es una aprobación de demostración: aprueba la propuesta de la IA
     # tal cual y no etiqueta nada (tampoco en A0, donde un humano tendría que etiquetar todo).
-    proto = _proto_a0(tmp_path, autonomia)
+    proto = _proto_con_autonomia(tmp_path, autonomia)
     protocol = load_protocol(proto)
     ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
 
@@ -2157,6 +2157,23 @@ def test_effective_autonomy_es_la_unica_regla_del_a2_a3_forzado_a_a1(
     assert effective_autonomy(declarada, forced_human=forzado) == efectiva
 
 
+def test_exports_no_importa_orchestration() -> None:
+    # `exports` solo lee el ledger y el protocolo: la regla de autonomía vive en `config`, que
+    # ambas capas pueden importar; `exports` -> `orchestration` invertía las capas.
+    raiz = Path(__file__).resolve().parent.parent / "revisia" / "exports"
+    importados = []
+    for fuente in sorted(raiz.glob("*.py")):
+        for nodo in ast.walk(ast.parse(fuente.read_text(encoding="utf-8"))):
+            if isinstance(nodo, ast.ImportFrom):
+                modulos = [nodo.module or ""]
+            elif isinstance(nodo, ast.Import):
+                modulos = [alias.name for alias in nodo.names]
+            else:
+                continue
+            importados += [f"{fuente.name}: {m}" for m in modulos if "orchestration" in m]
+    assert importados == []
+
+
 def test_reporte_a3_declarado_se_fuerza_a_a1_y_solo_se_completa_con_adjudicacion_humana(
     tmp_path: Path, con_cita_inventada
 ) -> None:
@@ -2544,6 +2561,22 @@ def test_human_validation_summary_distingue_humano_demo_y_sin_decisiones() -> No
     assert "screening_ta" not in resumen  # solo nombra los que no resolvió un humano
 
 
+@pytest.mark.parametrize(
+    "actor",
+    ["human:", "human:   ", "human:" + chr(0x200B), "human:" + chr(0)],
+    ids=["vacio", "espacios", "zwsp", "nul"],
+)
+def test_el_checklist_no_llama_humano_a_un_actor_sin_nombre(actor: str) -> None:
+    # `human:` a secas empezaba por el prefijo y se describía como aprobación humana en un
+    # gate no forzado: una sola definición de «humano» (`is_human_actor`) en todo el motor.
+    resumen = _gate("extraccion", actor=actor, autonomy="A0")
+
+    assert describe_gate("extraccion", resumen) == f"aprobado por {actor} (no humano)"
+    texto = human_validation_summary({"extraccion": resumen})
+    assert texto.startswith("⚠ gates de juicio sin decisión humana: extraccion (")
+    assert "un humano resolvió" not in texto
+
+
 def _efectiva(**cambios: str) -> dict[str, str]:
     base = {"screening_ta": "A1", "screening_ft": "A0", "extraccion": "A0", "rob": "A0"}
     return {**base, "reporte": "A1", **cambios}
@@ -2770,6 +2803,27 @@ def test_methods_no_atribuye_verificacion_a_la_cita_de_origen_por_campo() -> Non
     assert "anti-alucinación" not in md
 
 
+def test_methods_no_dice_que_el_riesgo_de_sesgo_pondera_la_sintesis() -> None:
+    # Nada pondera por RoB: la síntesis narrativa recibe solo incluidos + extracciones y
+    # `meta_analysis.py` no lee el riesgo de sesgo. El riesgo de sesgo se informa (Anexo I).
+    md = render_methods(protocol=load_protocol(EXAMPLE), counts=PrismaCounts())
+
+    assert (
+        "No excluye estudios automáticamente; su juicio se informa en el Anexo I sin ponderar "
+        "la síntesis." in md
+    )
+    assert "pondera su peso" not in md  # la frase de antes: nada ponderaba
+
+
+def test_methods_dice_que_los_criterios_estan_declarados_en_el_protocolo() -> None:
+    # El motor no puede saber si los criterios se escribieron «antes de ver resultados»: lo
+    # que sí sabe es que vienen del protocolo.
+    md = render_methods(protocol=load_protocol(EXAMPLE), counts=PrismaCounts())
+
+    assert "Criterios: ver inclusion_exclusion.yml (declarados en el protocolo)." in md
+    assert "antes de ver resultados" not in md
+
+
 @pytest.mark.parametrize("declarada", ["A2", "A3"])
 def test_reporte_a2_a3_sin_citas_marcadas_figura_como_auto_proceed_previsto(
     declarada: str,
@@ -2929,7 +2983,8 @@ def test_cli_completado_con_citas_adjudicadas_no_manda_revisarlas(
     assert "COMPLETED" in out
     assert "citas marcadas adjudicadas por human:revisora" in out
     assert _AVISO_CITAS not in out
-    assert "⚠" not in out
+    # El texto del aviso viejo, con o sin su marca:
+    assert "posibles citas no fundamentadas" not in out
 
 
 def test_cli_completado_con_citas_marcadas_sin_adjudicar_sigue_avisando(

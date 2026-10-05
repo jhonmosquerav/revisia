@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
+from revisia.config import effective_autonomy
 from revisia.exports.checklist import (
     describe_gate,
     engine_search_date,
@@ -18,7 +19,6 @@ from revisia.exports.checklist import (
     label_databases,
 )
 from revisia.metrics import fmt_metric
-from revisia.orchestration.hitl import effective_autonomy
 
 if TYPE_CHECKING:
     from revisia.config import ReviewProtocol
@@ -125,7 +125,7 @@ def render_methods(
             "Cadenas de búsqueda: 00_protocol/search_strings/ de la corrida (copia congelada "
             "del protocolo; PRISMA-S)."
         )
-    lines.append("Criterios: ver inclusion_exclusion.yml (declarados antes de ver resultados).")
+    lines.append("Criterios: ver inclusion_exclusion.yml (declarados en el protocolo).")
     if search_log is not None:
         lines.append(
             f"Búsqueda ejecutada (fecha registrada por el motor): {engine_search_date(search_log)}."
@@ -189,8 +189,8 @@ def render_methods(
     lines += [
         "",
         "### Evaluación de calidad",
-        f"Herramienta: {protocol.rob_tool}. No excluye estudios automáticamente; "
-        f"pondera su peso en la síntesis. Decisión: {decision('rob')}.",
+        f"Herramienta: {protocol.rob_tool}. No excluye estudios automáticamente; su juicio "
+        f"se informa en el Anexo I sin ponderar la síntesis. Decisión: {decision('rob')}.",
         "",
         "### Síntesis",
         f"Tipo: {sintesis}.",

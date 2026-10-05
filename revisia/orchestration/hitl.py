@@ -29,7 +29,6 @@ adjudicación quedan en el ledger, antes del ``approve`` al que pertenecen.
 from __future__ import annotations
 
 import json
-import unicodedata
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -38,11 +37,14 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError, field_validator
 
+from revisia.config import effective_autonomy
 from revisia.orchestration.run_context import RunContext, resume_command
 from revisia.provenance.ledger import (
     AUTO_APPROVE_ACTOR,
     HUMAN_ACTOR_PREFIX,
     DecisionEntry,
+    is_human_actor,
+    plain_text,
     summarize_gates,
 )
 from revisia.provenance.runmeta import canonical_sha256
@@ -262,37 +264,19 @@ class GateResult:
     flag_reviews: dict[str, FlagReview] = field(default_factory=dict)
 
 
-def _plain(text: str) -> str:
-    """El texto en una sola línea, sin saltos, controles ni marcas de formato (D4).
-
-    PyYAML y libyaml cierran un comentario con cualquier salto de línea de YAML 1.1
-    (LF, CR, U+0085, U+2028, U+2029): lo que viniera detrás, p. ej. un
-    ``approved: true`` dentro de un ``rationale``, sería una clave de verdad. Todo
-    espacio (esos saltos incluidos) y todo carácter no imprimible (controles C0 y C1,
-    sustitutos sueltos) pasa a un espacio, y los espacios se pliegan. Las marcas de
-    formato (categoría Cf: U+00AD, ZWNJ, ZWJ, U+200B, U+FEFF, las de dirección…) no
-    separan palabras, así que se borran: sustituirlas por un espacio partiría "intervención"
-    en dos.
-    """
-    visible = (
-        "" if unicodedata.category(ch) == "Cf" else ch if ch.isprintable() else " " for ch in text
-    )
-    return " ".join("".join(visible).split())
-
-
 def _acotar(text: str, limit: int) -> str:
-    """``_plain`` y, si pasa de ``limit`` caracteres, cortado con «…» dentro del límite.
+    """``plain_text`` y, si pasa de ``limit`` caracteres, cortado con «…» dentro del límite.
 
     Si el corte cae justo detrás de un espacio, ese espacio se quita: «abcdefgh …» no.
     """
-    plain = _plain(text)
+    plain = plain_text(text)
     return plain if len(plain) <= limit else plain[: limit - 1].rstrip() + "…"
 
 
 def _comment(text: str, limit: int = _MAX_COMENTARIO) -> str:
     """Una línea de comentario YAML segura para texto del LLM o del registro (D4).
 
-    La línea se sanea con ``_plain`` y se acota a ``limit`` caracteres como red de
+    La línea se sanea con ``plain_text`` y se acota a ``limit`` caracteres como red de
     seguridad. El texto libre (título, afirmación, nota) se acota antes, campo a campo
     con ``_acotar``: cortar aquí la línea entera borraría lo que va detrás de un título
     largo.
@@ -730,31 +714,6 @@ def _motivos_humano(
             "(D9): etiquétalos en `records` (`label: include` o `label: exclude`)"
         )
     return motivos
-
-
-def is_human_actor(actor: str) -> bool:
-    """¿``actor`` es un humano identificado? ``human:<nombre>``, con un nombre.
-
-    El prefijo solo no basta: ``human:`` (o ``human:`` y espacios) no dice quién decidió
-    y no puede cerrar un gate que exige una decisión humana (M5). El default de la
-    plantilla, ``human:desconocido``, sí cuenta (tiene nombre; el auditor le da WARN).
-    """
-    return actor.startswith(HUMAN_ACTOR_PREFIX) and bool(
-        actor.removeprefix(HUMAN_ACTOR_PREFIX).strip()
-    )
-
-
-def effective_autonomy(autonomy: str, *, forced_human: bool) -> str:
-    """Autonomía con la que se aplica un gate que puede quedar forzado a humano (M5).
-
-    Con ``forced_human`` (citas marcadas), una A2/A3 declarada pasa a A1: el gate
-    pide y registra una decisión humana. Una A0/A1 no cambia, y sin ``forced_human``
-    ninguna cambia. Es la única regla de esa degradación: la usan ``review_gate``
-    (lo que se pide y se registra) y el pipeline (la ``autonomy_effective`` del
-    manifiesto y del checklist trAIce), para que lo declarado, lo aplicado y lo
-    informado no puedan separarse.
-    """
-    return "A1" if forced_human and autonomy in {"A2", "A3"} else autonomy
 
 
 def review_gate(

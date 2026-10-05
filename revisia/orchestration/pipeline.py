@@ -37,7 +37,7 @@ from revisia.agents import rob as rob_agent
 from revisia.agents import screening as screening_agent
 from revisia.agents import screening_ft as screening_ft_agent
 from revisia.agents import verificador as verificador_agent
-from revisia.config import ReviewProtocol
+from revisia.config import ReviewProtocol, effective_autonomy
 from revisia.exclusions import ExclusionBreakdown, compute_exclusion_breakdown, compute_ft_excluded
 from revisia.exports import (
     PrismaCounts,
@@ -85,8 +85,6 @@ from revisia.orchestration.hitl import (
     FlagPolicy,
     GateResult,
     RecordPolicy,
-    effective_autonomy,
-    is_human_actor,
     review_gate,
 )
 from revisia.orchestration.journal import JournalError, StageJournal, entry_output, journaled
@@ -110,7 +108,7 @@ from revisia.orchestration.snapshot import (
     read_run_info,
     write_run_info,
 )
-from revisia.provenance.ledger import summarize_gates
+from revisia.provenance.ledger import is_human_actor, summarize_gates
 from revisia.provenance.runmeta import RunMeta, canonical_sha256, sha256_text, utc_now_iso
 from revisia.rag.embed import Embedder, HashEmbedder
 from revisia.schemas.artifacts import (

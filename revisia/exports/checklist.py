@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 from revisia.config import JUDGMENT_STAGES
 from revisia.metrics import fmt_metric
-from revisia.provenance.ledger import AUTO_APPROVE_ACTOR, HUMAN_ACTOR_PREFIX
+from revisia.provenance.ledger import AUTO_APPROVE_ACTOR, is_human_actor
 from revisia.provenance.runmeta import RunMeta
 from revisia.schemas.artifacts import GATED_STAGES
 
@@ -398,7 +398,7 @@ def describe_gate(
     if summary.actor == AUTO_APPROVE_ACTOR:
         return con_sufijo("aprobado por auto-approve (demo): NO es una validación humana")
     verb = "aprobado" if summary.action == "approve" else "rechazado"
-    if not summary.actor.startswith(HUMAN_ACTOR_PREFIX):
+    if not is_human_actor(summary.actor):
         return f"{verb} por {summary.actor} {entre_parentesis('no humano')}"
     extras = []
     if summary.n_labels:
@@ -417,7 +417,7 @@ def human_validation_summary(gates: Mapping[str, GateSummary]) -> str:
     reached = [s for s in JUDGMENT_STAGES if s in gates]
     if not reached:
         return "ningún gate de juicio tiene todavía una decisión registrada."
-    without_human = [s for s in reached if not gates[s].actor.startswith(HUMAN_ACTOR_PREFIX)]
+    without_human = [s for s in reached if not is_human_actor(gates[s].actor)]
     if without_human:
         detail = ", ".join(f"{s} ({gates[s].actor})" for s in without_human)
         return (

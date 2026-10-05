@@ -1,8 +1,9 @@
 """Extracción de datos · formulario tipado con cita de origen por campo.
 
-Espeja la §6 del documento canónico. Clave anti-alucinación: cada campo
-extraído guarda la **cita/span de origen** y un estado; sin cita verificable,
-el campo queda en ``needs_review`` y va al checkpoint humano. La extracción
+Espeja la §6 del documento canónico. Cada campo extraído guarda la **cita/span de
+origen** que el modelo reporta y un estado. La cita se pide y se guarda junto al valor;
+nada la contrasta con el texto, así que sirve de ayuda al revisor, no de verificación.
+Todo campo encontrado queda en ``needs_review`` y va al checkpoint humano. La extracción
 nunca supera autonomía A0 (revisión humana campo a campo del 20% mínimo).
 """
 
@@ -20,7 +21,8 @@ class ExtractionField(BaseModel):
 
     Attributes:
         value: valor extraído (``None`` si no se encontró).
-        source_quote: cita textual exacta que respalda el valor.
+        source_quote: cita textual que el modelo da como respaldo del valor (se guarda, no
+            se verifica contra el texto).
         source_locator: ubicación legible (ej. ``"p.4, Tabla 2"``).
         confidence: confianza en [0, 1].
         status: estado de verificación del campo.
