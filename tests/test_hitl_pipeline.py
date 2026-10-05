@@ -17,6 +17,8 @@ from pydantic import BaseModel
 
 from revisia.agents.fulltext import FullText
 from revisia.config import load_protocol
+from revisia.exports import PrismaCounts, render_methods, render_traice_checklist
+from revisia.exports.checklist import describe_gate, human_validation_summary
 from revisia.extraction_agreement import ExtractionAgreement
 from revisia.metrics import ScreeningMetrics, compute_screening_metrics
 from revisia.orchestration import pipeline as pipeline_mod
@@ -46,7 +48,7 @@ from revisia.orchestration.run_context import RunContext
 from revisia.orchestration.snapshot import read_run_info
 from revisia.provenance.ledger import AUTO_APPROVE_ACTOR, summarize_gates
 from revisia.provenance.runmeta import canonical_sha256, sha256_text
-from revisia.schemas.artifacts import RetrievalOutcome
+from revisia.schemas.artifacts import GateSummary, RetrievalOutcome
 from revisia.schemas.extraction import ExtractionField, ExtractionRecord
 from revisia.schemas.records import SearchRecord
 from revisia.schemas.rob import RoBAssessment, RoBDomain
@@ -2230,6 +2232,14 @@ def test_reporte_forzado_rechazado_y_despues_aprobado_adjudicando_queda_en_el_le
     manifest = _manifest(ctx)
     assert manifest["run"]["status"] == "completed"
     assert manifest["final_gate"] == {"forced_human": True, "reason": "hallucination_flagged"}
+    # El entregable se escribe antes del gate final: no arrastra como decisión el rechazo
+    # anterior (que ya no es la efectiva), el reporte figura pendiente (M13).
+    traice = _entregable(ctx, "checklist_traice.md")
+    assert "- reporte (A1): pendiente de la decisión final · exige decisión humana" in traice
+    assert "rechazado" not in traice
+    assert "Reporte final: pendiente de la decisión final (autonomía A1) — exige" in _entregable(
+        ctx, "metodologia.md"
+    )
 
 
 def _editar_diario_de_verificacion(ctx: RunContext, *, marcada: bool) -> None:
@@ -2371,3 +2381,328 @@ def test_report_policy_es_none_sin_marcas_y_lleva_los_indices_de_checks_si_las_h
     assert politica == FlagPolicy(
         flagged=(FlaggedClaim(1, "b", "y" * 300, "nota b"),),
     )
+
+
+# ── trAIce y métodos con lo que pasó de verdad (M13) ──────────────────────
+
+
+def _entregable(ctx: RunContext, nombre: str) -> str:
+    return (ctx.run_dir / "deliverable" / nombre).read_text(encoding="utf-8")
+
+
+def test_traice_autonomia_efectiva_y_actores_reales(tmp_path: Path, proveedor) -> None:
+    protocol = load_protocol(EXAMPLE)
+    humano = RunContext(protocol.slug, tmp_path, "HUMANO")
+    correr_hasta(protocol, EXAMPLE, humano, search_fn=_busqueda_ft, fetch_fn=fetch_disponible)
+    traice = _entregable(humano, "checklist_traice.md")
+    assert "checkpoints HITL registrados" not in traice  # el texto fijo de antes
+    assert "- screening_ta (A1): aprobado por humano (human:revisora)" in traice
+    assert (
+        "- screening_ft (A0): aprobado por humano (human:revisora) · 2 etiqueta(s) por registro"
+        in traice
+    )
+    # Se escribe antes del gate final: ese gate figura pendiente.
+    assert "- reporte (A1): pendiente de la decisión final" in traice
+    assert "un humano resolvió todos los gates de juicio" in traice
+
+    demo = RunContext(protocol.slug, tmp_path, "DEMO")
+    run_pipeline(
+        protocol,
+        EXAMPLE,
+        demo,
+        auto_approve=True,
+        search_fn=_busqueda_ft,
+        fetch_fn=fetch_disponible,
+    )
+    traice = _entregable(demo, "checklist_traice.md")
+    assert "- rob (A0): aprobado por auto-approve (demo): NO es una validación humana" in traice
+    assert "⚠ gates de juicio sin decisión humana" in traice
+
+
+def test_traice_reporte_forzado_figura_en_a1(tmp_path: Path, con_cita_inventada) -> None:
+    proto = _proto_reporte(tmp_path)  # reporte declarado en A2
+    protocol = load_protocol(proto)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+    run_pipeline(
+        protocol, proto, ctx, auto_approve=True, search_fn=_busqueda_ft, fetch_fn=fetch_disponible
+    )
+    traice = _entregable(ctx, "checklist_traice.md")
+    assert "- reporte (A1): pendiente de la decisión final · exige decisión humana" in traice
+
+
+def test_methods_sin_texto_fijo_de_validacion_humana(tmp_path: Path, proveedor) -> None:
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    run_pipeline(
+        protocol,
+        EXAMPLE,
+        ctx,
+        auto_approve=True,
+        search_fn=_busqueda_ft,
+        fetch_fn=fetch_disponible,
+    )
+    metodos = _entregable(ctx, "metodologia.md")
+    for fijo in (
+        "checkpoint humano (HITL)",
+        "revisión humana campo a campo",
+        "Juicio final humano (A0)",
+        "la decisión final es siempre humana",
+    ):
+        assert fijo not in metodos
+    assert (
+        "Título/abstract: aprobado por auto-approve (demo): NO es una validación humana "
+        "(autonomía A1)" in metodos
+    )
+    assert "⚠ gates de juicio sin decisión humana" in metodos
+    assert "Reporte final: pendiente de la decisión final (autonomía A1)." in metodos
+
+
+def _gate(
+    stage: str = "screening_ta",
+    action: str = "approve",
+    actor: str = "human:ana",
+    autonomy: str = "A1",
+    **extra,
+) -> GateSummary:
+    return GateSummary(
+        stage=stage,
+        action=action,
+        actor=actor,
+        autonomy=autonomy,
+        timestamp_utc="2026-10-04T10:00:00Z",
+        **extra,
+    )
+
+
+@pytest.mark.parametrize(
+    ("stage", "resumen", "esperado"),
+    [
+        ("reporte", None, "pendiente de la decisión final"),
+        ("rob", None, "pendiente (sin decisión registrada)"),
+        (
+            "reporte",
+            _gate("reporte", "auto-proceed", "agent:reporte", "A2"),
+            "auto-proceed (agent:reporte, autonomía A2): sin revisión humana",
+        ),
+        (
+            "rob",
+            _gate("rob", actor=AUTO_APPROVE_ACTOR, autonomy="A0"),
+            "aprobado por auto-approve (demo): NO es una validación humana",
+        ),
+        ("screening_ta", _gate(), "aprobado por humano (human:ana)"),
+        ("screening_ta", _gate(action="reject"), "rechazado por humano (human:ana)"),
+        (
+            "screening_ft",
+            _gate("screening_ft", autonomy="A0", n_labels=3),
+            "aprobado por humano (human:ana) · 3 etiqueta(s) por registro",
+        ),
+        (
+            "reporte",
+            _gate("reporte", n_flag_reviews=2, forced_human=True),
+            "aprobado por humano (human:ana) · 2 cita(s) marcada(s) adjudicada(s) · "
+            "forzado a humano por citas marcadas",
+        ),
+        (
+            "screening_ft",
+            _gate("screening_ft", autonomy="A0", n_labels=1, n_flag_reviews=1, forced_human=True),
+            "aprobado por humano (human:ana) · 1 etiqueta(s) por registro · "
+            "1 cita(s) marcada(s) adjudicada(s) · forzado a humano por citas marcadas",
+        ),
+        # Un actor sin el prefijo `human:` no es una validación humana, aunque apruebe.
+        ("extraccion", _gate("extraccion", actor="ana"), "aprobado por ana (no humano)"),
+        (
+            "extraccion",
+            _gate("extraccion", action="reject", actor="agent:extraccion"),
+            "rechazado por agent:extraccion (no humano)",
+        ),
+    ],
+)
+def test_describe_gate_dice_quien_decidio_de_verdad(
+    stage: str, resumen: GateSummary | None, esperado: str
+) -> None:
+    assert describe_gate(stage, resumen) == esperado
+
+
+def test_human_validation_summary_distingue_humano_demo_y_sin_decisiones() -> None:
+    ninguno = "ningún gate de juicio tiene todavía una decisión registrada."
+    assert human_validation_summary({}) == ninguno
+    # `reporte` no es un gate de juicio: ni una aprobación de demostración suya cuenta.
+    assert human_validation_summary({"reporte": _gate("reporte", actor=AUTO_APPROVE_ACTOR)}) == (
+        ninguno
+    )
+
+    humanos = {"rob": _gate("rob", autonomy="A0"), "screening_ta": _gate()}
+    assert human_validation_summary(humanos) == (
+        "un humano resolvió todos los gates de juicio con decisión (screening_ta, rob)."
+    )
+
+    demo = {**humanos, "extraccion": _gate("extraccion", actor=AUTO_APPROVE_ACTOR, autonomy="A0")}
+    resumen = human_validation_summary(demo)
+    assert resumen.startswith("⚠ gates de juicio sin decisión humana: extraccion (")
+    assert "extraccion (auto-approve (demo))." in resumen
+    assert resumen.endswith("decláralo.")
+    assert "screening_ta" not in resumen  # solo nombra los que no resolvió un humano
+
+
+def _efectiva(**cambios: str) -> dict[str, str]:
+    base = {"screening_ta": "A1", "screening_ft": "A0", "extraccion": "A0", "rob": "A0"}
+    return {**base, "reporte": "A1", **cambios}
+
+
+def test_render_traice_checklist_lista_cada_gate_con_su_autonomia_efectiva() -> None:
+    gates = {
+        "screening_ta": _gate(),
+        "screening_ft": _gate("screening_ft", autonomy="A0", n_labels=2),
+        "extraccion": _gate("extraccion", actor=AUTO_APPROVE_ACTOR, autonomy="A0"),
+    }
+
+    md = render_traice_checklist([], _efectiva(), gates=gates, forced_human=True)
+
+    assert "## Autonomía por etapa" not in md  # lo declarado ya no se presenta como lo aplicado
+    bloque = md.split("## Autonomía efectiva y decisión por gate\n", 1)[1].split("\n\n", 1)[0]
+    assert bloque.splitlines() == [
+        "- screening_ta (A1): aprobado por humano (human:ana)",
+        "- screening_ft (A0): aprobado por humano (human:ana) · 2 etiqueta(s) por registro",
+        "- extraccion (A0): aprobado por auto-approve (demo): NO es una validación humana",
+        "- rob (A0): pendiente (sin decisión registrada)",
+        "- reporte (A1): pendiente de la decisión final · exige decisión humana: "
+        "el verificador marcó citas",
+    ]
+    assert "- Validación humana: ⚠ gates de juicio sin decisión humana: extraccion" in md
+
+
+def test_render_traice_checklist_sin_gates_no_afirma_ninguna_validacion_humana() -> None:
+    md = render_traice_checklist([], _efectiva(reporte="A2", rob="A0"))
+
+    assert "checkpoints HITL registrados" not in md
+    assert "- Validación humana: ningún gate de juicio tiene todavía una decisión" in md
+    assert "- rob (A0): pendiente (sin decisión registrada)" in md
+    assert "- reporte (A2): pendiente de la decisión final" in md
+    assert "exige decisión humana" not in md
+    # Solo lista los gates de los que se informa la autonomía.
+    solo_rob = render_traice_checklist([], {"rob": "A0"})
+    assert "- rob (A0)" in solo_rob
+    assert "screening_ta" not in solo_rob
+
+
+def test_render_methods_dice_quien_decidio_cada_fase() -> None:
+    protocol = load_protocol(EXAMPLE)
+    gates = {
+        "screening_ta": _gate(),
+        "screening_ft": _gate("screening_ft", autonomy="A0", n_labels=2),
+        "extraccion": _gate("extraccion", actor=AUTO_APPROVE_ACTOR, autonomy="A0"),
+    }
+
+    md = render_methods(
+        protocol=protocol,
+        counts=PrismaCounts(),
+        gates=gates,
+        autonomy_effective=_efectiva(),
+        forced_human=True,
+    )
+
+    assert "Título/abstract: aprobado por humano (human:ana) (autonomía A1)." in md
+    assert (
+        "Texto completo: aprobado por humano (human:ana) · 2 etiqueta(s) por registro "
+        "(autonomía A0)." in md
+    )
+    assert (
+        "La tabla de extracción se aprueba por etapa: aprobado por auto-approve (demo): NO es "
+        "una validación humana (autonomía A0)." in md
+    )
+    assert "Decisión: pendiente (sin decisión registrada) (autonomía A0)." in md
+    assert "Validación humana: ⚠ gates de juicio sin decisión humana: extraccion" in md
+    assert (
+        "Reporte final: pendiente de la decisión final (autonomía A1) — exige decisión humana: "
+        "el verificador marcó citas." in md
+    )
+
+
+def test_render_methods_sin_gates_usa_la_autonomia_declarada_y_no_afirma_validacion() -> None:
+    protocol = load_protocol(EXAMPLE)
+
+    md = render_methods(protocol=protocol, counts=PrismaCounts())
+
+    assert "Título/abstract: pendiente (sin decisión registrada) (autonomía A1)." in md
+    assert "Texto completo: pendiente (sin decisión registrada) (autonomía A0)." in md
+    assert "ningún gate de juicio tiene todavía una decisión registrada." in md
+    assert "Reporte final: pendiente de la decisión final (autonomía A1)." in md
+    assert "exige decisión humana" not in md
+
+
+def test_metricas_de_cribado_dicen_que_miden_la_propuesta_de_la_ia_d6() -> None:
+    # Revisión de la Tarea 23: κ y recall evalúan la propuesta del ensemble frente al gold humano,
+    # no la decisión final con las correcciones del revisor; "humano-IA" lo daba a entender.
+    metricas = _metricas(0.5)
+    protocol = load_protocol(EXAMPLE)
+
+    traice = render_traice_checklist([], _efectiva(), metrics=metricas)
+    metodos = render_methods(protocol=protocol, counts=PrismaCounts(), metrics=metricas)
+
+    assert "## Métricas de cribado (propuesta de la IA vs gold standard humano)" in traice
+    assert "propuesta de la IA (`ensemble_label`)" in traice
+    assert "no la decisión final con las correcciones humanas" in traice
+    assert "Cohen's kappa (propuesta de la IA vs gold humano): 0.000" in traice
+    assert "Cohen's kappa de la propuesta de la IA frente al gold humano = 0.000" in metodos
+    assert "no la decisión final con las correcciones humanas" in metodos
+    assert "humano-IA" not in traice + metodos
+
+
+def test_methods_declara_los_informes_rescatados_y_su_limite_de_texto() -> None:
+    # Revisión de la Tarea 24: un no recuperado que el revisor evaluó con un PDF de fuera cuenta
+    # como evaluado, y la IA no vio ese texto: extracción, RoB y verificación, solo con
+    # título/abstract. Sin rescates no se dice nada de esto.
+    protocol = load_protocol(EXAMPLE)
+    con = PrismaCounts(
+        fulltext_sought=3,
+        fulltext_not_retrieved=1,
+        fulltext_rescued=2,
+        fulltext_assessed=4,
+        included=3,
+    )
+
+    md = render_methods(protocol=protocol, counts=con)
+
+    assert (
+        "Informes rescatados por el revisor: 2 que el motor no recuperó y un humano evaluó con "
+        "el texto completo obtenido fuera de él (cuentan como evaluados, no como no "
+        "recuperados)." in md
+    )
+    assert (
+        "Limitación: la IA no tuvo ese texto, así que la extracción, el riesgo de sesgo y la "
+        "verificación de las citas de los que se incluyeron se hicieron solo con título/abstract."
+        in md
+    )
+    sin = render_methods(protocol=protocol, counts=PrismaCounts(fulltext_sought=3, included=3))
+    assert "rescatados por el revisor" not in sin
+    assert "solo con título/abstract" not in sin
+
+
+def test_metodologia_de_una_corrida_con_rescate_lo_declara(tmp_path: Path, proveedor) -> None:
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+
+    def rescatar(stage: str, _solicitud: dict) -> dict | None:
+        if stage == "screening_ft":
+            return {
+                "records": {
+                    "rec-1": {"label": "include", "reason": "cumple"},
+                    "rec-2": {"label": "include", "reason": "PDF por préstamo interbibliotecario"},
+                }
+            }
+        return None
+
+    result = correr_hasta(
+        protocol,
+        EXAMPLE,
+        ctx,
+        search_fn=_busqueda_ft,
+        fetch_fn=fetch_no_disponible(["rec-2"]),
+        etiquetar=rescatar,
+    )
+
+    assert (result.status, result.counts.fulltext_rescued) == ("completed", 1)
+    metodos = _entregable(ctx, "metodologia.md")
+    assert "Informes rescatados por el revisor: 1 que el motor no recuperó" in metodos
+    assert "solo con título/abstract" in metodos
+    assert "evaluados para elegibilidad=2" in metodos  # el rescate cuenta como evaluado

@@ -4,21 +4,25 @@ El checklist 2020 se emite como andamiaje: el sistema pre-rellena la evidencia
 de los ítems que el pipeline cubre (búsqueda, selección, flujo, registro,
 disponibilidad de datos) y deja el resto para que el humano lo complete. El
 checklist trAIce se rellena automáticamente desde los ``RunMeta`` de la corrida
-(modelos, determinismo) y la autonomía por etapa.
+(modelos, determinismo) y desde el ledger: la autonomía efectiva y quién decidió de
+verdad cada gate (``describe_gate``), sin afirmar una validación humana que no ocurrió.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING
 
+from revisia.config import JUDGMENT_STAGES
 from revisia.metrics import fmt_metric
+from revisia.provenance.ledger import AUTO_APPROVE_ACTOR, HUMAN_ACTOR_PREFIX
 from revisia.provenance.runmeta import RunMeta
+from revisia.schemas.artifacts import GATED_STAGES
 
 if TYPE_CHECKING:
     from revisia.exclusions import ExclusionBreakdown
     from revisia.metrics import ScreeningMetrics
-    from revisia.schemas.artifacts import SearchLog, SearchLogEntry
+    from revisia.schemas.artifacts import GateSummary, SearchLog, SearchLogEntry
 
 # (sección, número, título corto). Numeración principal PRISMA 2020 (1–27).
 _PRISMA_2020_ITEMS: list[tuple[str, int, str]] = [
@@ -351,10 +355,54 @@ def render_prisma_abstracts_checklist(
     return "\n".join(lines)
 
 
+def describe_gate(stage: str, summary: GateSummary | None) -> str:
+    """Quién decidió de verdad un gate, en una frase (M13).
+
+    Sale del ledger reducido por ``summarize_gates`` (el mismo reductor que usa
+    el auditor, D12): nunca se afirma una validación humana que no ocurrió.
+    """
+    if summary is None:
+        if stage == "reporte":
+            return "pendiente de la decisión final"
+        return "pendiente (sin decisión registrada)"
+    if summary.action == "auto-proceed":
+        return f"auto-proceed ({summary.actor}, autonomía {summary.autonomy}): sin revisión humana"
+    if summary.actor == AUTO_APPROVE_ACTOR:
+        return "aprobado por auto-approve (demo): NO es una validación humana"
+    verb = "aprobado" if summary.action == "approve" else "rechazado"
+    if not summary.actor.startswith(HUMAN_ACTOR_PREFIX):
+        return f"{verb} por {summary.actor} (no humano)"
+    extras = []
+    if summary.n_labels:
+        extras.append(f"{summary.n_labels} etiqueta(s) por registro")
+    if summary.n_flag_reviews:
+        extras.append(f"{summary.n_flag_reviews} cita(s) marcada(s) adjudicada(s)")
+    if summary.forced_human:
+        extras.append("forzado a humano por citas marcadas")
+    return f"{verb} por humano ({summary.actor})" + "".join(f" · {e}" for e in extras)
+
+
+def human_validation_summary(gates: Mapping[str, GateSummary]) -> str:
+    """¿Resolvió un humano cada gate de juicio con decisión? (M13)."""
+    reached = [s for s in JUDGMENT_STAGES if s in gates]
+    if not reached:
+        return "ningún gate de juicio tiene todavía una decisión registrada."
+    without_human = [s for s in reached if not gates[s].actor.startswith(HUMAN_ACTOR_PREFIX)]
+    if without_human:
+        detail = ", ".join(f"{s} ({gates[s].actor})" for s in without_human)
+        return (
+            f"⚠ gates de juicio sin decisión humana: {detail}. Sin revisión humana la "
+            "corrida no es evidencia publicable; decláralo."
+        )
+    return f"un humano resolvió todos los gates de juicio con decisión ({', '.join(reached)})."
+
+
 def render_traice_checklist(
     run_metas: Iterable[RunMeta],
-    autonomy: dict[str, str],
+    autonomy_effective: Mapping[str, str],
     *,
+    gates: Mapping[str, GateSummary] | None = None,
+    forced_human: bool = False,
     metrics: ScreeningMetrics | None = None,
     exclusions: ExclusionBreakdown | None = None,
     search_window: dict[str, str] | None = None,
@@ -363,11 +411,16 @@ def render_traice_checklist(
 
     Args:
         run_metas: todos los ``RunMeta`` registrados en la corrida.
-        autonomy: nivel de autonomía aplicado por etapa.
+        autonomy_effective: autonomía con la que se aplica cada gate (la
+            declarada, o A1 en ``reporte`` si el gate quedó forzado a humano).
+        gates: decisión efectiva por gate (``summarize_gates`` del ledger). El
+            checklist se escribe antes del gate final, que figura "pendiente".
+        forced_human: el gate final exige humano por citas marcadas (M5).
         metrics: métricas de cribado frente al gold standard, si se calcularon.
         exclusions: desglose de exclusiones humano vs IA, si se calculó.
         search_window: ventana temporal de la búsqueda declarada en el protocolo.
     """
+    gates = gates or {}
     metas = list(run_metas)
     models = sorted({f"{m.provider}:{m.model}" for m in metas})
     any_nondeterministic = any(not m.deterministic for m in metas)
@@ -379,21 +432,30 @@ def render_traice_checklist(
         f"- Determinismo a nivel token: {'NO garantizado' if any_nondeterministic else 'sí'}"
         " (la reproducibilidad a nivel decisión se asegura vía el ledger).",
         "- Prompts: versionados en revisia/prompts/ y hash-eados por llamada (RunMeta).",
-        "- Validación humana: checkpoints HITL registrados en decisions_ledger.jsonl.",
+        f"- Validación humana: {human_validation_summary(gates)}",
         "",
-        "## Autonomía por etapa",
+        "## Autonomía efectiva y decisión por gate",
     ]
-    for stage, level in autonomy.items():
-        lines.append(f"- {stage}: {level}")
+    for stage in GATED_STAGES:
+        if stage not in autonomy_effective:
+            continue
+        line = f"- {stage} ({autonomy_effective[stage]}): {describe_gate(stage, gates.get(stage))}"
+        if stage == "reporte" and forced_human and stage not in gates:
+            line += " · exige decisión humana: el verificador marcó citas"
+        lines.append(line)
     if metrics is not None:
         lines += [
             "",
-            "## Métricas de cribado (vs gold standard humano)",
+            "## Métricas de cribado (propuesta de la IA vs gold standard humano)",
+            "- Se mide la propuesta de la IA (`ensemble_label`) frente al gold humano, no la "
+            "decisión final con las correcciones humanas (D6): evalúa al sistema, no al "
+            "revisor que lo corrige.",
             f"- Recall (evidencia recuperada): {_fmt(metrics.recall)}",
             f"- Lost-Evidence (evidencia perdida): {_fmt(metrics.lost_evidence)}",
             f"- MCC: {fmt_metric(metrics.mcc)} · "
             f"WMCC (w={metrics.wmcc_fn_weight:g}): {fmt_metric(metrics.wmcc)}",
-            f"- Cohen's kappa humano-IA: {fmt_metric(metrics.cohen_kappa)}",
+            "- Cohen's kappa (propuesta de la IA vs gold humano): "
+            f"{fmt_metric(metrics.cohen_kappa)}",
             f"- Confusión (n={metrics.n}): TP={metrics.tp} FP={metrics.fp} "
             f"FN={metrics.fn} TN={metrics.tn}",
             "- _accuracy se omite a propósito (engañosa con datos desbalanceados)._",

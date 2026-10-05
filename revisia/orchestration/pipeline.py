@@ -109,6 +109,7 @@ from revisia.orchestration.snapshot import (
     read_run_info,
     write_run_info,
 )
+from revisia.provenance.ledger import summarize_gates
 from revisia.provenance.runmeta import RunMeta, canonical_sha256, sha256_text, utc_now_iso
 from revisia.rag.embed import Embedder, HashEmbedder
 from revisia.schemas.artifacts import (
@@ -1030,9 +1031,24 @@ def _write_deliverables(
     extraction_agreement: ExtractionAgreement | None,
     meta_result: MetaAnalysisResult | None,
     meta_display: str,
+    forced_human: bool,
 ) -> Path:
-    """Escribe el entregable completo (``deliverable/``) y devuelve su carpeta."""
+    """Escribe el entregable completo (``deliverable/``) y devuelve su carpeta.
+
+    El checklist trAIce y ``metodologia.md`` dicen quién decidió cada gate según
+    el ledger (M13). Se escriben antes del gate final: ``reporte`` figura siempre
+    pendiente, aunque el ledger ya tenga una decisión suya de una vuelta anterior
+    (un rechazo que la corrida reanudada va a sustituir; D14): ni se le atribuye
+    al documento una decisión que no es la que lo cierra, ni su texto cambia al
+    reanudar una corrida ya completada.
+    """
     protocol = run.protocol
+    gates = {
+        stage: summary
+        for stage, summary in summarize_gates(run.ctx.ledger.read_all()).items()
+        if stage != "reporte"
+    }
+    autonomy_effective = _autonomy_effective(protocol, forced_human=forced_human)
     search_log = read_search_log(run.ctx.run_dir)
     deliverable = run.ctx.deliverable_dir()
     (deliverable / "documento.md").write_text(
@@ -1064,6 +1080,9 @@ def _write_deliverables(
             exclusions=exclusion_breakdown,
             extraction_agreement=extraction_agreement,
             search_log=search_log,
+            gates=gates,
+            autonomy_effective=autonomy_effective,
+            forced_human=forced_human,
         ),
         encoding="utf-8",
     )
@@ -1097,7 +1116,9 @@ def _write_deliverables(
     (deliverable / "checklist_traice.md").write_text(
         render_traice_checklist(
             run.ctx.metas,
-            dict(protocol.autonomy),
+            autonomy_effective,
+            gates=gates,
+            forced_human=forced_human,
             metrics=run.metrics,
             exclusions=exclusion_breakdown,
             search_window=protocol.search_window,
@@ -1347,6 +1368,7 @@ def _run_stages(
         extraction_agreement=extraction_agreement,
         meta_result=meta_result,
         meta_display=meta_display,
+        forced_human=forced,
     )
 
     # Checkpoint final del reporte (A1). La solicitud no lleva rutas absolutas (su

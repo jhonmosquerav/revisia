@@ -8,9 +8,15 @@ sesgos quedan como andamiaje para que el revisor humano los complete. Determinis
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
-from revisia.exports.checklist import engine_search_date, label_databases
+from revisia.exports.checklist import (
+    describe_gate,
+    engine_search_date,
+    human_validation_summary,
+    label_databases,
+)
 from revisia.metrics import fmt_metric
 
 if TYPE_CHECKING:
@@ -19,7 +25,7 @@ if TYPE_CHECKING:
     from revisia.exports.prisma_flow import PrismaCounts
     from revisia.extraction_agreement import ExtractionAgreement
     from revisia.metrics import ScreeningMetrics
-    from revisia.schemas.artifacts import SearchLog
+    from revisia.schemas.artifacts import GateSummary, SearchLog
 
 
 def _registration_line(registration: dict[str, str]) -> str:
@@ -45,19 +51,37 @@ def render_methods(
     exclusions: ExclusionBreakdown | None = None,
     extraction_agreement: ExtractionAgreement | None = None,
     search_log: SearchLog | None = None,
+    gates: Mapping[str, GateSummary] | None = None,
+    autonomy_effective: Mapping[str, str] | None = None,
+    forced_human: bool = False,
 ) -> str:
     """Renderiza la sección de métodos (``metodologia.md``) de la revisión.
 
     Con ``search_log`` (Ola 1) la fecha de búsqueda es la registrada por el
     motor, se dice en qué bases se usó la pregunta como cadena (PRISMA-S 8) y las
     bases cuya búsqueda falló se marcan en «Bases consultadas».
+    Quién decidió cada fase sale de ``gates`` (``summarize_gates`` del ledger) y
+    de la autonomía efectiva, no de un texto fijo: si un gate de juicio no lo
+    resolvió un humano, el método lo dice (M13). Sin ``gates`` no se afirma
+    ninguna decisión: cada fase figura pendiente.
     """
+    gates = gates or {}
+    autonomy = dict(autonomy_effective or {})
+
+    def decision(stage: str) -> str:
+        level = autonomy.get(stage) or protocol.autonomy_for(stage)
+        return f"{describe_gate(stage, gates.get(stage))} (autonomía {level})"
+
     q = protocol.question
     components = "; ".join(f"{k}={v}" for k, v in q.components.items()) or "(no detallados)"
     # Con log, una base que falló se marca: «consultada» sería falso (revisión de la pista C).
     bases = ", ".join(label_databases(protocol.databases or ["OpenAlex"], search_log))
+    # Se mide la propuesta del ensemble, no la decisión final con las correcciones humanas
+    # (D6; revisión de la Tarea 23): «humano-IA» daba a entender lo segundo.
     kappa = (
-        f"Cohen's kappa humano-IA = {fmt_metric(metrics.cohen_kappa)}"
+        f"Cohen's kappa de la propuesta de la IA frente al gold humano = "
+        f"{fmt_metric(metrics.cohen_kappa)} (se mide la propuesta del ensemble, no la decisión "
+        "final con las correcciones humanas)"
         if metrics is not None
         else "no calculado (sin gold standard)"
     )
@@ -98,8 +122,9 @@ def render_methods(
     lines += [
         "",
         "### Selección (screening)",
-        f"Dos fases (título/abstract y texto completo) con ensemble multi-modelo "
-        f"sesgado a recall y checkpoint humano (HITL). Acuerdo: {kappa}.",
+        "Dos fases (título/abstract y texto completo) con ensemble multi-modelo sesgado a "
+        f"recall. Título/abstract: {decision('screening_ta')}. Texto completo: "
+        f"{decision('screening_ft')}. Acuerdo: {kappa}.",
         f"Flujo PRISMA: identificados={counts.identified} · duplicados={counts.duplicates_removed} "
         f"· cribados={counts.screened} · buscados a texto completo={counts.fulltext_sought} "
         f"· no recuperados={counts.fulltext_not_retrieved} "
@@ -107,6 +132,15 @@ def render_methods(
         f"· incluidos={counts.included}. Un informe sin texto completo no se evalúa "
         "(PRISMA 2020: cuenta como no recuperado).",
     ]
+    if counts.fulltext_rescued:
+        # Revisión de la Tarea 24: un rescate cuenta como evaluado, pero la IA no vio ese texto.
+        lines.append(
+            f"Informes rescatados por el revisor: {counts.fulltext_rescued} que el motor no "
+            "recuperó y un humano evaluó con el texto completo obtenido fuera de él (cuentan "
+            "como evaluados, no como no recuperados). Limitación: la IA no tuvo ese texto, así "
+            "que la extracción, el riesgo de sesgo y la verificación de las citas de los que se "
+            "incluyeron se hicieron solo con título/abstract."
+        )
 
     if exclusions is not None:
         lines.append(
@@ -120,7 +154,8 @@ def render_methods(
         "",
         "### Extracción",
         "Formulario configurable (extraction_form.yml) con cita textual de origen por "
-        "campo (anti-alucinación); autonomía A0 (revisión humana campo a campo).",
+        "campo (anti-alucinación). La tabla de extracción se aprueba por etapa: "
+        f"{decision('extraccion')}.",
     ]
     if extraction_agreement is not None and extraction_agreement.n_studies:
         ea = extraction_agreement
@@ -135,15 +170,16 @@ def render_methods(
         "",
         "### Evaluación de calidad",
         f"Herramienta: {protocol.rob_tool}. No excluye estudios automáticamente; "
-        "pondera su peso en la síntesis. Juicio final humano (A0).",
+        f"pondera su peso en la síntesis. Decisión: {decision('rob')}.",
         "",
         "### Síntesis",
         f"Tipo: {sintesis}.",
         "",
         "### Uso de IA (PRISMA-trAIce)",
         f"Modelos: {ia_models}. Parámetros (temperatura/top_p/seed) y hash de prompt "
-        "registrados por llamada en manifest.yml. Validación humana: checkpoints HITL "
-        "en cada etapa; la decisión final es siempre humana.",
+        "registrados por llamada en manifest.yml. Validación humana: "
+        f"{human_validation_summary(gates)} Reporte final: {decision('reporte')}"
+        + (" — exige decisión humana: el verificador marcó citas." if forced_human else "."),
         "",
         "## Limitaciones",
         "- [ ] (completar: cobertura de bases, idioma, ventana temporal)",
