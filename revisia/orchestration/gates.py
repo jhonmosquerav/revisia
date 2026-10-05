@@ -11,6 +11,7 @@ tiene que ser estable entre reanudaciones, o el gate no convergería nunca.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping
 
 from revisia.metrics import ScreeningMetrics
@@ -22,6 +23,11 @@ from revisia.schemas.screening import ScreeningDecision
 # entera (``_MAX_NOTA``, hitl.py): lo que pasa de ahí no se lee, y una razón de miles de
 # caracteres no tiene por qué viajar en la política.
 _MAX_RAZON = 160
+# Tope del id de modelo en la nota. Los votos de todos los miembros van enteros delante de las
+# razones y ``_MAX_NOTA`` (hitl.py) está dimensionado para 5 votos con ids de este tamaño: un id
+# más largo (``openrouter:`` + proveedor + modelo con versión) se abrevia con «…» en lugar de
+# empujar el voto de otro miembro fuera de la nota.
+_MAX_MODELO = 40
 
 
 def _mode(autonomy: str) -> str:
@@ -42,25 +48,37 @@ def _votes(decision: ScreeningDecision) -> list[dict]:
     ]
 
 
+def _model(model: str) -> str:
+    """El id de modelo acotado a ``_MAX_MODELO`` caracteres (con «…» si se corta)."""
+    return model if len(model) <= _MAX_MODELO else model[: _MAX_MODELO - 1] + "…"
+
+
 def _note(decision: ScreeningDecision) -> str:
     """Resumen de los votos para la plantilla (se sanea al escribirla).
 
-    Primero el ``modelo: etiqueta (confianza)`` de TODOS los miembros y, detrás, sus
-    razones (acotadas a ``_MAX_RAZON``). La plantilla corta la nota a 120 caracteres: con
-    el ensemble sesgado a recall el voto que decide suele ser el discrepante, y si la
-    razón del primer miembro iba delante el corte se lo comía (revisión de la Tarea 22).
+    Primero el ``modelo: etiqueta (confianza)`` de TODOS los miembros (ids acotados a
+    ``_MAX_MODELO``) y, detrás, sus razones (acotadas a ``_MAX_RAZON``). La plantilla corta
+    la nota entera a ``_MAX_NOTA``: con el ensemble sesgado a recall el voto que decide
+    suele ser el discrepante, así que los votos van delante y solo se corta lo que viene
+    detrás, las razones (revisión de las Tareas 22 y 23). Un miembro sin razón ni criterios
+    no tiene entrada en las razones.
     """
-    votes = [f"{v.model}: {v.label} ({v.confidence:.2f})" for v in decision.votes]
+    if not decision.votes:
+        return ""
+    votes = " | ".join(f"{_model(v.model)}: {v.label} ({v.confidence:.2f})" for v in decision.votes)
     reasons = []
     for v in decision.votes:
-        rationale = v.rationale
+        rationale = v.rationale.strip()
         if len(rationale) > _MAX_RAZON:
             rationale = rationale[: _MAX_RAZON - 1] + "…"
-        criteria = f" [{', '.join(v.criteria_violated)}]" if v.criteria_violated else ""
-        reasons.append(f"{v.model}: «{rationale}»{criteria}")
-    if not votes:
-        return ""
-    return f"{' | '.join(votes)} · {' | '.join(reasons)}"
+        parts = []
+        if rationale:
+            parts.append(f"«{rationale}»")
+        if v.criteria_violated:
+            parts.append(f"[{', '.join(v.criteria_violated)}]")
+        if parts:
+            reasons.append(f"{_model(v.model)}: {' '.join(parts)}")
+    return f"{votes} · {' | '.join(reasons)}" if reasons else votes
 
 
 def _record_fields(record: SearchRecord | None, record_id: str) -> dict:
@@ -79,11 +97,23 @@ def _record_fields(record: SearchRecord | None, record_id: str) -> dict:
     }
 
 
+def _threshold(thresholds: Mapping[str, float], key: str) -> float | None:
+    """El umbral ``key`` o ``None`` si falta o no es finito.
+
+    ``.nan`` y ``.inf`` son YAML válido y ``protocol.thresholds`` los acepta, pero un
+    ``nan`` o ``inf`` en la solicitud rompe su hash (``canonical_sha256`` no admite no
+    finitos): la corrida moriría en ``screening_ta`` y no convergería al reanudar. Un umbral
+    no finito no compara nada, es como si no estuviera.
+    """
+    value = thresholds.get(key)
+    return value if value is not None and math.isfinite(value) else None
+
+
 def _quality(metrics: ScreeningMetrics | None, thresholds: Mapping[str, float]) -> dict | None:
     """Calidad de la propuesta IA frente al gold y los umbrales del protocolo (D7)."""
     if metrics is None:
         return None
-    recall_target = thresholds.get("recall_target")
+    recall_target = _threshold(thresholds, "recall_target")
     meets = None
     if metrics.recall is not None and recall_target is not None:
         meets = metrics.recall >= recall_target
@@ -91,7 +121,7 @@ def _quality(metrics: ScreeningMetrics | None, thresholds: Mapping[str, float]) 
         "recall": metrics.recall,
         "recall_target": recall_target,
         "kappa": metrics.cohen_kappa,
-        "kappa_min": thresholds.get("kappa_min"),
+        "kappa_min": _threshold(thresholds, "kappa_min"),
         "gold_positives": metrics.tp + metrics.fn,
         "recall_meets_target": meets,
     }

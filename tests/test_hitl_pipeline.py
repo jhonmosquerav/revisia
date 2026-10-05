@@ -4,6 +4,7 @@ spec 2026-10-04 §8)."""
 from __future__ import annotations
 
 import json
+import math
 import shutil
 from pathlib import Path
 
@@ -13,10 +14,15 @@ from fakes import ScriptedProvider, fetch_disponible
 from hitl_helpers import correr_hasta, leer_solicitud, responder_gate
 
 from revisia.config import load_protocol
-from revisia.metrics import compute_screening_metrics
+from revisia.metrics import ScreeningMetrics, compute_screening_metrics
 from revisia.orchestration import pipeline as pipeline_mod
 from revisia.orchestration.gates import apply_labels, ta_payload, ta_policy
-from revisia.orchestration.hitl import DecisionFileError, RecordLabel, render_decision_template
+from revisia.orchestration.hitl import (
+    _MAX_COMENTARIO,
+    DecisionFileError,
+    RecordLabel,
+    render_decision_template,
+)
 from revisia.orchestration.pipeline import run_pipeline
 from revisia.orchestration.run_context import RunContext
 from revisia.provenance.ledger import AUTO_APPROVE_ACTOR
@@ -602,6 +608,99 @@ def test_ta_nota_muestra_el_voto_de_cada_miembro_antes_de_las_razones() -> None:
     assert len(politica.hints[0].note) < 3 * len(largo)
 
 
+def _decision_con_modelos(
+    modelos: tuple[str, ...], etiquetas: tuple[str, ...], razon: str
+) -> ScreeningDecision:
+    """Un registro ``a`` votado por ``modelos`` (uno por etiqueta), todos con la misma razón."""
+    return ScreeningDecision(
+        record_id="a",
+        votes=[
+            ScreeningVote(model=modelo, label=etiqueta, confidence=0.8, rationale=razon)
+            for modelo, etiqueta in zip(modelos, etiquetas, strict=True)
+        ],
+        ensemble_label="include",
+        final_label="include",
+    )
+
+
+def _comentario_de_la_plantilla(decision: ScreeningDecision) -> str:
+    """La línea de comentario del registro de ``decision`` en ``decision.template.yml``."""
+    politica = ta_policy(decisions=[decision], records=_registros("a"), autonomy="A1")
+    plantilla = render_decision_template(
+        stage="screening_ta",
+        autonomy="A1",
+        request_sha256="0" * 64,
+        records=politica,
+        flags=None,
+    )
+    return next(linea for linea in plantilla.splitlines() if linea.startswith("  # propuesta IA"))
+
+
+def test_ta_plantilla_muestra_los_tres_votos_con_ids_de_modelo_reales() -> None:
+    # Cada voto cuesta ~50 caracteres con ids reales: con el tope antiguo de 120 la nota
+    # moría en `… | openrouter:deepseek/de…` y el voto discrepante no se veía.
+    modelos = (
+        "claude_code:claude-sonnet-5-5",
+        "openrouter:google/gemini-3-pro",
+        "openrouter:deepseek/deepseek-v4",
+    )
+    etiquetas = ("exclude", "include", "exclude")
+
+    comentario = _comentario_de_la_plantilla(_decision_con_modelos(modelos, etiquetas, "r" * 200))
+
+    for modelo, etiqueta in zip(modelos, etiquetas, strict=True):
+        assert f"{modelo}: {etiqueta} (0.80)" in comentario
+    # Lo único que se corta son las razones, y la línea sigue acotada.
+    assert comentario.endswith("…")
+    assert len(comentario.strip()) <= _MAX_COMENTARIO + len("# ")
+
+
+def test_ta_plantilla_muestra_los_cinco_votos_con_ids_de_40_caracteres() -> None:
+    modelos = tuple(f"p{i}:" + "m" * 37 for i in range(5))
+    assert {len(m) for m in modelos} == {40}
+    etiquetas = ("exclude", "exclude", "include", "unclear", "exclude")
+
+    comentario = _comentario_de_la_plantilla(_decision_con_modelos(modelos, etiquetas, "r" * 5000))
+
+    for modelo, etiqueta in zip(modelos, etiquetas, strict=True):
+        assert f"{modelo}: {etiqueta} (0.80)" in comentario
+    assert comentario.endswith("…")
+    assert len(comentario.strip()) <= _MAX_COMENTARIO + len("# ")
+
+
+def test_ta_nota_acota_el_id_de_modelo_a_40_caracteres_sin_perder_el_voto() -> None:
+    # Un id de más de 40 caracteres se abrevia con «…»; el voto (etiqueta y confianza) queda.
+    modelos = tuple(f"p{i}:" + "z" * 100 for i in range(5))
+    etiquetas = ("exclude", "include", "exclude", "exclude", "unclear")
+
+    comentario = _comentario_de_la_plantilla(_decision_con_modelos(modelos, etiquetas, "razón"))
+
+    for modelo, etiqueta in zip(modelos, etiquetas, strict=True):
+        assert f"{modelo[:39]}…: {etiqueta} (0.80)" in comentario
+        assert modelo not in comentario
+
+
+def test_ta_nota_omite_las_razones_vacias() -> None:
+    def voto(modelo: str, etiqueta: str, razon: str) -> ScreeningVote:
+        return ScreeningVote(model=modelo, label=etiqueta, confidence=0.7, rationale=razon)
+
+    def nota(*votos: ScreeningVote) -> str:
+        decision = ScreeningDecision(
+            record_id="a", votes=list(votos), ensemble_label="include", final_label="include"
+        )
+        politica = ta_policy(decisions=[decision], records=_registros("a"), autonomy="A1")
+        return politica.hints[0].note
+
+    # Sin razón (vacía o solo espacios) no hay entrada `modelo: «»` en las razones.
+    assert nota(voto("m0", "include", ""), voto("m1", "exclude", "no es un ECA")) == (
+        "m0: include (0.70) | m1: exclude (0.70) · m1: «no es un ECA»"
+    )
+    # Ningún miembro razona: solo los votos, sin ` · ` colgando.
+    assert nota(voto("m0", "include", ""), voto("m1", "exclude", "   ")) == (
+        "m0: include (0.70) | m1: exclude (0.70)"
+    )
+
+
 # ── `unclear` de T/A con etiqueta humana (D1, D5) ───────────────────────
 
 
@@ -729,3 +828,65 @@ def test_review_request_ta_sin_gold_no_informa_calidad(tmp_path: Path, proveedor
     run_pipeline(protocol, EXAMPLE, ctx, search_fn=_busqueda)
     solicitud = leer_solicitud(ctx.run_dir, "screening_ta")
     assert (solicitud["quality"], solicitud["ai_excluded"]) == (None, ["rec-2"])
+
+
+def _metricas(recall: float | None) -> ScreeningMetrics:
+    return ScreeningMetrics(n=2, tp=1, fp=0, fn=1, tn=0, recall=recall, cohen_kappa=0.0)
+
+
+@pytest.mark.parametrize(
+    ("recall", "umbrales", "cumple"),
+    [
+        (0.96, {"recall_target": 0.95}, True),
+        (0.95, {"recall_target": 0.95}, True),  # la comparación es `>=`
+        (0.5, {"recall_target": 0.95}, False),
+        (None, {"recall_target": 0.95}, None),  # recall indefinido: ni cumple ni incumple
+        (0.5, {"kappa_min": 0.6}, None),  # sin `recall_target` no hay con qué comparar
+        (0.5, {}, None),
+        (0.5, None, None),  # `ta_payload` tolera `thresholds=None`
+    ],
+)
+def test_ta_payload_recall_meets_target_segun_recall_y_umbral(recall, umbrales, cumple) -> None:
+    payload = ta_payload(
+        decisions=[_decision("a", "include")],
+        records=_registros("a"),
+        autonomy="A1",
+        metrics=_metricas(recall),
+        thresholds=umbrales,
+    )
+
+    assert payload["quality"]["recall_meets_target"] is cumple
+    assert payload["quality"]["recall"] == recall
+
+
+@pytest.mark.parametrize(
+    ("clave", "valor"),
+    [
+        ("recall_target", ".nan"),
+        ("recall_target", ".inf"),
+        ("kappa_min", ".nan"),
+        ("kappa_min", "-.inf"),
+    ],
+)
+def test_review_request_ta_con_umbral_no_finito_pausa_y_lo_deja_en_none(
+    tmp_path: Path, proveedor, clave: str, valor: str
+) -> None:
+    # `.nan` y `.inf` son YAML válido: copiados tal cual a la solicitud, `canonical_sha256`
+    # (allow_nan=False) lanzaba `ValueError` y la corrida moría en `screening_ta` sin pausar.
+    proto = _proto_con_gold(tmp_path)
+    ruta = proto / "protocol.yml"
+    umbrales = {"recall_target": "0.95", clave: valor}
+    bloque = "".join(f"  {k}: {v}\n" for k, v in umbrales.items())
+    ruta.write_text(ruta.read_text("utf-8").replace("  recall_target: 0.95\n", bloque), "utf-8")
+    protocol = load_protocol(proto)
+    assert not math.isfinite(protocol.thresholds[clave])
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+
+    resultado = run_pipeline(protocol, proto, ctx, search_fn=_busqueda)
+
+    assert (resultado.status, resultado.stage) == ("paused", "screening_ta")
+    calidad = leer_solicitud(ctx.run_dir, "screening_ta")["quality"]
+    assert calidad[clave] is None
+    # Sin umbral finito no se compara; el otro umbral sigue valiendo.
+    esperado = None if clave == "recall_target" else False
+    assert calidad["recall_meets_target"] is esperado

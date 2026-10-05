@@ -11,6 +11,8 @@ import yaml
 from pydantic import ValidationError
 
 from revisia.orchestration.hitl import (
+    _MAX_COMENTARIO,
+    _MAX_NOTA,
     DecisionFileError,
     FlaggedClaim,
     FlagPolicy,
@@ -904,7 +906,7 @@ def test_template_acota_la_afirmacion_y_conserva_la_cita_y_su_motivo() -> None:
 def test_template_con_todo_el_texto_libre_largo_no_pierde_nada_estructurado() -> None:
     # El peor caso: título, propuesta y nota enormes y las tres marcas a la vez. La línea
     # cabe en el tope sin que este corte nada: las marcas están enteras y la nota llega a
-    # su propio límite (120), no al del tope.
+    # su propio límite (``_MAX_NOTA``), no al del tope (``_MAX_COMENTARIO``).
     politica = RecordPolicy(
         hints=(RecordHint("r1", "T" * 5000, "P" * 500, "n" * 5000),),
         must_label=frozenset({"r1"}),
@@ -914,8 +916,8 @@ def test_template_con_todo_el_texto_libre_largo_no_pierde_nada_estructurado() ->
     comentario = _linea(_plantilla(records=politica), "propuesta IA")
     for marca in ("obligatorio", "unclear: resuélvelo", "no recuperado: rescatable"):
         assert marca in comentario
-    assert comentario.endswith("n" * 119 + "…")
-    assert len(comentario) <= 402
+    assert comentario.endswith("n" * (_MAX_NOTA - 1) + "…")
+    assert len(comentario) < _MAX_COMENTARIO
 
 
 @pytest.mark.parametrize("marca", list(_FORMATO.values()), ids=list(_FORMATO))

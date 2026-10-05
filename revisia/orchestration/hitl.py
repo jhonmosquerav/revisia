@@ -64,12 +64,19 @@ _CLAVES_COMUNES = ("schema_version", "stage", "autonomy", "request_sha256")
 # acota cada campo, no la línea. Así lo estructurado (propuesta, marcas, id citado, motivo
 # de la marca) siempre sobrevive a un título de 200 caracteres (revisión de la Tarea 21).
 _MAX_TEXTO = 120
-_MAX_NOTA = 120
+# La nota de un registro de T/A lleva primero el voto de cada miembro del ensemble
+# (``modelo: etiqueta (confianza)``, id de modelo acotado a 40 en gates.py) y detrás sus
+# razones. Los votos de 5 miembros ocupan, como mucho, 5 × (40 + 16) + 4 × 3 = 292
+# caracteres (16 = ``: `` + 7 de la etiqueta + `` (0.80)``; 3 = el `` | `` entre votos). Con
+# 500 quedan ~205 para las razones, que son lo único que se corta (``_MAX_RAZON``, gates.py).
+_MAX_NOTA = 500
 _MAX_PROPUESTA = 40
 _MAX_ID_CITADO = 60
 # Red de seguridad de la línea entera. Va por encima de la suma de los límites de arriba
-# más las partes fijas (peor caso de un registro: ~370), así que no corta nada en la práctica.
-_MAX_COMENTARIO = 400
+# más las partes fijas (peor caso de un registro: «# » 2 + «propuesta IA: » 14 + 40 de
+# propuesta + 55 de las tres marcas + 122 del título entre «» + 500 de la nota + 5 × 3 de
+# separadores = ~750), así que no corta nada en la práctica.
+_MAX_COMENTARIO = 800
 # YAML (PyYAML y libyaml) solo lee como clave implícita ``clave: valor`` hasta 1024
 # caracteres, contando las comillas y los escapes. Una más larga va en forma explícita.
 _MAX_CLAVE_IMPLICITA = 1000
