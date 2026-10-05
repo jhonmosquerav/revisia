@@ -447,7 +447,7 @@ def test_force_human_con_a2_registra_a1_en_el_ledger(tmp_path: Path) -> None:
     assert ledger[-1].detail["forced_human"] is True
 
 
-def test_decision_sin_registros_ni_citas_no_cambia_el_detalle_del_approve(tmp_path: Path) -> None:
+def test_records_y_flags_no_se_cuelan_al_detalle_del_approve(tmp_path: Path) -> None:
     # `records` y `flags` no se cuelan al `detail` del approve (viajan en sus entradas).
     ctx, _ = _responder(
         tmp_path,
@@ -464,3 +464,146 @@ def test_decision_sin_registros_ni_citas_no_cambia_el_detalle_del_approve(tmp_pa
         "n_labels",
         "forced_human",
     }
+
+
+# ── el ledger manda, completitud y reetiquetado (revisión de la Tarea 20) ──
+
+
+def test_force_human_no_reutiliza_una_aprobacion_de_demostracion(tmp_path: Path) -> None:
+    # M5/D8: una cita marcada la resuelve un humano. Una aprobación de demostración
+    # (--auto-approve) de la MISMA solicitud no se reutiliza con `force_human`: solo vale
+    # del ledger la decisión efectiva cuyo actor es humano.
+    ctx = RunContext("demo", tmp_path, "T")
+    demo = _gate(ctx, "reporte", marcas=_MARCAS, auto_approve=True)
+    assert (demo.status, demo.actor) == ("approved", "auto-approve (demo)")
+
+    forzada = _gate(ctx, "reporte", marcas=_MARCAS, force_human=True)
+    assert forzada.status == "paused"
+    assert forzada.request_sha256 == demo.request_sha256  # es la misma solicitud
+    assert len(ctx.ledger.read_all()) == 1  # no se registró nada nuevo
+
+    decision = {
+        "request_sha256": demo.request_sha256,
+        "approved": True,
+        "actor": "human:ana",
+        "flags": {
+            "0": {"verdict": "false_positive", "reason": "[2019] es un año"},
+            "3": {"verdict": "false_positive", "reason": "errata"},
+        },
+    }
+    (ctx.stage_dir("reporte") / "decision.yml").write_text(
+        yaml.safe_dump(decision, allow_unicode=True), encoding="utf-8"
+    )
+    humana = _gate(ctx, "reporte", marcas=_MARCAS, force_human=True)
+    assert (humana.status, humana.actor) == ("approved", "human:ana")
+    assert sorted(humana.flag_reviews) == ["0", "3"]
+    efectiva = summarize_gates(ctx.ledger.read_all())["reporte"]
+    assert (efectiva.actor, efectiva.forced_human) == ("human:ana", True)
+
+    # La decisión humana sí se reutiliza del ledger, sin decision.yml.
+    (ctx.stage_dir("reporte") / "decision.yml").unlink()
+    total = len(ctx.ledger.read_all())
+    reutilizada = _gate(ctx, "reporte", marcas=_MARCAS, force_human=True)
+    assert (reutilizada.status, reutilizada.actor) == ("approved", "human:ana")
+    assert len(ctx.ledger.read_all()) == total
+
+
+def test_adjudicaciones_se_reconstruyen_desde_el_ledger(tmp_path: Path) -> None:
+    ctx, _ = _responder(
+        tmp_path,
+        "reporte",
+        marcas=_MARCAS,
+        force_human=True,
+        flags={
+            "0": {"verdict": "false_positive", "reason": "[2019] es un año"},
+            "3": {"verdict": "false_positive", "reason": "errata de rec-1"},
+        },
+    )
+    (ctx.run_dir / "reporte" / "decision.yml").unlink()
+    result = _gate(ctx, "reporte", marcas=_MARCAS, force_human=True)
+    assert (result.status, result.actor) == ("approved", "human:ana")
+    assert {k: (v.verdict, v.reason) for k, v in result.flag_reviews.items()} == {
+        "0": ("false_positive", "[2019] es un año"),
+        "3": ("false_positive", "errata de rec-1"),
+    }
+    assert len(ctx.ledger.read_all()) == 3  # nada nuevo
+
+
+def test_unclear_sin_etiquetar_con_decision_de_fichero_es_error(tmp_path: Path) -> None:
+    # `must_resolve` pesa igual que `must_label` al aprobar desde decision.yml: el
+    # `unclear` lo resuelve un humano (D9) y el fichero no puede dejarlo pendiente.
+    politica = RecordPolicy(hints=_HINTS, must_resolve=frozenset({"b"}))
+    with pytest.raises(DecisionFileError, match=r"para aprobar falta etiquetar o adjudicar: b "):
+        _responder(tmp_path, "screening_ft", politica=politica, records={"a": {"label": "include"}})
+
+
+def test_unclear_etiquetado_con_decision_de_fichero_se_aprueba(tmp_path: Path) -> None:
+    politica = RecordPolicy(hints=_HINTS, must_resolve=frozenset({"b"}))
+    _, result = _responder(
+        tmp_path, "screening_ft", politica=politica, records={"b": {"label": "exclude"}}
+    )
+    assert result.status == "approved"
+    assert {k: v.label for k, v in result.labels.items()} == {"b": "exclude"}
+
+
+def test_reetiquetar_tras_aprobar_registra_label_y_approve_nuevos(tmp_path: Path) -> None:
+    # D14: un decision.yml nuevo para la misma solicitud (otra etiqueta) es otra decisión;
+    # la efectiva y sus etiquetas son las nuevas, y las viejas quedan en el ledger sin
+    # colarse en la decisión efectiva (la `a` de la primera no está en la segunda).
+    politica = RecordPolicy(hints=_HINTS)
+    ctx, primera = _responder(
+        tmp_path,
+        "screening_ta",
+        politica=politica,
+        records={"a": {"label": "include"}, "b": {"label": "include"}},
+    )
+    assert {k: v.label for k, v in primera.labels.items()} == {"a": "include", "b": "include"}
+
+    decision = {
+        "request_sha256": primera.request_sha256,
+        "approved": True,
+        "actor": "human:ana",
+        "records": {"b": {"label": "exclude"}},
+    }
+    ruta = ctx.stage_dir("screening_ta") / "decision.yml"
+    ruta.write_text(yaml.safe_dump(decision), encoding="utf-8")
+    segunda = _gate(ctx, "screening_ta", politica=politica)
+
+    assert segunda.status == "approved"
+    assert {k: v.label for k, v in segunda.labels.items()} == {"b": "exclude"}
+    ledger = ctx.ledger.read_all()
+    assert [(e.action, e.target) for e in ledger] == [
+        ("label", "a"),
+        ("label", "b"),
+        ("approve", None),
+        ("label", "b"),
+        ("approve", None),
+    ]
+    assert [e.detail["to"] for e in ledger if e.target == "b"] == ["include", "exclude"]
+    assert summarize_gates(ledger)["screening_ta"].n_labels == 1  # solo las de la efectiva
+
+    ruta.unlink()  # sin decision.yml, el ledger devuelve las etiquetas nuevas
+    reconstruida = _gate(ctx, "screening_ta", politica=politica)
+    assert {k: v.label for k, v in reconstruida.labels.items()} == {"b": "exclude"}
+    assert len(ctx.ledger.read_all()) == 5
+
+
+def test_indices_de_flags_desconocidos_se_listan_en_orden_numerico(tmp_path: Path) -> None:
+    # Como texto "10" < "2": el humano ve los índices en el orden en que los cuenta.
+    with pytest.raises(DecisionFileError, match=r"citas marcadas: 2, 10 \(2 en total\)"):
+        _responder(
+            tmp_path,
+            "reporte",
+            marcas=_MARCAS,
+            force_human=True,
+            flags={
+                "10": {"verdict": "false_positive", "reason": "x"},
+                "2": {"verdict": "false_positive", "reason": "x"},
+            },
+        )
+
+
+def test_citas_sin_adjudicar_se_listan_en_orden_numerico(tmp_path: Path) -> None:
+    marcas = FlagPolicy(flagged=tuple(FlaggedClaim(i, None, f"afirmación {i}") for i in (10, 2)))
+    with pytest.raises(DecisionFileError, match=r"adjudicar: cita 2, cita 10 \(2 en total\)"):
+        _responder(tmp_path, "reporte", marcas=marcas, force_human=True)

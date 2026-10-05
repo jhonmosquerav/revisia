@@ -38,7 +38,12 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError, field_validator
 
 from revisia.orchestration.run_context import RunContext
-from revisia.provenance.ledger import AUTO_APPROVE_ACTOR, DecisionEntry, summarize_gates
+from revisia.provenance.ledger import (
+    AUTO_APPROVE_ACTOR,
+    HUMAN_ACTOR_PREFIX,
+    DecisionEntry,
+    summarize_gates,
+)
 from revisia.provenance.runmeta import canonical_sha256
 from revisia.schemas.artifacts import ARTIFACT_SCHEMA_VERSION
 
@@ -59,7 +64,7 @@ _CLAVES_COMUNES = ("schema_version", "stage", "autonomy", "request_sha256")
 # espacio: la cadena vuelve distinta y el hash ya no se recalcula desde el fichero
 # (spec 2026-10-04, relación 15). U+2028/U+2029 sobreviven en PyYAML pero YAML 1.2 no
 # los trata como saltos: se escapan para que ningún lector los lea de otra forma.
-_SALTOS_NO_FIABLES = frozenset("\x85  ")
+_SALTOS_NO_FIABLES = frozenset("\x85\u2028\u2029")
 
 
 class _FielDumper(yaml.SafeDumper):
@@ -67,7 +72,7 @@ class _FielDumper(yaml.SafeDumper):
 
 
 def _represent_str(dumper: yaml.SafeDumper, data: str) -> yaml.ScalarNode:
-    # Entre comillas dobles esos caracteres salen escapados (``\x85``, `` ``) y el
+    # Entre comillas dobles esos caracteres salen escapados (``\x85``, ``\u2028``) y el
     # resto del texto (acentos, ñ…) sigue legible para el humano.
     style = '"' if _SALTOS_NO_FIABLES.intersection(data) else None
     return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=style)
@@ -263,6 +268,14 @@ def render_decision_template(*, stage: str, autonomy: str, request_sha256: str) 
     return "\n".join(lines) + "\n"
 
 
+def _por_indice(key: str) -> tuple[int, int, str]:
+    """Orden de las claves de ``flags``: los índices numéricos por valor ("2" antes que "10").
+
+    Como texto ``"10" < "2"``; una clave que no es un entero decimal va después, por texto.
+    """
+    return (0, int(key), key) if key.isascii() and key.isdecimal() else (1, 0, key)
+
+
 def _listed(items: list[str]) -> str:
     """Hasta ``_MAX_LISTED`` elementos y el total, para un mensaje de error."""
     shown = ", ".join(items[:_MAX_LISTED])
@@ -320,7 +333,7 @@ def _validate(
                 )
     if flags is not None:
         valid_index = {str(c.index) for c in flags.flagged}
-        unknown = sorted(set(decision.flags) - valid_index)
+        unknown = sorted(set(decision.flags) - valid_index, key=_por_indice)
         if unknown:
             raise DecisionFileError(
                 f"{path}: `flags` con índices que no son citas marcadas: {_listed(unknown)}."
@@ -330,7 +343,7 @@ def _validate(
         labeled = {rid for rid, lab in decision.records.items() if lab.label is not None}
         pending += sorted((records.must_label | records.must_resolve) - labeled)
     if flags is not None:
-        for claim in flags.flagged:
+        for claim in sorted(flags.flagged, key=lambda c: c.index):
             review = decision.flags.get(str(claim.index))
             done = (
                 review is not None
@@ -615,7 +628,13 @@ def review_gate(
         )
     if decision is None:
         effective = summarize_gates(entries).get(stage)
-        if effective is not None and effective.request_sha256 == request_sha256:
+        if (
+            effective is not None
+            and effective.request_sha256 == request_sha256
+            # Con `force_human` solo vale una decisión humana: una aprobación de
+            # demostración de la misma solicitud no resuelve una cita marcada (M5, D8).
+            and (not force_human or effective.actor.startswith(HUMAN_ACTOR_PREFIX))
+        ):
             # El ledger manda: la decisión de esta solicitud ya está registrada.
             approved = effective.action != "reject"
             labels, reviews = _from_ledger(entries, stage, effective.decision_sha256)
