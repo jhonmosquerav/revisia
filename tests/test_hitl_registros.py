@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from revisia.orchestration.hitl import (
     HumanDecision,
     RecordHint,
     RecordPolicy,
+    _acotar,
     render_decision_template,
     review_gate,
 )
@@ -916,6 +918,54 @@ def test_template_pide_sustituir_desconocido_por_el_nombre_al_pie(
     assert yaml.safe_load(plantilla)["actor"] == "human:desconocido"
 
 
+def test_template_sin_citas_marcadas_no_imprime_la_cabecera_de_las_citas() -> None:
+    # `FlagPolicy(flagged=())` deja el bloque `flags: {}` (la decisión copiada tiene que
+    # validar), pero la cabecera «Citas marcadas por el verificador: adjudica cada una…» hablaba
+    # de citas que no hay.
+    vacia = _plantilla(flags=FlagPolicy(flagged=()))
+    assert "Citas marcadas por el verificador" not in vacia
+    assert "false_positive" not in vacia
+    assert yaml.safe_load(vacia)["flags"] == {}
+    assert "flags: {}" in vacia
+
+    con_citas = _plantilla(flags=_MARCAS)
+    assert "Citas marcadas por el verificador" in con_citas
+    assert "`verdict: false_positive`" in con_citas
+
+
+def test_acotar_corta_dentro_del_limite_y_sin_espacio_antes_de_los_puntos_suspensivos() -> None:
+    assert _acotar("corto", 10) == "corto"  # dentro del límite, tal cual
+    assert _acotar("x" * 50, 20) == "x" * 19 + "…"  # el «…» cuenta dentro del límite
+    # Cortar justo detrás de un espacio dejaba «abcdefgh …».
+    assert _acotar("abcdefgh ijklmnop", 10) == "abcdefgh…"
+    assert " …" not in _acotar("palabra " * 40, 17)
+
+
+@pytest.mark.parametrize(
+    "id_citado",
+    ["x" * 200, "x" * 57 + "\\" * 5, "x" * 59 + "'\"", "ñ" * 80, "x" * 58 + chr(0x1F600) * 4],
+    ids=["largo", "barras_inversas", "comillas", "no_ascii", "emoji"],
+)
+def test_template_acota_el_id_citado_antes_del_repr_y_no_corta_un_escape(id_citado: str) -> None:
+    # `repr(id)` y después cortar partía un escape (`'xx\`, sin la barra que lo cierra) y dejaba
+    # el literal sin su comilla final; se acota el id y luego se le hace el `repr`: el literal
+    # de la plantilla siempre es válido y vuelve al id acotado.
+    comentario = _linea(
+        _plantilla(flags=FlagPolicy(flagged=(FlaggedClaim(1, id_citado, "c", None),))), "cita "
+    )
+    literal = re.search(r"cita (.+?) · «", comentario)
+    assert literal is not None, comentario
+    assert ast.literal_eval(literal.group(1)) == _acotar(id_citado, 60)
+
+
+def test_template_con_id_citado_nulo_dice_none() -> None:
+    comentario = _linea(
+        _plantilla(flags=FlagPolicy(flagged=(FlaggedClaim(2, None, "afirmación", "sin id"),))),
+        "cita ",
+    )
+    assert comentario == "# [2] cita None · sin id · «afirmación»"
+
+
 def test_template_sin_politicas_solo_lleva_la_decision() -> None:
     plantilla = _plantilla(stage="rob")
     assert set(yaml.safe_load(plantilla)) == _RAIZ
@@ -1033,12 +1083,35 @@ def _claves_largas() -> dict[str, str]:
         # Pocos caracteres, pero cada U+0085 se escribe como un escape de 6: mide la clave
         # ya escapada, no el id.
         "escapes": "x" + chr(0x85) * 200,
+        # Un id con `: ` y ` #` (en YAML plano serían un mapa y un comentario): en comillas,
+        # en la forma implícita (800 caracteres), en la frontera (998, cerrado con una `b`) y en
+        # la explícita (1100, 5000).
+        "dos_puntos_y_almohadilla_800": "a: #" * 200,
+        "dos_puntos_y_almohadilla_998": ("k: v #c " * 125)[:997] + "b",
+        "dos_puntos_y_almohadilla_1100": ("k: v #c " * 138)[:1100],
+        "dos_puntos_y_almohadilla_5000": ("k: v #c " * 625)[:5000],
     }
 
 
+# ``yaml.safe_load`` usa el ``SafeLoader`` de Python puro; con libyaml existe además
+# ``CSafeLoader`` (el que usan muchas herramientas), que lee distinto en los bordes (la clave
+# implícita de 1024, los escapes). Los dos tienen que devolver la plantilla idéntica.
+_CARGADORES = [
+    pytest.param(yaml.SafeLoader, id="SafeLoader"),
+    pytest.param(
+        getattr(yaml, "CSafeLoader", None),
+        id="CSafeLoader",
+        marks=pytest.mark.skipif(
+            not hasattr(yaml, "CSafeLoader"), reason="PyYAML sin libyaml (CSafeLoader)"
+        ),
+    ),
+]
+
+
+@pytest.mark.parametrize("cargador", _CARGADORES)
 @pytest.mark.parametrize("id_largo", list(_claves_largas().values()), ids=list(_claves_largas()))
 def test_template_con_claves_de_mas_de_1024_caracteres_sigue_siendo_legible(
-    id_largo: str,
+    id_largo: str, cargador: type
 ) -> None:
     # YAML limita a 1024 caracteres la clave implícita (`clave: valor` en una línea): una
     # más larga dejaba toda la plantilla ilegible (ScannerError). Esas van con la forma
@@ -1050,16 +1123,19 @@ def test_template_con_claves_de_mas_de_1024_caracteres_sigue_siendo_legible(
             RecordHint("otro", "t", None),
         )
     )
-    datos = yaml.safe_load(_plantilla(records=politica))
+    datos = yaml.load(_plantilla(records=politica), Loader=cargador)
     assert datos["approved"] is None
     assert list(datos["records"]) == ["corto", id_largo, "otro"]
     assert all(v == {"label": None, "reason": None} for v in datos["records"].values())
 
 
-def test_template_con_indice_de_cita_de_mas_de_1024_caracteres_sigue_siendo_legible() -> None:
+@pytest.mark.parametrize("cargador", _CARGADORES)
+def test_template_con_indice_de_cita_de_mas_de_1024_caracteres_sigue_siendo_legible(
+    cargador: type,
+) -> None:
     indice = int("9" * 1100)
     marcas = FlagPolicy(flagged=(FlaggedClaim(1, "x", "c"), FlaggedClaim(indice, "x", "c")))
-    datos = yaml.safe_load(_plantilla(flags=marcas))
+    datos = yaml.load(_plantilla(flags=marcas), Loader=cargador)
     assert list(datos["flags"]) == ["1", str(indice)]
     assert all(v == {"verdict": None, "reason": None} for v in datos["flags"].values())
 

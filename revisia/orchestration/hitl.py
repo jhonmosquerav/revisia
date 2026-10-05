@@ -281,9 +281,12 @@ def _plain(text: str) -> str:
 
 
 def _acotar(text: str, limit: int) -> str:
-    """``_plain`` y, si pasa de ``limit`` caracteres, cortado con «…» dentro del límite."""
+    """``_plain`` y, si pasa de ``limit`` caracteres, cortado con «…» dentro del límite.
+
+    Si el corte cae justo detrás de un espacio, ese espacio se quita: «abcdefgh …» no.
+    """
     plain = _plain(text)
-    return plain if len(plain) <= limit else plain[: limit - 1] + "…"
+    return plain if len(plain) <= limit else plain[: limit - 1].rstrip() + "…"
 
 
 def _comment(text: str, limit: int = _MAX_COMENTARIO) -> str:
@@ -360,7 +363,9 @@ def render_decision_template(
         "# `request_sha256` ata la decisión a esta solicitud: si la solicitud cambia,",
         "# una decisión vieja no se aplica y la corrida vuelve a pausar.",
     ]
-    if flags is not None:
+    if flags is not None and flags.flagged:
+        # Con `FlagPolicy(flagged=())` queda el bloque `flags: {}` (la decisión copiada tiene
+        # que validar), pero no la cabecera: hablaría de citas que no hay.
         lines += [
             "#",
             "# Citas marcadas por el verificador: para APROBAR, adjudica cada una con",
@@ -408,7 +413,12 @@ def render_decision_template(
     if flags is not None:
         lines.append("flags:" if flags.flagged else "flags: {}")
         for claim in flags.flagged:
-            parts = [f"[{claim.index}] cita {_acotar(repr(claim.cited_id), _MAX_ID_CITADO)}"]
+            # Se acota el id y después se le hace el `repr`: cortar el `repr` partía un escape
+            # (`'ab\`) y dejaba el literal sin su comilla final.
+            cited = (
+                "None" if claim.cited_id is None else repr(_acotar(claim.cited_id, _MAX_ID_CITADO))
+            )
+            parts = [f"[{claim.index}] cita {cited}"]
             if note := _acotar(claim.note or "", _MAX_NOTA):
                 parts.append(note)
             parts.append(f"«{_acotar(claim.claim, _MAX_TEXTO)}»")

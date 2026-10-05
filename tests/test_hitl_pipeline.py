@@ -99,12 +99,13 @@ def _sin_huella_humana(decisiones: dict[str, dict]) -> None:
         assert huella == (None, None, None), f"{rid}: {huella}"
 
 
-def _proto_a0(tmp_path: Path) -> Path:
-    """Copia del demo con ``screening_ta`` en A0: el humano etiqueta cada registro (D1)."""
+def _proto_a0(tmp_path: Path, autonomia: str = "A0") -> Path:
+    """Copia del demo con ``screening_ta`` en ``autonomia`` (por defecto A0: el humano
+    etiqueta cada registro, D1)."""
     proto = tmp_path / "proto"
     shutil.copytree(EXAMPLE, proto)
     raw = yaml.safe_load((proto / "protocol.yml").read_text(encoding="utf-8"))
-    raw["autonomy"]["screening_ta"] = "A0"
+    raw["autonomy"]["screening_ta"] = autonomia
     (proto / "protocol.yml").write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
     return proto
 
@@ -328,12 +329,7 @@ def test_ta_a0_corte_humano_saca_un_registro_del_texto_completo(tmp_path: Path, 
 def test_auto_approve_nunca_escribe_human_label(tmp_path: Path, proveedor, autonomia: str) -> None:
     # D5: --auto-approve es una aprobación de demostración: aprueba la propuesta de la IA
     # tal cual y no etiqueta nada (tampoco en A0, donde un humano tendría que etiquetar todo).
-    proto = tmp_path / "proto"
-    shutil.copytree(EXAMPLE, proto)
-    ficha = proto / "protocol.yml"
-    raw = yaml.safe_load(ficha.read_text(encoding="utf-8"))
-    raw["autonomy"]["screening_ta"] = autonomia
-    ficha.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+    proto = _proto_a0(tmp_path, autonomia)
     protocol = load_protocol(proto)
     ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
 
