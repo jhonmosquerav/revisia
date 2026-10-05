@@ -18,6 +18,7 @@ from typing import Any
 from revisia.audit.artifacts import (
     ARTIFACT_ADAPTERS,
     MANIFEST_ADAPTERS,
+    NA_MANIFIESTO,
     AuditContext,
     Loaded,
     short_repr,
@@ -27,7 +28,6 @@ from revisia.audit.model import Verdict
 from revisia.orchestration.run_context import PROVENANCE_PIPELINE
 from revisia.schemas.artifacts import GATED_STAGES
 
-_NA_MANIFIESTO = "no aplica: el manifiesto no se pudo leer (ver `manifest`)."
 _MAX_ERRORES = 5
 _MAX_MODELOS = 10
 _LIMITE_ERROR = 300  # caracteres por artefacto con error: un `loc` hostil no llena el detalle
@@ -75,7 +75,7 @@ def check_manifest(ctx: AuditContext) -> Verdict:
 def check_provenance(ctx: AuditContext) -> Verdict:
     """Procedencia: la corrida la produjo el pipeline (auditoría 2026-09-03, C3)."""
     if ctx.manifest_dict is None:
-        return "N/A", _NA_MANIFIESTO
+        return "N/A", NA_MANIFIESTO
     provenance = ctx.manifest_dict.get("provenance")
     if provenance == PROVENANCE_PIPELINE:
         return "PASS", (
@@ -128,7 +128,7 @@ def check_schemas(ctx: AuditContext) -> Verdict:
 def check_prompts(ctx: AuditContext) -> Verdict:
     """trAIce M6: cada llamada con el hash de su prompt y de su respuesta."""
     if ctx.manifest_dict is None:
-        return "N/A", _NA_MANIFIESTO
+        return "N/A", NA_MANIFIESTO
     calls = ctx.llm_calls
     if not calls:
         return "WARN", "Sin llamadas IA que auditar."

@@ -12,11 +12,15 @@ detalle los reproduce sin acotar (revisiones de la Tarea 4).
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 from audit_fixtures import (
     auditar,
+    auditar_en_subproceso,
+    bomba_de_alias,
     comprimir_llamadas,
     edit_ledger,
     edit_yaml,
@@ -25,9 +29,10 @@ from audit_fixtures import (
     primera_llamada,
     reetiquetar_llamadas,
 )
-from test_audit_infra import _auditar_en_subproceso, _bomba_de_alias
 
+from revisia.audit import render_audit_md
 from revisia.audit.checks_timing import parse_utc
+from revisia.schemas.artifacts import RunInfo
 
 
 def test_timing_corrida_real_pasa(corrida) -> None:
@@ -163,6 +168,139 @@ def test_timing_timestamp_con_forma_de_corrida_pero_fecha_imposible_advierte(cor
     assert "límite inferior no verificable (timestamp `20261304-250000`" in timing.detail
 
 
+def test_timing_sin_created_utc_el_limite_superior_no_es_verificable(corrida) -> None:
+    # Un manifiesto editado a mano sin `created_utc` no puede dar PASS: borrar la clave no
+    # relaja la comprobación del límite superior (falla abierto si solo se mira «si está»).
+    def _tarde(calls: list[dict]) -> None:
+        calls[-1]["timestamp_utc"] = "2099-01-01T00:00:00.123456+00:00"
+
+    editar_llamadas(corrida, _tarde)
+    edit_yaml(corrida / "manifest.yml", lambda m: m.pop("created_utc"))
+    timing = fila(auditar(corrida), "timing")
+    assert timing.status == "WARN"
+    assert "límite superior no verificable (manifest.created_utc ausente)" in timing.detail
+    assert "dentro de [inicio, manifiesto]" not in timing.detail
+
+
+def test_timing_con_manifiesto_ilegible_el_limite_superior_no_es_verificable(corrida) -> None:
+    _escribir_run_json(corrida, primera_llamada(corrida) - timedelta(seconds=1))
+    (corrida / "manifest.yml").write_text("{\n", encoding="utf-8")
+    timing = fila(auditar(corrida), "timing")
+    assert timing.status == "WARN"
+    assert "límite superior no verificable (manifiesto ilegible)" in timing.detail
+
+
+def test_timing_con_todo_verificado_nombra_ambos_limites(corrida) -> None:
+    timing = fila(auditar(corrida), "timing")
+    assert timing.status == "PASS"
+    assert "marcas dentro de [inicio, manifiesto] ±2 s" in timing.detail
+
+
+def test_timing_llamadas_fake_mezcladas_con_reales_no_se_declaran_todas_exentas(corrida) -> None:
+    # 23 fake deterministas y 1 real: no hay intervalos que medir entre las no fake, pero el
+    # detalle no puede afirmar que *todas* las llamadas están exentas.
+    def _una_real(calls: list[dict]) -> None:
+        calls[-1].update(provider="gemini", deterministic=False)
+
+    editar_llamadas(corrida, _una_real)
+    timing = fila(auditar(corrida), "timing")
+    assert timing.status == "PASS", timing.detail
+    assert "23 de 24 llamadas fake deterministas exentas" in timing.detail
+    assert "1 no fake: sin intervalos que medir" in timing.detail
+    assert "exentas de las heurísticas" not in timing.detail
+
+
+def test_timing_con_dos_reales_y_el_resto_fake_cuenta_las_exentas(corrida) -> None:
+    def _dos_reales(calls: list[dict]) -> None:
+        for call in calls[-2:]:
+            call.update(provider="gemini", deterministic=False)
+
+    editar_llamadas(corrida, _dos_reales)
+    timing = fila(auditar(corrida), "timing")
+    assert timing.status == "PASS", timing.detail
+    assert "mediana entre llamadas no fake" in timing.detail
+    assert "22 de 24 llamadas fake deterministas exentas" in timing.detail
+
+
+def test_timing_con_una_sola_llamada_real_no_dice_que_es_fake(corrida) -> None:
+    def _una(calls: list[dict]) -> list[dict]:
+        calls[0].update(provider="gemini", deterministic=False)
+        return calls[:1]
+
+    editar_llamadas(corrida, _una)
+    timing = fila(auditar(corrida), "timing")
+    assert timing.status == "PASS", timing.detail
+    assert "fake deterministas" not in timing.detail
+    assert "1 no fake: sin intervalos que medir" in timing.detail
+
+
+def test_timing_sustituto_suelto_en_el_ledger_no_rompe_el_informe(corrida) -> None:
+    # Un `"\ud800"` JSON deja un sustituto suelto en la cadena: no codifica a UTF-8 y
+    # `revisia audit` escribe `audit.md` con `encoding="utf-8"`. El detalle debe ser siempre
+    # codificable.
+    ruta = corrida / "decisions_ledger.jsonl"
+    ultima = json.loads(ruta.read_text(encoding="utf-8").splitlines()[-1])
+    ultima["timestamp_utc"] = "\ud800"
+    with ruta.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(ultima) + "\n")  # `ensure_ascii`: escribe `"\ud800"`, solo ASCII
+    report = auditar(corrida)
+    timing = fila(report, "timing")
+    assert timing.status == "FAIL"
+    assert "no es ISO-8601" in timing.detail
+    timing.detail.encode("utf-8")  # no debe lanzar `UnicodeEncodeError`
+    render_audit_md(report).encode("utf-8")
+
+
+# ── run.json como límite inferior ───────────────────────────────────────
+
+
+def _escribir_run_json(run: Path, inicio: datetime) -> None:
+    """Un ``run.json`` mínimo y válido con ``started_utc = inicio`` (el motor aún no lo escribe)."""
+    info = RunInfo(
+        slug="demo",
+        timestamp="20261004-120000",
+        started_utc=inicio.isoformat(),
+        engine_version="0.8.0",
+        python_version="3.11.0",
+        max_results=50,
+        mailto_set=False,
+        status="completed",
+    )
+    (run / "run.json").write_text(info.model_dump_json(indent=2), encoding="utf-8")
+
+
+def test_timing_run_json_valido_es_el_limite_inferior_y_pasa(corrida) -> None:
+    # `manifest.timestamp` ilegible: si pasara, el límite saldría de `run.json`, no del manifiesto.
+    _escribir_run_json(corrida, primera_llamada(corrida) - timedelta(seconds=1))
+    edit_yaml(corrida / "manifest.yml", lambda m: m.update(timestamp="TEST"))
+    timing = fila(auditar(corrida), "timing")
+    assert timing.status == "PASS", timing.detail
+    assert "dentro de [inicio, manifiesto]" in timing.detail
+
+
+def test_timing_marcas_anteriores_al_started_utc_de_run_json_fallan(corrida) -> None:
+    # `manifest.timestamp` (el de la corrida real) no falla: el FAIL sale de `run.json`.
+    _escribir_run_json(corrida, primera_llamada(corrida) + timedelta(seconds=30))
+    timing = fila(auditar(corrida), "timing")
+    assert timing.status == "FAIL"
+    assert "llm_calls[0] anterior al inicio de la corrida" in timing.detail
+
+
+def test_timing_run_json_ilegible_se_nombra_como_tal(corrida) -> None:
+    (corrida / "run.json").write_text("{\n", encoding="utf-8")
+    edit_yaml(corrida / "manifest.yml", lambda m: m.update(timestamp="TEST"))
+    timing = fila(auditar(corrida), "timing")
+    assert timing.status == "WARN"
+    assert "límite inferior no verificable (timestamp `TEST`, run.json ilegible)" in timing.detail
+
+
+def test_timing_sin_run_json_se_nombra_como_tal(corrida) -> None:
+    (corrida / "run.json").unlink(missing_ok=True)
+    edit_yaml(corrida / "manifest.yml", lambda m: m.update(timestamp="TEST"))
+    timing = fila(auditar(corrida), "timing")
+    assert "límite inferior no verificable (timestamp `TEST`, sin run.json)" in timing.detail
+
+
 # ── response_overlap ────────────────────────────────────────────────────
 
 
@@ -200,6 +338,39 @@ def test_response_overlap_con_muchos_modelos_compara_solo_los_primeros(corrida) 
     overlap = fila(auditar(corrida), "response_overlap")
     assert overlap.status == "WARN"
     assert "21 modelos" in overlap.detail
+    assert "solo se comparan los 20 primeros" in overlap.detail
+
+
+def _modelos(calls: list[dict], n_modelos: int, *, compartir: tuple[int, int] | None = None):
+    """``n_modelos`` modelos no fake de 10 llamadas con hashes propios.
+
+    Con ``compartir=(a, b)``, el modelo ``b`` repite las 10 respuestas del modelo ``a``.
+    """
+    nuevas = []
+    for i in range(n_modelos * 10):
+        modelo, orden = divmod(i, 10)
+        dueno = compartir[0] if compartir is not None and modelo == compartir[1] else modelo
+        call = dict(calls[0])
+        call.update(provider="agent", model=f"m{modelo:02d}", deterministic=False)
+        call["response_sha256"] = f"{dueno * 10 + orden:064x}"
+        nuevas.append(call)
+    return nuevas
+
+
+def test_response_overlap_con_exactamente_20_modelos_sin_solape_pasa(corrida) -> None:
+    editar_llamadas(corrida, lambda calls: _modelos(calls, 20))
+    overlap = fila(auditar(corrida), "response_overlap")
+    assert overlap.status == "PASS", overlap.detail
+    assert "20 modelo(s) no fake" in overlap.detail
+
+
+def test_response_overlap_con_21_modelos_sigue_avisando_del_solape_entre_los_20_primeros(
+    corrida,
+) -> None:
+    editar_llamadas(corrida, lambda calls: _modelos(calls, 21, compartir=(0, 1)))
+    overlap = fila(auditar(corrida), "response_overlap")
+    assert overlap.status == "WARN"
+    assert "`agent:m00` y `agent:m01` comparten 10 de 10 respuestas" in overlap.detail
     assert "solo se comparan los 20 primeros" in overlap.detail
 
 
@@ -288,8 +459,8 @@ def test_bomba_de_alias_en_las_marcas_y_los_modelos_no_cuelga_timing_ni_overlap(
     )
     cola = "timestamp: *a9\ncreated_utc: *a9\nllm_calls:\n" + llamada * 12
     (corrida / "run.json").unlink(missing_ok=True)
-    (corrida / "manifest.yml").write_text(_bomba_de_alias() + cola, encoding="utf-8")
-    filas = _auditar_en_subproceso(corrida, timeout=60)
+    (corrida / "manifest.yml").write_text(bomba_de_alias() + cola, encoding="utf-8")
+    filas = auditar_en_subproceso(corrida, timeout=60)
     assert filas["timing"][0] == "FAIL"
     assert len(filas["timing"][1]) < 1_000
     assert filas["response_overlap"][0] == "PASS"

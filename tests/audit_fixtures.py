@@ -21,6 +21,8 @@ from __future__ import annotations
 import copy
 import json
 import shutil
+import subprocess
+import sys
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -31,6 +33,8 @@ import yaml
 from revisia.audit import AuditCheck, AuditReport, run_audit
 from revisia.metrics import ScreeningMetrics, kappa_from_matrix, mcc, wmcc
 from revisia.schemas.artifacts import JOURNAL_PATHS
+
+_REPO = Path(__file__).resolve().parent.parent
 
 
 def auditar(run_dir: Path) -> AuditReport:
@@ -234,3 +238,41 @@ def pausar_en_screening_ft(run_dir: Path) -> None:
         shutil.rmtree(run_dir / rel)
     (run_dir / "manifest.yml").unlink()
     (run_dir / "03_screening" / "exclusions.json").unlink()
+
+
+_SCRIPT_AUDITAR = (
+    "import json, sys\n"
+    "from revisia.audit import run_audit\n"
+    "informe = run_audit(sys.argv[1])\n"
+    "print(json.dumps([[c.check_id, c.status, c.detail] for c in informe.checks]))\n"
+)
+
+
+def auditar_en_subproceso(corrida: Path, *, timeout: int) -> dict[str, tuple[str, str]]:
+    """``run_audit`` en un proceso aparte: ``{check_id: (estado, detalle)}``.
+
+    Un crash nativo o un cuelgue del auditor no puede tirar la sesión de pytest: se ve como
+    un código de salida distinto de 0 o como ``TimeoutExpired``.
+    """
+    proceso = subprocess.run(
+        [sys.executable, "-c", _SCRIPT_AUDITAR, str(corrida)],
+        cwd=_REPO,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    mensaje = f"el auditor murió (código {proceso.returncode}): {proceso.stderr[-500:]}"
+    assert proceso.returncode == 0, mensaje
+    return {i: (status, detalle) for i, status, detalle in json.loads(proceso.stdout)}
+
+
+# Una bomba de alias (`*a` nueve veces por nivel, diez niveles) carga en milisegundos porque
+# PyYAML comparte los nodos; lo que cuelga es recorrerla (`repr`, `str`, validar): 9**10
+# hojas. El auditor no puede imprimir el valor hostil del manifiesto (segunda revisión de
+# la Tarea 4).
+def bomba_de_alias(niveles: int = 10) -> str:
+    """Cabecera YAML con las anclas ``a0``…``a9``: ``*a9`` es la bomba."""
+    base = "a0: &a0 [x, x, x, x, x, x, x, x, x]\n"
+    return base + "".join(
+        f"a{i}: &a{i} [{', '.join([f'*a{i - 1}'] * 9)}]\n" for i in range(1, niveles)
+    )

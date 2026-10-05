@@ -137,21 +137,43 @@ _SHORT_REPR.maxlist = _SHORT_REPR.maxtuple = _SHORT_REPR.maxdict = _SHORT_REPR.m
 _SHORT_REPR.maxstring = _SHORT_REPR.maxother = 60
 
 
+def _acotar(text: str, limit: int) -> str:
+    """``text`` recortado a ``limit`` y siempre codificable en UTF-8.
+
+    Un JSON con ``"\\ud800"`` (un sustituto suelto, U+D800) deja en la cadena un carácter
+    que ``str`` admite pero que ``write_text(..., encoding="utf-8")`` rechaza con
+    ``UnicodeEncodeError``: ``revisia audit`` moría al escribir ``audit.md`` (revisión de la
+    Tarea 6). Se escapa el sustituto (``backslashreplace``) **después** de recortar, para que
+    el coste siga acotado por ``limit``, y se recorta otra vez porque el escape alarga el
+    texto (1 → 6 caracteres).
+    """
+    if len(text) > limit:
+        text = text[: limit - 1] + "…"
+    seguro = text.encode("utf-8", "backslashreplace").decode("utf-8")
+    return seguro if len(seguro) <= limit else seguro[: limit - 1] + "…"
+
+
 def short_repr(value: object, *, limit: int = 120) -> str:
     """``repr`` acotado en coste y en longitud para mostrar valores no confiables del manifiesto."""
-    text = _SHORT_REPR.repr(value)
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+    return _acotar(_SHORT_REPR.repr(value), limit)
 
 
 def short_text(value: object, *, limit: int = 120) -> str:
     """Valor del manifiesto para un detalle: las cadenas tal cual (recortadas), lo demás acotado.
 
     Una cadena no puede ser una bomba de alias, y sin comillas el detalle se lee igual que
-    antes de acotarlo; todo lo demás (listas, mapas) pasa por :func:`short_repr`.
+    antes de acotarlo; todo lo demás (listas, mapas) pasa por :func:`short_repr`. El resultado
+    es siempre codificable en UTF-8 (:func:`_acotar`).
     """
     if isinstance(value, str):
-        return value if len(value) <= limit else value[: limit - 1] + "…"
+        return _acotar(value, limit)
     return short_repr(value, limit=limit)
+
+
+# Detalle de los checks que leen el manifiesto cuando este no se pudo leer: la causa ya está en
+# la fila `manifest`, así que aquí es un N/A (§9.2). Lo comparten `provenance` y
+# `response_overlap`.
+NA_MANIFIESTO = "no aplica: el manifiesto no se pudo leer (ver `manifest`)."
 
 
 def format_validation(exc: ValidationError, *, limit: int = 3) -> str:

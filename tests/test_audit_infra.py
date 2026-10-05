@@ -7,15 +7,19 @@ Spec 2026-10-04 §9.1-§9.2. Las corridas salen de la fixture ``corrida``
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 import time
 from pathlib import Path
 from typing import Annotated
 
 import pytest
 import yaml
-from audit_fixtures import auditar, fila, pausar_en_screening_ft
+from audit_fixtures import (
+    auditar,
+    auditar_en_subproceso,
+    bomba_de_alias,
+    fila,
+    pausar_en_screening_ft,
+)
 from pydantic import AfterValidator, TypeAdapter
 
 import revisia.audit as audit_pkg
@@ -38,8 +42,6 @@ from revisia.audit.state import derive_state
 from revisia.config import STAGES
 from revisia.provenance.ledger import DecisionEntry, DecisionLedger
 from revisia.schemas.artifacts import GateSummary, RunInfo
-
-REPO = Path(__file__).resolve().parent.parent
 
 # ── Loaders: nunca lanzan ───────────────────────────────────────────────
 
@@ -195,36 +197,11 @@ _VECTORES_ANIDADOS = [
     pytest.param(lambda: "\ufeff" + "- " * 10_000, id="bom-con-indicadores"),
 ]
 
-_SCRIPT_AUDITAR = (
-    "import json, sys\n"
-    "from revisia.audit import run_audit\n"
-    "informe = run_audit(sys.argv[1])\n"
-    "print(json.dumps([[c.check_id, c.status, c.detail] for c in informe.checks]))\n"
-)
-
-
-def _auditar_en_subproceso(corrida: Path, *, timeout: int) -> dict[str, tuple[str, str]]:
-    """``run_audit`` en un proceso aparte: ``{check_id: (estado, detalle)}``.
-
-    Un crash nativo o un cuelgue del auditor no puede tirar la sesión de pytest: se ve como
-    un código de salida distinto de 0 o como ``TimeoutExpired``.
-    """
-    proceso = subprocess.run(
-        [sys.executable, "-c", _SCRIPT_AUDITAR, str(corrida)],
-        cwd=REPO,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
-    mensaje = f"el auditor murió (código {proceso.returncode}): {proceso.stderr[-500:]}"
-    assert proceso.returncode == 0, mensaje
-    return {i: (status, detalle) for i, status, detalle in json.loads(proceso.stdout)}
-
 
 @pytest.mark.parametrize("texto", _VECTORES_ANIDADOS)
 def test_manifiesto_muy_anidado_no_tumba_el_proceso_del_auditor(corrida, texto) -> None:
     (corrida / "manifest.yml").write_text(texto(), encoding="utf-8")
-    filas = _auditar_en_subproceso(corrida, timeout=300)
+    filas = auditar_en_subproceso(corrida, timeout=300)
     assert filas["manifest"][0] == "FAIL"
     assert "anidada" in filas["manifest"][1]
     assert [i for i, (_, detalle) in filas.items() if "error interno" in detalle] == []
@@ -340,17 +317,6 @@ def test_manifiesto_valido_con_miles_de_corchetes_se_carga_sin_rechazo(tmp_path)
     }
 
 
-# Una bomba de alias (`*a` nueve veces por nivel, diez niveles) carga en milisegundos porque
-# PyYAML comparte los nodos; lo que cuelga es recorrerla (`repr`, `str`, validar): 9**10
-# hojas. El auditor no puede imprimir el valor hostil del manifiesto (segunda revisión de
-# la Tarea 4).
-def _bomba_de_alias(niveles: int = 10) -> str:
-    base = "a0: &a0 [x, x, x, x, x, x, x, x, x]\n"
-    return base + "".join(
-        f"a{i}: &a{i} [{', '.join([f'*a{i - 1}'] * 9)}]\n" for i in range(1, niveles)
-    )
-
-
 @pytest.mark.parametrize(
     ("cola", "fila_afectada", "estado"),
     [
@@ -384,11 +350,11 @@ def _bomba_de_alias(niveles: int = 10) -> str:
         pytest.param("models_used: [*a9]\n", "schemas", "FAIL", id="models_used-schemas"),
     ],
 )
-def test_bomba_de_alias_no_cuelga_el_auditor_ni_llena_el_detalle(
+def testbomba_de_alias_no_cuelga_el_auditor_ni_llena_el_detalle(
     corrida, cola: str, fila_afectada: str, estado: str
 ) -> None:
-    (corrida / "manifest.yml").write_text(_bomba_de_alias() + cola, encoding="utf-8")
-    filas = _auditar_en_subproceso(corrida, timeout=60)
+    (corrida / "manifest.yml").write_text(bomba_de_alias() + cola, encoding="utf-8")
+    filas = auditar_en_subproceso(corrida, timeout=60)
     assert filas[fila_afectada][0] == estado
     assert len(filas[fila_afectada][1]) < 500  # un `repr` acotado, no la bomba expandida
     assert [i for i, (_, detalle) in filas.items() if "error interno" in detalle] == []
@@ -409,7 +375,7 @@ def _bomba_de_fusion(niveles: int) -> str:
 def test_bomba_de_claves_de_fusion_no_cuelga_la_carga(corrida) -> None:
     (corrida / "manifest.yml").write_text(_bomba_de_fusion(8), encoding="utf-8")
     inicio = time.monotonic()
-    filas = _auditar_en_subproceso(corrida, timeout=10)
+    filas = auditar_en_subproceso(corrida, timeout=10)
     assert time.monotonic() - inicio < 10
     assert filas["manifest"][0] == "FAIL"
     assert "fusión" in filas["manifest"][1]
@@ -432,6 +398,28 @@ def test_short_text_deja_las_cadenas_tal_cual_y_acota_el_resto() -> None:
     assert short_text("x" * 10_000) == "x" * 119 + "…"
     assert short_text([1, 2]) == "[1, 2]"
     assert len(short_text([[[[1] * 9] * 9] * 9] * 9)) <= 120
+
+
+@pytest.mark.parametrize(
+    "valor",
+    [
+        pytest.param("\ud800", id="solo"),
+        pytest.param("2026-10-04T12:00:00+00:00\ud800", id="al-final"),
+        pytest.param("\ud800" * 10_000, id="enorme"),
+        pytest.param(["\ud800"], id="en-lista"),
+        pytest.param({"\udfff": "\ud800"}, id="en-mapa"),
+    ],
+)
+def test_short_text_y_short_repr_siempre_son_codificables_en_utf8(valor: object) -> None:
+    # Un sustituto suelto (JSON `"\ud800"`) no codifica a UTF-8: `audit.md` no se podría escribir.
+    for texto in (short_text(valor), short_repr(valor), short_text(valor, limit=50)):
+        texto.encode("utf-8")
+    assert len(short_text(valor, limit=50)) <= 50
+    assert len(short_text(valor)) <= 120
+
+
+def test_short_text_escapa_el_sustituto_suelto_en_vez_de_perderlo() -> None:
+    assert short_text("a\ud800b") == "a\\ud800b"
 
 
 def test_ledger_con_separadores_unicode_en_el_texto_conserva_la_entrada(corrida) -> None:

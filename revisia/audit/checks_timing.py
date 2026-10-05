@@ -14,7 +14,11 @@ Reglas (spec 2026-10-04 §9.3):
   proveedor real lo garantiza: todos ponen ``False``).
 - **WARN** (heurísticas, nunca FAIL): ≥ 20 llamadas no exentas con una
   mediana de separación < 5 ms; ≥ 4 marcas del ledger con ≥ 50 % sin
-  fracción de segundo; límite inferior no verificable.
+  fracción de segundo; límite inferior o superior no verificable (sin ``run.json`` válido ni
+  ``manifest.timestamp`` con forma de corrida; sin ``manifest.created_utc`` o con el
+  manifiesto ilegible). Un límite que no se puede comprobar nunca da PASS en silencio
+  (revisión de la Tarea 6): borrar ``created_utc`` de un manifiesto editado a mano no
+  relaja el límite superior.
 - Solo ``provider == "fake" and deterministic`` está exento de las
   heurísticas (las corridas de demostración son instantáneas).
 
@@ -33,7 +37,7 @@ import statistics
 from datetime import UTC, datetime, timedelta
 from itertools import combinations
 
-from revisia.audit.artifacts import AuditContext, short_repr, short_text
+from revisia.audit.artifacts import NA_MANIFIESTO, AuditContext, short_repr, short_text
 from revisia.audit.model import Verdict
 
 TOLERANCIA = timedelta(seconds=2)
@@ -49,7 +53,6 @@ _MAX_SOLAPES = 3
 # hostil con 10⁵ modelos colgaría el auditor. El motor usa un puñado; el resto se avisa.
 _MAX_MODELOS_SOLAPE = 20
 _LIMITE_VALOR = 50  # caracteres de un valor del manifiesto dentro de un detalle
-_NA_MANIFIESTO = "no aplica: el manifiesto no se pudo leer (ver `manifest`)."
 
 
 def _mostrar(value: object) -> str:
@@ -96,9 +99,11 @@ def _limite_inferior(ctx: AuditContext) -> tuple[datetime | None, str | None, st
             return datetime.strptime(stamp, "%Y%m%d-%H%M%S").replace(tzinfo=UTC), None, None
         except ValueError:
             pass  # tiene la forma, no es una fecha: queda como no verificable
+    loaded = ctx.art.run_info()
+    origen = "run.json ilegible" if loaded.present and not loaded.ok else "sin run.json"
     return (
         None,
-        f"límite inferior no verificable (timestamp `{_mostrar(stamp)}`, sin run.json)",
+        f"límite inferior no verificable (timestamp `{_mostrar(stamp)}`, {origen})",
         None,
     )
 
@@ -147,7 +152,11 @@ def check_timing(ctx: AuditContext) -> Verdict:
     warns += [lower_warn] if lower_warn else []
     fails += [lower_fail] if lower_fail else []
     upper = None
-    if ctx.manifest_dict is not None and "created_utc" in ctx.manifest_dict:
+    if ctx.manifest_dict is None:
+        warns.append("límite superior no verificable (manifiesto ilegible)")
+    elif "created_utc" not in ctx.manifest_dict:
+        warns.append("límite superior no verificable (manifest.created_utc ausente)")
+    else:
         upper, error = parse_utc(ctx.manifest_dict.get("created_utc"))
         if error:
             fails.append(f"manifest.created_utc: {error}")
@@ -189,11 +198,22 @@ def check_timing(ctx: AuditContext) -> Verdict:
         return "FAIL", f"{len(fails)} marca(s) imposibles: {_limitar(fails)}."
     if warns:
         return "WARN", "; ".join(warns) + "."
+    # Un límite no verificable es un WARN (arriba): con PASS los dos están comprobados.
     detail = f"{len(marks)} marcas dentro de [inicio, manifiesto] ±2 s"
+    exentas = sum(1 for call in calls if _exenta(call))
     if median_ms is not None:
         detail += f"; mediana entre llamadas no fake {median_ms:.0f} ms"
-    elif calls:
+        if exentas:
+            detail += f" ({exentas} de {len(calls)} llamadas fake deterministas exentas)"
+    elif exentas == len(calls) and calls:
         detail += "; llamadas fake deterministas, exentas de las heurísticas"
+    elif calls:
+        # Mezcla de fake y reales con < 2 reales: no hay intervalos que medir, pero tampoco
+        # están exentas todas las llamadas.
+        detail += "; "
+        if exentas:
+            detail += f"{exentas} de {len(calls)} llamadas fake deterministas exentas; "
+        detail += f"{len(calls) - exentas} no fake: sin intervalos que medir"
     return "PASS", detail + "."
 
 
@@ -205,7 +225,7 @@ def _etiqueta(value: object) -> str:
 def check_response_overlap(ctx: AuditContext) -> Verdict:
     """trAIce M2: dos modelos distintos no devuelven las mismas respuestas."""
     if ctx.manifest_dict is None:
-        return "N/A", _NA_MANIFIESTO
+        return "N/A", NA_MANIFIESTO
     hashes: dict[str, list[str]] = {}
     for call in ctx.llm_calls:
         response = call.get("response_sha256")
