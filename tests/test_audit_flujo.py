@@ -921,19 +921,27 @@ def test_exclusions_corrida_en_pausa_en_reporte_si_exige_el_manifiesto(detener_c
     assert SIN_CONTEOS in exclusions.detail
 
 
-def test_exclusions_corrida_en_pausa_en_rob_con_conteos_alterados_falla(detener_corrida) -> None:
-    # Los conteos excluidos deben coincidir con el recálculo desde las decisiones.
-    # Un manifiesto con counts.excluded_ta_human/ai alterados causa FAIL.
-    run = detener_corrida(aprobados=("screening_ta", "screening_ft", "extraccion", "rob"))
-    # En pausa en rob, el manifiesto aún no existe, pero si lo escribimos
-    # manualmente, el auditor debe detectar cuando los valores no coinciden.
-    manifest_path = run / "manifest.yml"
-    if manifest_path.exists():
-        # Si existe, alterar los conteos de exclusiones TA
-        edit_yaml(manifest_path, lambda m: m["counts"].update(excluded_ta_human=999))
-        exclusions = fila(auditar(run), "exclusions")
-        assert exclusions.status == "FAIL"
-        assert "≠" in exclusions.detail  # Indica desacuerdo con el recálculo
+def test_exclusions_corrida_en_pausa_compara_un_manifiesto_presente(
+    detener_corrida, corrida: Path
+) -> None:
+    """En pausa el auditor no exige el manifiesto, pero si lo hay lo compara con el recálculo.
+
+    La corrida en pausa en `rob` aún no tiene manifiesto: se le copia el de la corrida
+    terminada (mismo pipeline, proveedor y búsqueda, así que sus conteos de cribado
+    coinciden) y después se altera un conteo de exclusiones.
+    """
+    run = detener_corrida(aprobados=("screening_ta", "screening_ft", "extraccion"))
+    assert not (run / "manifest.yml").exists()
+    shutil.copy(corrida / "manifest.yml", run / "manifest.yml")
+    assert fila(auditar(run), "exclusions").status != "FAIL"
+
+    edit_yaml(
+        run / "manifest.yml",
+        lambda m: m["counts"].update(excluded_ta_human=m["counts"]["excluded_ta_human"] + 1),
+    )
+    exclusions = fila(auditar(run), "exclusions")
+    assert exclusions.status == "FAIL"
+    assert "excluded_ta_human" in exclusions.detail
 
 
 # ── deliverable ────────────────────────────────────────────────────────
