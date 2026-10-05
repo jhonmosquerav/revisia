@@ -6,31 +6,51 @@ from __future__ import annotations
 import json
 import math
 import shutil
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 import yaml
 from fakes import ScriptedProvider, fetch_disponible, fetch_no_disponible
 from hitl_helpers import correr_hasta, leer_solicitud, responder_gate
+from pydantic import BaseModel
 
 from revisia.agents.fulltext import FullText
 from revisia.config import load_protocol
+from revisia.extraction_agreement import ExtractionAgreement
 from revisia.metrics import ScreeningMetrics, compute_screening_metrics
 from revisia.orchestration import pipeline as pipeline_mod
-from revisia.orchestration.gates import apply_labels, ft_payload, ft_policy, ta_payload, ta_policy
+from revisia.orchestration.gates import (
+    apply_labels,
+    dump_artifact,
+    extraction_payload,
+    ft_payload,
+    ft_policy,
+    report_payload,
+    report_policy,
+    rob_payload,
+    ta_payload,
+    ta_policy,
+)
 from revisia.orchestration.hitl import (
     _MAX_COMENTARIO,
     DecisionFileError,
+    FlaggedClaim,
+    FlagPolicy,
     RecordLabel,
     render_decision_template,
 )
 from revisia.orchestration.pipeline import run_pipeline
 from revisia.orchestration.run_context import RunContext
-from revisia.provenance.ledger import AUTO_APPROVE_ACTOR
-from revisia.provenance.runmeta import canonical_sha256
+from revisia.orchestration.snapshot import read_run_info
+from revisia.provenance.ledger import AUTO_APPROVE_ACTOR, summarize_gates
+from revisia.provenance.runmeta import canonical_sha256, sha256_text
 from revisia.schemas.artifacts import RetrievalOutcome
+from revisia.schemas.extraction import ExtractionField, ExtractionRecord
 from revisia.schemas.records import SearchRecord
+from revisia.schemas.rob import RoBAssessment, RoBDomain
 from revisia.schemas.screening import ScreeningDecision, ScreeningVote
+from revisia.schemas.verification import CitationCheck, VerificationReport
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "demo-mini-review"
 
@@ -1752,3 +1772,445 @@ def test_records_en_extraccion_es_error(tmp_path: Path, proveedor) -> None:
     responder_gate(ctx.run_dir, "extraccion", records={"rec-1": {"label": "exclude"}})
     with pytest.raises(DecisionFileError, match="`records` solo vale"):
         run_pipeline(protocol, EXAMPLE, RunContext.open(ctx.run_dir), fetch_fn=fetch_disponible)
+
+
+# ── Extracción y RoB: un solo dict se escribe y se hashea ─────────────────
+
+
+def _extraccion(study_id: str, valor: str | None = "ensayo") -> ExtractionRecord:
+    return ExtractionRecord(
+        study_id=study_id,
+        fields={
+            "diseno": ExtractionField(
+                value=valor, source_quote="cita", confidence=0.9, status="verified"
+            )
+        },
+    )
+
+
+class _Registro(BaseModel):
+    """Modelo cuyo volcado en modo Python y en modo JSON no coinciden (``datetime``)."""
+
+    cuando: datetime
+
+
+def test_dump_artifact_es_el_json_que_se_escribe_y_se_hashea() -> None:
+    # El artefacto que se escribe en disco y el que se hashea en `artifact_sha256` salen del
+    # mismo dict: en modo JSON, de modo que lo que hashea la solicitud es lo que el auditor
+    # lee de vuelta del fichero (revisión de la Tarea 25).
+    modelos = {"a": _Registro(cuando=datetime(2026, 10, 4, 12, 30, tzinfo=UTC))}
+
+    volcado = dump_artifact(modelos)
+
+    assert volcado == {"a": {"cuando": "2026-10-04T12:30:00Z"}}
+    en_disco = json.loads(json.dumps(volcado, ensure_ascii=False, indent=2))
+    assert canonical_sha256(volcado) == canonical_sha256(en_disco)
+
+
+def test_artifact_sha256_de_extraccion_y_rob_es_el_hash_de_dump_artifact() -> None:
+    extracciones = {"rec-1": _extraccion("rec-1")}
+    evaluaciones = {
+        "rec-1": RoBAssessment(
+            study_id="rec-1",
+            tool="RoB2",
+            domains=[RoBDomain(domain="Aleatorización", judgment="low")],
+            overall="low",
+        )
+    }
+
+    solicitud = extraction_payload(
+        included=_registros("rec-1"), extractions=extracciones, agreement=None
+    )
+    assert solicitud["artifact_sha256"] == canonical_sha256(dump_artifact(extracciones))
+    solicitud = rob_payload(tool="RoB2", included=_registros("rec-1"), assessments=evaluaciones)
+    assert solicitud["artifact_sha256"] == canonical_sha256(dump_artifact(evaluaciones))
+
+
+def test_extraction_payload_sin_acuerdo_no_lleva_segunda_extraccion() -> None:
+    solicitud = extraction_payload(
+        included=_registros("rec-1"),
+        extractions={"rec-1": _extraccion("rec-1")},
+        agreement=None,
+    )
+
+    assert solicitud["second_extraction"] is None
+    assert solicitud["n_studies"] == 1
+
+
+def test_extraction_payload_con_acuerdo_lo_resume_sin_el_recuento_interno() -> None:
+    acuerdo = ExtractionAgreement(
+        n_studies=1, n_field_pairs=4, n_value_match=3, value_agreement=0.75, presence_kappa=0.5
+    )
+
+    solicitud = extraction_payload(
+        included=_registros("rec-1"),
+        extractions={"rec-1": _extraccion("rec-1")},
+        agreement=acuerdo,
+    )
+
+    assert solicitud["second_extraction"] == {
+        "n_studies": 1,
+        "n_field_pairs": 4,
+        "value_agreement": 0.75,
+        "presence_kappa": 0.5,
+    }
+
+
+def test_extraction_y_rob_payload_sin_incluidos_no_rompen() -> None:
+    solicitud = extraction_payload(included=[], extractions={}, agreement=None)
+    assert (solicitud["n_studies"], solicitud["studies"]) == (0, [])
+    assert solicitud["second_extraction"] is None
+    assert solicitud["artifact_sha256"] == canonical_sha256({})
+
+    solicitud = rob_payload(tool="RoB2", included=[], assessments={})
+    assert (solicitud["tool"], solicitud["n_studies"], solicitud["studies"]) == ("RoB2", 0, [])
+    assert solicitud["artifact_sha256"] == canonical_sha256({})
+
+
+# ── Gate final con citas marcadas (M5, D8) ───────────────────────────────
+
+
+@pytest.fixture()
+def con_cita_inventada(monkeypatch: pytest.MonkeyPatch) -> ScriptedProvider:
+    """Síntesis con una cita real y otra que no está en el corpus (``[2019]``)."""
+    guion = ScriptedProvider(sintesis="La IA reduce el cribado [rec-1]. Lo confirma [2019].")
+    monkeypatch.setattr(pipeline_mod, "build_provider", lambda _cfg: guion)
+    return guion
+
+
+def _proto_reporte(tmp_path: Path, reporte: str = "A2") -> Path:
+    proto = _proto(tmp_path, reporte=reporte)  # con A2 el gate final ni siquiera pausaría
+    raw = yaml.safe_load((proto / "protocol.yml").read_text(encoding="utf-8"))
+    raw["grounding"] = "existence"  # solo se comprueba que el id esté en el corpus
+    (proto / "protocol.yml").write_text(yaml.safe_dump(raw, allow_unicode=True), "utf-8")
+    return proto
+
+
+def _manifest(ctx: RunContext) -> dict:
+    return yaml.safe_load((ctx.run_dir / "manifest.yml").read_text(encoding="utf-8"))
+
+
+def test_gate_final_forzado_a_humano_si_hallucination_flagged(
+    tmp_path: Path, con_cita_inventada
+) -> None:
+    proto = _proto_reporte(tmp_path)
+    protocol = load_protocol(proto)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+
+    result = run_pipeline(
+        protocol,
+        proto,
+        ctx,
+        auto_approve=True,
+        search_fn=_busqueda_ft,
+        fetch_fn=fetch_disponible,
+    )
+
+    assert (result.status, result.stage) == ("paused", "reporte")
+    assert "exige una decisión humana" in result.message
+    solicitud = leer_solicitud(ctx.run_dir, "reporte")
+    assert solicitud["autonomy"] == "A1"  # A2 declarada, A1 efectiva
+    assert (solicitud["forced_human"], solicitud["forced_reason"]) == (
+        True,
+        "hallucination_flagged",
+    )
+    (marca,) = solicitud["verification"]["flagged"]
+    assert (marca["cited_id"], solicitud["must_adjudicate"]) == ("2019", [marca["index"]])
+    assert solicitud["verification"]["mode"] == "existence"
+    manifest = yaml.safe_load((ctx.run_dir / "manifest.yml").read_text(encoding="utf-8"))
+    assert manifest["final_gate"] == {"forced_human": True, "reason": "hallucination_flagged"}
+    assert manifest["autonomy_effective"]["reporte"] == "A1"
+    assert not [e for e in ctx.ledger.read_all() if e.stage == "reporte"]
+
+
+def test_reporte_con_citas_adjudicadas_se_completa(tmp_path: Path, con_cita_inventada) -> None:
+    proto = _proto_reporte(tmp_path)
+    protocol = load_protocol(proto)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+    kwargs = {"search_fn": _busqueda_ft, "fetch_fn": fetch_disponible}
+    correr_hasta(protocol, proto, ctx, parar_en="reporte", **kwargs)
+    (indice,) = leer_solicitud(ctx.run_dir, "reporte")["must_adjudicate"]
+
+    responder_gate(
+        ctx.run_dir,
+        "reporte",
+        flags={str(indice): {"verdict": "false_positive", "reason": "[2019] es un año"}},
+    )
+    result = run_pipeline(protocol, proto, RunContext.open(ctx.run_dir), **kwargs)
+
+    assert result.status == "completed"
+    reporte = [e for e in ctx.ledger.read_all() if e.stage == "reporte"]
+    assert [(e.action, e.target) for e in reporte] == [
+        ("flag_review", f"flag:{indice}"),
+        ("approve", None),
+    ]
+    resumen = summarize_gates(ctx.ledger.read_all())["reporte"]
+    assert (resumen.forced_human, resumen.n_flag_reviews) == (True, 1)
+    assert read_run_info(ctx.run_dir).status == "completed"
+
+
+def test_el_indice_de_la_cita_es_su_posicion_en_checks_y_sobrevive_a_reanudar_sin_decision_yml(
+    tmp_path: Path, con_cita_inventada
+) -> None:
+    # `index` es la posición en `verification.json.checks` (no entre las marcadas): aquí la
+    # cita inventada es la 2.ª de dos, índice 1. Al reanudar sin ningún `decision.yml` (las
+    # adjudicaciones salen del ledger) la solicitud sale idéntica, con los mismos índices y el
+    # mismo `request_sha256`, y no se registra nada nuevo.
+    proto = _proto_reporte(tmp_path)
+    protocol = load_protocol(proto)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+    kwargs = {"search_fn": _busqueda_ft, "fetch_fn": fetch_disponible}
+    correr_hasta(protocol, proto, ctx, parar_en="reporte", **kwargs)
+    solicitud = leer_solicitud(ctx.run_dir, "reporte")
+    (indice,) = solicitud["must_adjudicate"]
+    cita = _json(ctx, "06_synthesis/verification.json")["checks"][indice]
+    assert (indice, cita["cited_id"]) == (1, "2019")
+    responder_gate(
+        ctx.run_dir,
+        "reporte",
+        flags={str(indice): {"verdict": "false_positive", "reason": "[2019] es un año"}},
+    )
+    completa = run_pipeline(protocol, proto, RunContext.open(ctx.run_dir), **kwargs)
+    assert completa.status == "completed"
+    ledger = ctx.ledger.read_all()
+
+    for decision in ctx.run_dir.glob("*/decision.yml"):
+        decision.unlink()
+    result = run_pipeline(protocol, proto, RunContext.open(ctx.run_dir), **kwargs)
+
+    assert (result.status, result.stage) == ("completed", None)
+    assert leer_solicitud(ctx.run_dir, "reporte") == solicitud
+    assert ctx.ledger.read_all() == ledger
+    assert read_run_info(ctx.run_dir).status == "completed"
+
+
+def test_reporte_con_citas_marcadas_no_se_aprueba_sin_adjudicar_pero_se_puede_rechazar(
+    tmp_path: Path, con_cita_inventada
+) -> None:
+    proto = _proto_reporte(tmp_path)
+    protocol = load_protocol(proto)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+    kwargs = {"search_fn": _busqueda_ft, "fetch_fn": fetch_disponible}
+    correr_hasta(protocol, proto, ctx, parar_en="reporte", **kwargs)
+
+    responder_gate(ctx.run_dir, "reporte")  # aprueba sin adjudicar la cita marcada
+    with pytest.raises(DecisionFileError, match="cita 1"):
+        run_pipeline(protocol, proto, RunContext.open(ctx.run_dir), **kwargs)
+    assert not [e for e in ctx.ledger.read_all() if e.stage == "reporte"]
+
+    responder_gate(ctx.run_dir, "reporte", approved=False, reason="[2019] es una cita inventada")
+    result = run_pipeline(protocol, proto, RunContext.open(ctx.run_dir), **kwargs)
+
+    assert (result.status, result.stage) == ("rejected", "reporte")
+    assert [(e.action, e.target) for e in ctx.ledger.read_all() if e.stage == "reporte"] == [
+        ("reject", None)
+    ]
+    assert read_run_info(ctx.run_dir).status == "rejected"
+    manifest = _manifest(ctx)
+    assert manifest["run"]["status"] == "rejected"
+    assert manifest["final_gate"] == {"forced_human": True, "reason": "hallucination_flagged"}
+
+
+def test_solicitud_del_reporte_con_saltos_unicode_en_la_cita_conserva_su_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # El fragmento marcado viene de la síntesis del LLM: con U+0085 (mojibake de «…»), U+2028 y
+    # U+2029 llega a `review_request.yml` por `dump_yaml` y leído de vuelta tiene que dar el
+    # mismo `request_sha256`; si no, el gate no convergería al reanudar.
+    texto = (
+        f"La IA reduce el cribado [rec-1]{chr(0x2028)} y se confirma{chr(0x85)} "
+        f"[2019]{chr(0x2029)} fin."
+    )
+    monkeypatch.setattr(
+        pipeline_mod, "build_provider", lambda _cfg: ScriptedProvider(sintesis=texto)
+    )
+    proto = _proto_reporte(tmp_path)
+    protocol = load_protocol(proto)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+
+    pausa = correr_hasta(
+        protocol,
+        proto,
+        ctx,
+        search_fn=_busqueda_ft,
+        fetch_fn=fetch_disponible,
+        parar_en="reporte",
+    )
+
+    assert (pausa.status, pausa.stage) == ("paused", "reporte")
+    solicitud = leer_solicitud(ctx.run_dir, "reporte")
+    sin_hash = {k: v for k, v in solicitud.items() if k != "request_sha256"}
+    assert canonical_sha256(sin_hash) == solicitud["request_sha256"]
+    (marca,) = solicitud["verification"]["flagged"]
+    assert (marca["cited_id"], chr(0x85) in marca["claim"], chr(0x2028) in marca["claim"]) == (
+        "2019",
+        True,
+        True,
+    )
+    plantilla = yaml.safe_load(
+        (ctx.run_dir / "reporte" / "decision.template.yml").read_text(encoding="utf-8")
+    )
+    assert plantilla["flags"] == {str(marca["index"]): {"verdict": None, "reason": None}}
+
+
+@pytest.mark.parametrize("declarada", ["A1", "A2"])
+def test_manifest_refleja_el_gate_final_forzado_y_se_reescribe_al_reanudar(
+    tmp_path: Path, con_cita_inventada, declarada: str
+) -> None:
+    # Declarada A1 (ya pausaba) o A2 (no pausaría): con citas marcadas la autonomía efectiva
+    # es A1 y `forced_human` es verdadero, en la pausa y también en el manifest que reescribe la
+    # reanudación (``write_manifest`` va después del gate final).
+    proto = _proto_reporte(tmp_path, declarada)
+    protocol = load_protocol(proto)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+    kwargs = {"search_fn": _busqueda_ft, "fetch_fn": fetch_disponible}
+    correr_hasta(protocol, proto, ctx, parar_en="reporte", **kwargs)
+
+    pausa = _manifest(ctx)
+    assert pausa["run"]["status"] == "paused"
+    assert pausa["final_gate"] == {"forced_human": True, "reason": "hallucination_flagged"}
+    assert pausa["autonomy_effective"]["reporte"] == "A1"
+    assert pausa["verification"]["hallucination_flagged"] is True
+
+    (indice,) = leer_solicitud(ctx.run_dir, "reporte")["must_adjudicate"]
+    responder_gate(
+        ctx.run_dir,
+        "reporte",
+        flags={str(indice): {"verdict": "false_positive", "reason": "[2019] es un año"}},
+    )
+    assert run_pipeline(protocol, proto, RunContext.open(ctx.run_dir), **kwargs).status == (
+        "completed"
+    )
+
+    final = _manifest(ctx)
+    assert final["run"]["status"] == "completed"
+    assert final["final_gate"] == {"forced_human": True, "reason": "hallucination_flagged"}
+    assert final["autonomy_effective"] == pausa["autonomy_effective"]
+    assert final["autonomy_effective"]["reporte"] == "A1"
+    assert final["autonomy_effective"]["screening_ta"] == protocol.autonomy_for("screening_ta")
+
+
+@pytest.mark.parametrize("declarada", ["A1", "A2"])
+def test_manifest_sin_citas_marcadas_conserva_la_autonomia_declarada(
+    tmp_path: Path, proveedor, declarada: str
+) -> None:
+    proto = _proto_reporte(tmp_path, declarada)
+    protocol = load_protocol(proto)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+
+    result = correr_hasta(protocol, proto, ctx, search_fn=_busqueda_ft, fetch_fn=fetch_disponible)
+
+    assert result.status == "completed"
+    assert result.hallucination_flagged is False
+    manifest = _manifest(ctx)
+    assert manifest["final_gate"] == {"forced_human": False, "reason": None}
+    assert manifest["autonomy_effective"]["reporte"] == declarada
+    if declarada == "A1":  # con A2 el gate no pide nada, así que no hay solicitud que leer
+        solicitud = leer_solicitud(ctx.run_dir, "reporte")
+        assert (solicitud["forced_human"], solicitud["forced_reason"]) == (False, None)
+        assert (solicitud["must_adjudicate"], solicitud["verification"]["flagged"]) == ([], [])
+        assert solicitud["verification"]["hallucination_flagged"] is False
+
+
+@pytest.mark.parametrize(
+    ("declarada", "forzado", "efectiva"),
+    [
+        ("A0", True, "A0"),  # A0 y A1 ya piden humano: no se tocan
+        ("A1", True, "A1"),
+        ("A2", True, "A1"),
+        ("A3", True, "A1"),
+        ("A2", False, "A2"),
+        ("A3", False, "A3"),
+    ],
+)
+def test_autonomy_effective_solo_baja_a_a1_un_reporte_a2_o_a3_forzado(
+    declarada: str, forzado: bool, efectiva: str
+) -> None:
+    protocol = load_protocol(EXAMPLE)
+    protocol = protocol.model_copy(update={"autonomy": {**protocol.autonomy, "reporte": declarada}})
+
+    resultado = pipeline_mod._autonomy_effective(protocol, forced_human=forzado)
+
+    assert resultado["reporte"] == efectiva
+    assert set(resultado) == {"screening_ta", "screening_ft", "extraccion", "rob", "reporte"}
+    otros = {g: a for g, a in resultado.items() if g != "reporte"}
+    assert otros == {g: protocol.autonomy_for(g) for g in otros}
+
+
+def _verificacion(*checks: CitationCheck) -> VerificationReport:
+    informe = VerificationReport(stage="reporte", checks=list(checks))
+    informe.recompute_flag()
+    return informe
+
+
+def _cita(
+    id_: str, *, existe: bool = True, respaldada: bool = True, claim: str = "afirmación"
+) -> CitationCheck:
+    return CitationCheck(
+        claim=claim,
+        cited_id=id_,
+        exists_in_corpus=existe,
+        grounded=respaldada,
+        note=None if existe and respaldada else f"nota {id_}",
+    )
+
+
+def test_report_payload_indexa_por_posicion_en_checks_y_acota_la_afirmacion() -> None:
+    larga = "x" * 500
+    verificacion = _verificacion(
+        _cita("a"),
+        _cita("b", existe=False, respaldada=False, claim=larga),
+        _cita("c"),
+        _cita("d", respaldada=False),
+    )
+
+    solicitud = report_payload(
+        included=_registros("a", "c"),
+        verification=verificacion,
+        documento="# Documento\n",
+        grounding_mode="embedder",
+        forced_human=True,
+    )
+
+    assert solicitud["forced_human"] is True
+    assert solicitud["forced_reason"] == "hallucination_flagged"
+    assert (solicitud["n_included"], solicitud["included"]) == (2, ["a", "c"])
+    assert solicitud["must_adjudicate"] == [1, 3]
+    assert solicitud["documento_sha256"] == sha256_text("# Documento\n")
+    resumen = solicitud["verification"]
+    assert (resumen["mode"], resumen["n_checks"], resumen["n_flagged"]) == ("embedder", 4, 2)
+    assert resumen["hallucination_flagged"] is True
+    assert [(m["index"], m["cited_id"], m["note"]) for m in resumen["flagged"]] == [
+        (1, "b", "nota b"),
+        (3, "d", "nota d"),
+    ]
+    assert resumen["flagged"][0]["claim"] == "x" * 300
+
+
+def test_report_payload_sin_marcas_ni_fuerza_no_pide_adjudicar_nada() -> None:
+    solicitud = report_payload(
+        included=_registros("a"),
+        verification=_verificacion(_cita("a")),
+        documento="doc",
+        grounding_mode="existence",
+        forced_human=False,
+    )
+
+    assert (solicitud["forced_human"], solicitud["forced_reason"]) == (False, None)
+    assert solicitud["must_adjudicate"] == []
+    assert solicitud["verification"]["flagged"] == []
+    assert solicitud["verification"]["n_flagged"] == 0
+    assert solicitud["verification"]["hallucination_flagged"] is False
+
+
+def test_report_policy_es_none_sin_marcas_y_lleva_los_indices_de_checks_si_las_hay() -> None:
+    assert report_policy(_verificacion(_cita("a"), _cita("b"))) is None
+    assert report_policy(_verificacion()) is None
+
+    politica = report_policy(
+        _verificacion(_cita("a"), _cita("b", existe=False, respaldada=False, claim="y" * 400))
+    )
+
+    assert politica == FlagPolicy(
+        flagged=(FlaggedClaim(1, "b", "y" * 300, "nota b"),),
+    )

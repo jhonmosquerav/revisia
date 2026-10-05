@@ -70,9 +70,12 @@ from revisia.meta_analysis import MetaAnalysisResult, meta_analyze
 from revisia.metrics import ScreeningMetrics, compute_screening_metrics
 from revisia.orchestration.gates import (
     apply_labels,
+    dump_artifact,
     extraction_payload,
     ft_payload,
     ft_policy,
+    report_payload,
+    report_policy,
     rob_payload,
     ta_payload,
     ta_policy,
@@ -730,10 +733,8 @@ def _extract(
             compute=partial(_extract_one, run, extract_provider, extract_cfg, record),
             run_ctx=run.ctx,
         )
-    run.ctx.write_json(
-        "05_extraction/extractions.json",
-        {k: v.model_dump() for k, v in extractions.items()},
-    )
+    # El mismo dict que hashea `extraction_payload` en `artifact_sha256` (`dump_artifact`).
+    run.ctx.write_json("05_extraction/extractions.json", dump_artifact(extractions))
 
     extraction_agreement = None
     second_extractors = run.protocol.ensemble_llm.get("extraccion", [])
@@ -819,10 +820,8 @@ def _assess_rob(
             ),
             run_ctx=run.ctx,
         )
-    run.ctx.write_json(
-        "07_rob/assessments.json",
-        {k: v.model_dump() for k, v in assessments.items()},
-    )
+    # El mismo dict que hashea `rob_payload` en `artifact_sha256` (`dump_artifact`).
+    run.ctx.write_json("07_rob/assessments.json", dump_artifact(assessments))
     return assessments
 
 
@@ -930,9 +929,7 @@ def _synthesize_and_verify(
         record_id="sintesis",
         inputs={
             "incluidos": [[r.record_id, r.title] for r in included],
-            "extracciones_sha256": canonical_sha256(
-                {k: v.model_dump(mode="json") for k, v in extractions.items()}
-            ),
+            "extracciones_sha256": canonical_sha256(dump_artifact(extractions)),
             "proveedor": [
                 f"{synth_cfg.provider}:{synth_cfg.model}",
                 synth_cfg.temperature,
@@ -1118,6 +1115,20 @@ def _write_deliverables(
             render_metafor_csv(meta_result), encoding="utf-8"
         )
     return deliverable
+
+
+def _autonomy_effective(protocol: ReviewProtocol, *, forced_human: bool) -> dict[str, str]:
+    """Autonomía con la que se aplica cada gate (spec §4.3, ``autonomy_effective``).
+
+    Con citas marcadas (M5) el gate final exige humano: una autonomía A2/A3
+    declarada para ``reporte`` pasa a A1. Una A0/A1 declarada no cambia, y sin citas
+    marcadas ninguna cambia: el manifiesto dice lo que de verdad ocurrió, no lo que
+    el protocolo declaraba.
+    """
+    effective = {g: protocol.autonomy_for(g) for g in GATED_STAGES}
+    if forced_human and effective["reporte"] in {"A2", "A3"}:
+        effective["reporte"] = "A1"
+    return effective
 
 
 def run_pipeline(
@@ -1334,14 +1345,20 @@ def _run_stages(
 
     # Checkpoint final del reporte (A1). La solicitud no lleva rutas absolutas (su
     # hash tiene que ser estable entre reanudaciones): el documento va por su hash.
+    # Con citas marcadas el gate exige humano y cada cita se adjudica (M5, D8).
+    forced = verification.hallucination_flagged
     documento = (deliverable / "documento.md").read_text(encoding="utf-8")
     final_gate = run.gate(
         "reporte",
-        {
-            "included": len(included),
-            "hallucination_flagged": verification.hallucination_flagged,
-            "documento_sha256": sha256_text(documento),
-        },
+        report_payload(
+            included=included,
+            verification=verification,
+            documento=documento,
+            grounding_mode=getattr(protocol, "grounding", "embedder"),
+            forced_human=forced,
+        ),
+        flags=report_policy(verification),
+        force_human=forced,
     )
     # Un reporte rechazado ya no se informa como "completed" (auditoría
     # 2026-09-03, C1). El estado va a run.json antes del manifiesto, que lo copia.
@@ -1365,8 +1382,8 @@ def _run_stages(
     run.ctx.write_manifest(
         protocol_snapshot=protocol.model_dump(mode="json"),
         counts=counts.model_dump(),
-        autonomy_effective={g: protocol.autonomy_for(g) for g in GATED_STAGES},
-        final_gate={"forced_human": False, "reason": None},
+        autonomy_effective=_autonomy_effective(protocol, forced_human=forced),
+        final_gate={"forced_human": forced, "reason": "hallucination_flagged" if forced else None},
         extra=manifest_extra,
     )
     return PipelineResult(

@@ -14,15 +14,27 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable, Mapping
 
+from pydantic import BaseModel
+
 from revisia.extraction_agreement import ExtractionAgreement
 from revisia.metrics import ScreeningMetrics
-from revisia.orchestration.hitl import RecordHint, RecordLabel, RecordPolicy
-from revisia.provenance.runmeta import canonical_sha256
+from revisia.orchestration.hitl import (
+    FlaggedClaim,
+    FlagPolicy,
+    RecordHint,
+    RecordLabel,
+    RecordPolicy,
+)
+from revisia.provenance.runmeta import canonical_sha256, sha256_text
 from revisia.schemas.artifacts import TRANSIENT_FULLTEXT_REASONS, RetrievalOutcome
 from revisia.schemas.extraction import ExtractionRecord
 from revisia.schemas.records import SearchRecord
 from revisia.schemas.rob import RoBAssessment
 from revisia.schemas.screening import ScreeningDecision
+from revisia.schemas.verification import CitationCheck, VerificationReport
+
+# Longitud máxima de una afirmación marcada en la solicitud del reporte (§4.3).
+_CLAIM_CHARS = 300
 
 # Tope de la razón de cada miembro en la nota de la plantilla. La plantilla acota la nota
 # entera (``_MAX_NOTA``, hitl.py): lo que pasa de ahí no se lee, y una razón de miles de
@@ -308,6 +320,18 @@ def ft_policy(
     )
 
 
+def dump_artifact(models: Mapping[str, BaseModel]) -> dict[str, dict]:
+    """El artefacto por estudio (``{id: modelo}``) como dict JSON: lo que se escribe y se hashea.
+
+    ``05_extraction/extractions.json`` y ``07_rob/assessments.json`` se escriben con el dict
+    que devuelve esta función y ``extraction_payload`` / ``rob_payload`` hashean ese mismo dict
+    en ``artifact_sha256``: un único constructor, en modo JSON, de modo que el hash de la
+    solicitud es el del fichero leído de vuelta y no puede separarse de él (revisión de la
+    Tarea 25; el auditor recalcula ese hash desde el disco).
+    """
+    return {k: v.model_dump(mode="json") for k, v in models.items()}
+
+
 def extraction_payload(
     *,
     included: Iterable[SearchRecord],
@@ -317,7 +341,9 @@ def extraction_payload(
     """Solicitud del gate ``extraccion``: la tabla completa por estudio (D1).
 
     Se aprueba por etapa; ``artifact_sha256`` ata la aprobación al contenido de
-    ``05_extraction/extractions.json`` (``canonical_sha256`` del JSON leído de vuelta).
+    ``05_extraction/extractions.json``: es el ``canonical_sha256`` de
+    ``dump_artifact(extractions)``, el dict que escribe el pipeline, así que coincide con el
+    hash del fichero leído de vuelta.
     """
     included = list(included)
     return {
@@ -348,9 +374,7 @@ def extraction_payload(
                 "presence_kappa": agreement.presence_kappa,
             }
         ),
-        "artifact_sha256": canonical_sha256(
-            {k: v.model_dump(mode="json") for k, v in extractions.items()}
-        ),
+        "artifact_sha256": canonical_sha256(dump_artifact(extractions)),
     }
 
 
@@ -362,8 +386,9 @@ def rob_payload(
 ) -> dict:
     """Solicitud del gate ``rob``: dominios y juicio por estudio (D1).
 
-    ``artifact_sha256`` ata la aprobación al contenido de
-    ``07_rob/assessments.json`` (``canonical_sha256`` del JSON leído de vuelta).
+    ``artifact_sha256`` ata la aprobación al contenido de ``07_rob/assessments.json``: es el
+    ``canonical_sha256`` de ``dump_artifact(assessments)``, el dict que escribe el pipeline,
+    así que coincide con el hash del fichero leído de vuelta.
     """
     included = list(included)
     return {
@@ -386,10 +411,70 @@ def rob_payload(
             }
             for r in included
         ],
-        "artifact_sha256": canonical_sha256(
-            {k: v.model_dump(mode="json") for k, v in assessments.items()}
-        ),
+        "artifact_sha256": canonical_sha256(dump_artifact(assessments)),
     }
+
+
+def _flagged(verification: VerificationReport) -> list[tuple[int, CitationCheck]]:
+    """Citas marcadas, con su posición en ``verification.checks``."""
+    return [
+        (i, c)
+        for i, c in enumerate(verification.checks)
+        if not c.exists_in_corpus or not c.grounded
+    ]
+
+
+def report_payload(
+    *,
+    included: Iterable[SearchRecord],
+    verification: VerificationReport,
+    documento: str,
+    grounding_mode: str,
+    forced_human: bool,
+) -> dict:
+    """Solicitud del gate final ``reporte`` (spec §4.3; M5, D8).
+
+    ``must_adjudicate`` son todas las citas marcadas (``index`` = posición en
+    ``verification.json.checks``); el documento entra solo por su hash:
+    ``documento_sha256 = sha256_text(documento.md)``.
+    """
+    included = list(included)
+    flagged = _flagged(verification)
+    return {
+        "forced_human": forced_human,
+        "forced_reason": "hallucination_flagged" if forced_human else None,
+        "n_included": len(included),
+        "included": [r.record_id for r in included],
+        "verification": {
+            "mode": grounding_mode,
+            "n_checks": len(verification.checks),
+            "n_flagged": len(flagged),
+            "hallucination_flagged": verification.hallucination_flagged,
+            "flagged": [
+                {
+                    "index": i,
+                    "cited_id": c.cited_id,
+                    "claim": c.claim[:_CLAIM_CHARS],
+                    "note": c.note,
+                }
+                for i, c in flagged
+            ],
+        },
+        "must_adjudicate": [i for i, _ in flagged],
+        "documento_sha256": sha256_text(documento),
+    }
+
+
+def report_policy(verification: VerificationReport) -> FlagPolicy | None:
+    """``FlagPolicy`` del gate final, o ``None`` si el verificador no marcó nada."""
+    flagged = _flagged(verification)
+    if not flagged:
+        return None
+    return FlagPolicy(
+        flagged=tuple(
+            FlaggedClaim(i, c.cited_id, c.claim[:_CLAIM_CHARS], c.note) for i, c in flagged
+        )
+    )
 
 
 def apply_labels(

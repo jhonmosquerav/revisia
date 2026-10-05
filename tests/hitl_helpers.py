@@ -36,11 +36,13 @@ def responder_gate(
     actor: str = "human:revisora",
     reason: str | None = None,
     records: dict[str, dict] | None = None,
+    flags: dict[str, dict] | None = None,
 ) -> Path:
     """Escribe ``decision.yml`` para la solicitud vigente de ``stage``.
 
     Toma el ``request_sha256`` de ``review_request.yml``. ``records`` va tal
-    cual (``{id: {label, reason}}``, cribado por registro, PR-D).
+    cual (``{id: {label, reason}}``, cribado por registro) y ``flags`` también
+    (``{índice: {verdict, reason}}``, citas marcadas del reporte; PR-D).
     """
     decision: dict = {
         "request_sha256": leer_solicitud(run_dir, stage)["request_sha256"],
@@ -51,6 +53,8 @@ def responder_gate(
         decision["reason"] = reason
     if records is not None:
         decision["records"] = records
+    if flags is not None:
+        decision["flags"] = flags
     path = Path(run_dir) / stage / "decision.yml"
     path.write_text(yaml.safe_dump(decision, allow_unicode=True, sort_keys=False), "utf-8")
     return path
