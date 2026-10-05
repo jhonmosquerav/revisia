@@ -1122,6 +1122,38 @@ def test_16b_razon_humana(tmp_path: Path, proveedor) -> None:
     assert "diseño no elegible | humano |" in md
 
 
+def test_ft_a1_aprobar_en_bloque_deja_la_exclusion_ia_como_ia(tmp_path: Path, proveedor) -> None:
+    # D5 en texto completo (seguimiento de la Tarea 24): un humano aprueba en bloque el gate
+    # A1 sin etiquetar nada. La exclusión de la IA sigue siendo suya: la cuenta `excluded_ft_ai`,
+    # su fila de 16b lleva `reason_source == "ai"` y el ledger no tiene ninguna etiqueta.
+    proto = _proto(tmp_path, screening_ft="A1")
+    protocol = load_protocol(proto)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+    resultado = correr_hasta(
+        protocol,
+        proto,
+        ctx,
+        search_fn=_busqueda_ft,
+        # La palabra clave "irrelevante" solo está en el texto completo de rec-2: pasa T/A y la
+        # IA lo excluye en FT.
+        fetch_fn=_texto(rec_2="Estudio irrelevante."),
+    )
+
+    assert resultado.status == "completed"
+    c = resultado.counts
+    assert (c.excluded_ft, c.excluded_ft_ai, c.excluded_ft_human, c.included) == (1, 1, 0, 1)
+    (excluido,) = _json(ctx, "04_fulltext/excluded.json")
+    assert (excluido["record_id"], excluido["reason_source"]) == ("rec-2", "ai")
+    assert c.ft_exclusion_reasons == {"fuera de alcance": 1}
+    rec2 = _ft(ctx)["rec-2"]
+    assert (rec2["ensemble_label"], rec2["final_label"]) == ("exclude", "exclude")
+    assert (rec2["human_label"], rec2["human_reason"], rec2["human_actor"]) == (None, None, None)
+    # Lo único del humano en FT es la aprobación del gate: ni una etiqueta.
+    ft_ledger = [e for e in ctx.ledger.read_all() if e.stage == "screening_ft"]
+    assert [e.action for e in ft_ledger] == ["approve"]
+    assert not [e for e in ctx.ledger.read_all() if e.action == "label" and e.target == "rec-2"]
+
+
 def test_ft_unclear_resuelto_como_exclude_va_a_16b_y_no_a_extraccion(
     tmp_path: Path, proveedor
 ) -> None:
