@@ -327,11 +327,13 @@ def test_manifiesto_valido_con_miles_de_corchetes_se_carga_sin_rechazo(tmp_path)
             "PASS",
             id="models_used",
         ),
-        # Tercera revisión: `checks_search` interpolaba el valor crudo en dos f-strings.
+        # Tercera revisión: `checks_search` interpolaba el valor crudo en dos f-strings. Con la
+        # Tarea 9 una fecha tecleada nunca es PASS (C3): el estado ya no se fija (`None`); lo que
+        # esta fila vigila es que el auditor termina, la fila existe y el detalle va acotado.
         pytest.param(
             "protocol:\n  search_window:\n    executed: *a9\n",
             "search_window",
-            "PASS",
+            None,
             id="search_window-executed",
         ),
         pytest.param(
@@ -351,11 +353,12 @@ def test_manifiesto_valido_con_miles_de_corchetes_se_carga_sin_rechazo(tmp_path)
     ],
 )
 def testbomba_de_alias_no_cuelga_el_auditor_ni_llena_el_detalle(
-    corrida, cola: str, fila_afectada: str, estado: str
+    corrida, cola: str, fila_afectada: str, estado: str | None
 ) -> None:
     (corrida / "manifest.yml").write_text(bomba_de_alias() + cola, encoding="utf-8")
     filas = auditar_en_subproceso(corrida, timeout=60)
-    assert filas[fila_afectada][0] == estado
+    if estado is not None:
+        assert filas[fila_afectada][0] == estado
     assert len(filas[fila_afectada][1]) < 500  # un `repr` acotado, no la bomba expandida
     assert [i for i, (_, detalle) in filas.items() if "error interno" in detalle] == []
     assert len(filas) == len(CHECKS)

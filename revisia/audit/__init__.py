@@ -80,6 +80,12 @@ CHECKS: tuple[CheckSpec, ...] = (
     CheckSpec("exclusions", "trAIce R1", "screening_ft", checks_flow.check_exclusions),
     CheckSpec("deliverable", "PRISMA 16/16b/17/18/27", "reporte", checks_flow.check_deliverable),
     CheckSpec("gold", "trAIce M9/R2", "screening_ta", checks_quality.check_gold),
+    CheckSpec(
+        "thresholds",
+        "trAIce M9/R2 / PRISMA 8, 24c",
+        "screening_ta",
+        checks_quality.check_thresholds,
+    ),
     CheckSpec("grounding", "trAIce M8/M9", "sintesis", checks_quality.check_grounding),
     CheckSpec("search_window", "PRISMA-S 9/13", "busqueda", checks_search.check_search_window),
     CheckSpec("registration", "PRISMA 24a", None, checks_search.check_registration),

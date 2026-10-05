@@ -1,62 +1,356 @@
-"""Checks de calidad del cribado y de la síntesis: ``gold``, ``grounding``."""
+"""Checks de calidad del cribado y de la síntesis: ``gold``, ``thresholds``, ``grounding``.
+
+``thresholds`` aplica D7: los umbrales del protocolo según lo que mide cada
+métrica. Un recall bajo ``recall_target`` significa estudios relevantes
+perdidos y es FAIL (la rebaja a WARN cuando todas las exclusiones IA de T/A ya
+tienen etiqueta humana llega con el reanudado por registro); un κ bajo
+``kappa_min`` (acuerdo humano-IA) es una desviación a declarar (WARN). El caso
+de la auditoría 2026-09-03 (A11: κ=0.0 con PASS) deja de pasar en limpio.
+``grounding`` aplica D8: una cita marcada por el verificador sin adjudicar por
+un humano es FAIL.
+
+Los artefactos son entrada no confiable (revisiones de la Tarea 4): un número
+leído de ellos (recall, κ, la matriz, un umbral del protocolo) puede ser
+``nan``, ``inf``, negativo o un entero de miles de cifras. Ninguno puede lanzar
+(``ZeroDivisionError``, ``ValueError``, ``OverflowError``) ni entrar sin acotar en
+un detalle: lo que no se puede medir es un umbral «no medible» (WARN), no una
+excepción, y todo valor interpolado pasa por ``short_text``/``short_repr``.
+"""
 
 from __future__ import annotations
 
-from revisia.audit.artifacts import AuditContext
+import math
+import re
+
+from revisia.audit.artifacts import AuditContext, short_repr, short_text
+from revisia.audit.checks_flow import TA, included_ids
+
+# Función privada de `hitl` a propósito: la adjudicación de una cita (`flag_review`) y la
+# etiqueta de un registro (`label`) pertenecen a la decisión efectiva con el mismo criterio
+# (`decision_sha256` + `request_sha256`), y una sola regla evita que se contradigan.
+from revisia.audit.checks_hitl import _de_la_decision_efectiva
 from revisia.audit.model import Verdict
+from revisia.config import KNOWN_THRESHOLDS
+from revisia.metrics import ScreeningMetrics, fmt_metric, wilson_interval
+from revisia.provenance.ledger import HUMAN_ACTOR_PREFIX
+
+METRICS = "03_screening/metrics.json"
+VERIFICATION = "06_synthesis/verification.json"
+
+_MAX_CLAVES = 5  # claves de `thresholds` desconocidas que se listan
+_MAX_FANTASMAS = 3  # citas con id fuera de los incluidos que se listan
+_MAX_INDICES = 5  # índices de citas que se listan
+_MAX_ACTORES = 5  # actores que se listan
+_LIMITE_NUMERO = 40  # caracteres de un número (un entero puede tener 4 000 cifras)
+_LIMITE_ID = 60  # caracteres de un id de cita, una clave o un actor
+_BANDERA = re.compile(r"flag:([0-9]{1,9})", re.ASCII)  # objetivo de una `flag_review`
+
+
+def _num(value: object, spec: str = ".3f") -> str:
+    """Un número leído de un artefacto, para un detalle: acotado y sin lanzar.
+
+    Un ``int`` de más de 4 300 cifras (el JSON lo carga, ``str`` ya no lo convierte) no
+    revienta el check: se muestra como valor fuera de rango.
+    """
+    try:
+        text = format(value, spec) if isinstance(value, float) else str(value)
+    except ValueError:
+        return "(valor fuera de rango)"
+    return short_text(text, limit=_LIMITE_NUMERO)
+
+
+def _finito(value: float | None) -> float | None:
+    """``value`` si es un número finito; ``None`` si falta o es ``nan``/``inf``."""
+    return value if value is not None and math.isfinite(value) else None
+
+
+def _con_resto(items: list[str], maximo: int) -> str:
+    """Los primeros ``maximo`` elementos, unidos por comas, y cuántos más hay."""
+    shown = ", ".join(items[:maximo])
+    more = len(items) - maximo
+    return shown + (f" (+{more} más)" if more > 0 else "")
+
+
+def _matrix_note(ctx: AuditContext) -> str:
+    """Por qué ``metrics.json`` no valida (el FAIL lo da ``schemas``)."""
+    raw = ctx.art.json(METRICS)
+    if not raw.ok or not isinstance(raw.value, dict):
+        return "metrics.json ilegible (ver `schemas`)."
+    keys = ("tp", "fp", "fn", "tn")
+    if all(k in raw.value for k in keys):
+        return (
+            f"Métricas vs gold humano: recall={short_repr(raw.value.get('recall'))} · "
+            "metrics.json con matriz de confusión ilegible (tp/fp/fn/tn con algún valor no "
+            "numérico; ver `schemas`)."
+        )
+    return "metrics.json sin matriz de confusión: métricas no verificables (ver `schemas`)."
 
 
 def check_gold(ctx: AuditContext) -> Verdict:
-    """trAIce M9/R2: métricas del cribado IA contra un gold humano."""
-    loaded = ctx.art.json("03_screening/metrics.json")
+    """trAIce M9/R2: métricas del cribado IA contra un gold humano, informativas."""
+    loaded = ctx.art.artifact(METRICS)
     if not loaded.present:
         return "WARN", (
             "Sin gold standard: no hay recall/kappa del cribado IA vs humano. "
             "Crea gold.yml (revisia gold-template) antes de publicar."
         )
-    if not loaded.ok or not isinstance(loaded.value, dict):
-        return "WARN", "metrics.json ilegible."
-    metrics = loaded.value
-    recall = metrics.get("recall")
-    kappa = metrics.get("cohen_kappa")
-    # mcc solo cuenta como indefinido si la clave está presente y es null: un
-    # metrics.json de formato antiguo (sin "mcc") no debe convertir un PASS
-    # previo en WARN.
-    mcc_indefinido = "mcc" in metrics and metrics.get("mcc") is None
-    # La matriz cuenta como presente solo si sus cuatro celdas son enteras.
-    matriz = {k: metrics.get(k) for k in ("tp", "fp", "fn", "tn")}
-    tiene_matriz = all(k in metrics for k in matriz)
-    legible = tiene_matriz and all(
-        isinstance(v, int) and not isinstance(v, bool) for v in matriz.values()
-    )
-    una_sola_clase = legible and (
-        matriz["tp"] + matriz["fn"] == 0 or matriz["tn"] + matriz["fp"] == 0
-    )
-    if tiene_matriz and not legible:
+    if not loaded.ok:
+        return "WARN", _matrix_note(ctx)
+    m: ScreeningMetrics = loaded.value
+    gold_una_clase = m.tp + m.fn == 0 or m.tn + m.fp == 0
+    ia_una_clase = m.tp + m.fp == 0 or m.fn + m.tn == 0
+    # Un `nan`/`inf` no es una métrica informativa: se trata como indefinida.
+    kappa, matthews = _finito(m.cohen_kappa), _finito(m.mcc)
+    if kappa is None or matthews is None or gold_una_clase or ia_una_clase:
         return "WARN", (
-            f"Métricas vs gold humano: recall={recall} · metrics.json con matriz de confusión "
-            "ilegible (tp/fp/fn/tn con algún valor no numérico)."
-        )
-    if kappa is None or mcc_indefinido or una_sola_clase:
-        return "WARN", (
-            f"Métricas vs gold humano: recall={recall} · kappa/mcc no calculable: métricas "
-            "indefinidas o no informativas (el gold o la IA asignaron una sola clase). Amplía "
-            "el gold con registros relevantes e irrelevantes."
+            f"Métricas vs gold humano: recall={fmt_metric(m.recall)} · kappa/mcc no calculable: "
+            "métricas indefinidas o no informativas (el gold o la IA asignaron una sola clase). "
+            "Amplía el gold con registros relevantes e irrelevantes."
         )
     return "PASS", (
-        f"Métricas vs gold humano: recall={recall} · kappa={kappa} (accuracy omitida a propósito)."
+        f"Métricas vs gold humano (n={_num(m.n)}): recall={fmt_metric(m.recall)} · "
+        f"kappa={fmt_metric(kappa)} · MCC={fmt_metric(matthews)} (accuracy omitida a propósito)."
     )
+
+
+def potencia_minima(target: float) -> int | None:
+    """Positivos mínimos del gold para que un solo fallo no baje del umbral.
+
+    ⌈1/(1−umbral)⌉: 20 para 0,95; 10 para 0,90. ``None`` si ningún gold tiene potencia
+    (umbral ≥ 1) o el umbral no es un número en (0, 1): ``nan``, ``inf`` y los umbrales
+    ≤ 0 o > 1 no son medibles y no pueden dividir por cero. El redondeo evita que el
+    error de coma flotante convierta 5,000000000000001 en 6.
+    """
+    if not math.isfinite(target) or target <= 0 or target >= 1:
+        return None
+    return math.ceil(round(1 / (1 - target), 9))
+
+
+def ai_exclusions_without_label(ctx: AuditContext) -> int | None:
+    """Exclusiones IA de T/A sin etiqueta humana (``None`` si no se leen las decisiones)."""
+    loaded = ctx.art.artifact(TA)
+    if not loaded.ok:
+        return None
+    return sum(1 for d in loaded.value if d.ensemble_label == "exclude" and d.human_label is None)
+
+
+def _ic(k: int, n: int) -> str:
+    """Intervalo de Wilson al 95 % de ``k/n``, o «no calculable» (matriz absurda)."""
+    try:
+        interval = wilson_interval(k, n)
+    except (ArithmeticError, ValueError):  # enteros enormes: `z²/n` no cabe en un float
+        interval = None
+    if interval is None:
+        return "[IC95 no calculable]"
+    return f"[IC95 {interval[0]:.2f}–{interval[1]:.2f}]"
+
+
+def _recall(
+    ctx: AuditContext, m: ScreeningMetrics | None, why: str, target: float
+) -> tuple[str, str]:
+    """``(estado, texto)`` de ``recall_target`` frente a las métricas validadas (D7)."""
+    if not math.isfinite(target) or not 0 < target <= 1:
+        return "WARN", (
+            f"recall_target {short_repr(target, limit=_LIMITE_NUMERO)} no medible (debe ser un "
+            "número en (0, 1])"
+        )
+    objetivo = f"{target:.2f}"
+    if m is None:
+        return "WARN", f"recall_target {objetivo} no medible ({why})"
+    if m.recall is None:
+        return "WARN", f"recall_target {objetivo} no medible (recall indefinido en metrics.json)"
+    if m.tp < 0 or m.fn < 0 or not math.isfinite(m.recall) or not 0 <= m.recall <= 1:
+        return "WARN", (
+            f"recall_target {objetivo} no medible (recall o matriz de confusión fuera de rango; "
+            "ver `arithmetic`)"
+        )
+    positives = m.tp + m.fn
+    recall = f"recall {m.recall:.2f} {_ic(m.tp, positives)}"
+    if m.recall < target:
+        pending = ai_exclusions_without_label(ctx)
+        quedan = "un número no verificable de" if pending is None else str(pending)
+        return "FAIL", (
+            f"{recall} < {objetivo} con {_num(positives)} positivos y {quedan} exclusiones IA de "
+            "T/A sin etiqueta humana: etiquétalas en `screening_ta/decision.yml` y reanuda "
+            "(D7, D14)"
+        )
+    minimo = potencia_minima(target)
+    if minimo is None:
+        return "WARN", (
+            f"{recall} ≥ {objetivo} con solo {_num(positives)} positivos en el gold: con un "
+            "umbral de 1 un solo fallo ya baja del umbral (gold sin potencia)"
+        )
+    if positives < minimo:
+        return "WARN", (
+            f"{recall} ≥ {objetivo} con solo {_num(positives)} positivos en el gold: con menos "
+            f"de {minimo} un solo fallo ya baja del umbral (gold sin potencia)"
+        )
+    return "PASS", f"{recall} ≥ {objetivo} con {_num(positives)} positivos"
+
+
+def _kappa(m: ScreeningMetrics | None, why: str, minimo: float) -> tuple[str, str]:
+    """``(estado, texto)`` de ``kappa_min``: un κ bajo es una desviación a declarar (WARN)."""
+    if not math.isfinite(minimo) or not 0 <= minimo <= 1:
+        return "WARN", (
+            f"kappa_min {short_repr(minimo, limit=_LIMITE_NUMERO)} no medible (debe ser un "
+            "número en [0, 1])"
+        )
+    objetivo = f"{minimo:.2f}"
+    if m is None:
+        return "WARN", f"kappa_min {objetivo} no medible ({why})"
+    kappa = _finito(m.cohen_kappa)
+    if kappa is None:
+        return "WARN", f"kappa_min {objetivo} no medible (κ indefinido)"
+    if kappa < minimo:
+        return "WARN", (
+            f"κ {kappa:.2f} < {objetivo}: desviación del protocolo, decláralo (PRISMA 24c)"
+        )
+    return "PASS", f"κ {kappa:.2f} ≥ {objetivo}"
+
+
+def check_thresholds(ctx: AuditContext) -> Verdict:
+    """trAIce M9/R2 / PRISMA 8, 24c: umbrales del protocolo según lo que miden (D7)."""
+    if ctx.protocol is None:
+        return "WARN", "umbrales no verificables: sin protocolo legible en el manifiesto."
+    thresholds = ctx.protocol.thresholds
+    resultados: dict[str, list[str]] = {"FAIL": [], "WARN": [], "PASS": []}
+
+    unknown = sorted(set(thresholds) - KNOWN_THRESHOLDS)
+    if unknown:
+        claves = _con_resto([f"`{short_text(k, limit=_LIMITE_ID)}`" for k in unknown], _MAX_CLAVES)
+        resultados["WARN"].append(
+            f"clave(s) desconocida(s) en thresholds: {claves} "
+            f"(¿errata? se entienden {', '.join(sorted(KNOWN_THRESHOLDS))})"
+        )
+    recall_target = thresholds.get("recall_target")
+    kappa_min = thresholds.get("kappa_min")
+    if recall_target is None and kappa_min is None:
+        resultados["WARN"].append(
+            "ningún umbral declarado: declara al menos `recall_target` en el protocolo"
+        )
+
+    loaded = ctx.art.artifact(METRICS)
+    m: ScreeningMetrics | None = loaded.value if loaded.ok else None
+    why = "sin gold" if not loaded.present else "metrics.json no válido"
+
+    if recall_target is not None:
+        estado, texto = _recall(ctx, m, why, recall_target)
+        resultados[estado].append(texto)
+    if kappa_min is not None:
+        estado, texto = _kappa(m, why, kappa_min)
+        resultados[estado].append(texto)
+
+    fails, warns, passes = resultados["FAIL"], resultados["WARN"], resultados["PASS"]
+    if fails:
+        return "FAIL", "; ".join(fails + warns + passes) + "."
+    if warns:
+        return "WARN", "; ".join(warns + passes) + "."
+    return "PASS", "; ".join(passes) + "."
+
+
+def _adjudications(ctx: AuditContext) -> dict[int, list[str]]:
+    """Citas adjudicadas como falso positivo en la decisión efectiva de ``reporte``.
+
+    ``{índice: actores}`` de las entradas ``flag_review`` de la decisión efectiva
+    (el mismo ``decision_sha256`` y ``request_sha256`` que el ``approve``), con
+    ``verdict: false_positive`` y razón no vacía (spec §4.3). Las de una decisión
+    sustituida (un rechazo o una reanudación posteriores, D14) no cuentan: son
+    huérfanas. Sin ``decision_sha256`` (ledger anterior a la Ola 1) no hay
+    adjudicación posible.
+    """
+    gate = ctx.gates.get("reporte")
+    if gate is None or gate.action != "approve" or gate.decision_sha256 is None:
+        return {}
+    result: dict[int, list[str]] = {}
+    for entry in ctx.ledger.decisions:
+        if entry.stage != "reporte" or entry.action != "flag_review":
+            continue
+        if not _de_la_decision_efectiva(ctx, entry):
+            continue
+        reason = entry.detail.get("reason")
+        if entry.detail.get("verdict") != "false_positive":
+            continue
+        if not isinstance(reason, str) or not reason.strip():
+            continue
+        target = _BANDERA.fullmatch(entry.target or "")
+        if target:
+            result.setdefault(int(target.group(1)), []).append(entry.actor)
+    return result
+
+
+def _indices(items: list[int]) -> str:
+    """``[0, 2, 5]`` con los primeros ``_MAX_INDICES`` y cuántos más hay."""
+    return "[" + _con_resto([str(i) for i in items], _MAX_INDICES) + "]"
 
 
 def check_grounding(ctx: AuditContext) -> Verdict:
-    """trAIce M8/M9: verificación anti-alucinación de la síntesis."""
-    loaded = ctx.art.json("06_synthesis/verification.json")
-    if not loaded.present:
-        return "WARN", "Sin verification.json: la síntesis no pasó por el verificador."
-    if not loaded.ok or not isinstance(loaded.value, dict):
-        return "WARN", "verification.json ilegible."
-    if loaded.value.get("hallucination_flagged"):
-        return "WARN", (
-            "El verificador marcó citas posiblemente no fundamentadas: revisar antes de usar."
+    """trAIce M8/M9: citas de la síntesis verificadas; las marcadas, adjudicadas (D8)."""
+    loaded = ctx.art.artifact(VERIFICATION)
+    if not loaded.ok:
+        estado = "ausente" if not loaded.present else "inválido"
+        return "N/A", f"no aplica: {VERIFICATION} {estado} (ver `stage_artifacts` y `schemas`)."
+    report = loaded.value
+    checks = report.checks
+    ids = included_ids(ctx)
+    included = set(ids) if ids is not None else None
+    fails: list[str] = []
+
+    # `recompute_flag` muta el modelo, que el contexto comparte con otros checks: se aplica
+    # a una copia.
+    recomputed = report.model_copy(deep=True).recompute_flag()
+    if report.hallucination_flagged != recomputed:
+        fails.append(
+            f"bandera inconsistente: hallucination_flagged={report.hallucination_flagged} y "
+            f"los checks dan {recomputed} (recompute_flag)"
         )
-    return "PASS", "Grounding de citas verificado sin banderas."
+    if included is not None:
+        phantom = [
+            f"{i} (`{short_text(c.cited_id, limit=_LIMITE_ID)}`)"
+            for i, c in enumerate(checks)
+            if c.exists_in_corpus and c.cited_id not in included
+        ]
+        if phantom:
+            fails.append(
+                "exists_in_corpus: true para ids que no están entre los incluidos: "
+                + _con_resto(phantom, _MAX_FANTASMAS)
+            )
+
+    flagged = [i for i, c in enumerate(checks) if not c.exists_in_corpus or not c.grounded]
+    adjudicated = _adjudications(ctx)
+    missing = [i for i in flagged if i not in adjudicated]
+    actors = sorted({actor for i in flagged for actor in adjudicated.get(i, [])})
+    non_human = [a for a in actors if not a.startswith(HUMAN_ACTOR_PREFIX)]
+    if missing:
+        fails.append(
+            f"{len(missing)} cita(s) marcada(s) sin adjudicar por un humano (D8): índices "
+            f"{_indices(missing)}; adjudícalas en `reporte/decision.yml` (`flags`) o rechaza el "
+            "reporte"
+        )
+    if non_human:
+        listados = _con_resto([short_text(a, limit=_LIMITE_ID) for a in non_human], _MAX_ACTORES)
+        fails.append(f"adjudicación de un actor no humano: {listados}")
+
+    if fails:
+        return "FAIL", "; ".join(fails) + "."
+    if ids is None:
+        # Las decisiones a texto completo no se leen: ni «ninguna marcada» ni «0 incluidos» son
+        # verdad comprobada (la causa está en `stage_artifacts` y `schemas`).
+        return "WARN", (
+            f"{len(checks)} citas, {len(flagged)} marcada(s): no se pueden contrastar con los "
+            "incluidos (04_fulltext/decisions.json no se lee; ver `stage_artifacts`)."
+        )
+    if flagged:
+        quienes = _con_resto([short_text(a, limit=_LIMITE_ID) for a in actors], _MAX_ACTORES)
+        return "WARN", (
+            f"{len(flagged)} citas marcadas, adjudicadas como falsos positivos por "
+            f"{quienes}: decláralo."
+        )
+    if not checks:
+        if ids:
+            return "WARN", (
+                f"la síntesis no cita ningún estudio ({len(ids)} incluidos): no hay citas que "
+                "verificar."
+            )
+        return "PASS", "sin incluidos ni citas que verificar."
+    cited = len({c.cited_id for c in checks if c.cited_id in included})
+    return "PASS", f"{len(checks)} citas, ninguna marcada; {cited}/{len(ids)} incluidos citados."
