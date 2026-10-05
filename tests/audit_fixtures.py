@@ -24,15 +24,24 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from revisia.audit import AuditCheck, AuditReport, run_audit
+from revisia.config import ReviewProtocol
+from revisia.exclusions import compute_exclusion_breakdown
+from revisia.exports import PrismaCounts, render_prisma2020_flow_csv
 from revisia.metrics import ScreeningMetrics, kappa_from_matrix, mcc, wmcc
+from revisia.provenance.ledger import DecisionEntry
+from revisia.provenance.runmeta import RunMeta, sha256_text
 from revisia.schemas.artifacts import JOURNAL_PATHS
+from revisia.schemas.extraction import ExtractionRecord
+from revisia.schemas.rob import RoBAssessment
+from revisia.schemas.screening import ScreeningDecision, ScreeningVote
+from revisia.schemas.verification import CitationCheck, VerificationReport
 
 _REPO = Path(__file__).resolve().parent.parent
 
@@ -238,6 +247,197 @@ def pausar_en_screening_ft(run_dir: Path) -> None:
         shutil.rmtree(run_dir / rel)
     (run_dir / "manifest.yml").unlink()
     (run_dir / "03_screening" / "exclusions.json").unlink()
+
+
+# ── Corrida v0.7 (anterior a la Ola 1) ──────────────────────────────────
+
+_V07_INICIO = datetime(2026, 9, 20, 10, 0, 0, tzinfo=UTC)
+_V07_MODELO = "gemini:gemini-2.5-flash"
+# record_id → (título, etiqueta T/A, etiqueta FT o None si no pasó T/A).
+_V07_REGISTROS = {
+    "10.2000/a": ("Cribado con LLM en revisiones de salud", "include", "include"),
+    "10.2000/b": ("Estudio ajeno al cribado", "exclude", None),
+    "10.2000/c": ("Cribado sin métricas de desempeño", "include", "exclude"),
+    "10.2000/d": ("Ensemble de modelos para cribar títulos", "include", "include"),
+}
+
+
+def _v07_marca(segundos: float) -> str:
+    return (_V07_INICIO + timedelta(seconds=segundos, microseconds=250_000)).isoformat()
+
+
+def _v07_decision(record_id: str, label: str, phase: str) -> dict:
+    vote = ScreeningVote(
+        model=_V07_MODELO,
+        label=label,
+        confidence=0.8,
+        rationale=f"v0.7: {label}",
+        criteria_violated=["sin métricas"] if label == "exclude" else [],
+    )
+    decision = ScreeningDecision(
+        record_id=record_id,
+        phase=phase,
+        votes=[vote],
+        ensemble_label=label,
+        final_label=label,
+        citations_checked=[record_id],
+    )
+    # v0.7 no tenía los campos que añade la Ola 1.
+    return decision.model_dump(exclude={"fulltext_status", "human_reason", "human_actor"})
+
+
+def write_legacy_v07(tmp_path: Path) -> Path:
+    """Escribe una corrida coherente del motor v0.7 (sin ``run.json``).
+
+    Es lo que dejaba el pipeline antes de la Ola 1: 5 identificados (1
+    duplicado), un solo screener, 1 exclusión IA en T/A y 1 a texto completo,
+    2 incluidos, 12 llamadas de un proveedor real y los 5 gates aprobados por
+    un humano. El auditor la evalúa con las relaciones v0.7 (D13).
+    """
+    run = tmp_path / "runs" / "legado-v07-20260920-100000"
+    for sub in ("03_screening", "04_fulltext", "05_extraction", "06_synthesis", "07_rob"):
+        (run / sub).mkdir(parents=True)
+    (run / "deliverable" / "interop").mkdir(parents=True)
+
+    ta = [
+        _v07_decision(rid, label, "title_abstract") for rid, (_, label, _) in _V07_REGISTROS.items()
+    ]
+    ft = [
+        _v07_decision(rid, label, "fulltext")
+        for rid, (_, _, label) in _V07_REGISTROS.items()
+        if label is not None
+    ]
+    included = [d["record_id"] for d in ft if d["final_label"] == "include"]
+    extractions = {rid: ExtractionRecord(study_id=rid).model_dump() for rid in included}
+    assessments = {
+        rid: RoBAssessment(study_id=rid, tool="RoB2", overall="low").model_dump()
+        for rid in included
+    }
+    verification = VerificationReport(
+        stage="reporte",
+        checks=[
+            CitationCheck(
+                claim="El cribado con LLM alcanza recall alto [10.2000/a].",
+                cited_id="10.2000/a",
+                exists_in_corpus=True,
+                grounded=True,
+            )
+        ],
+    ).model_dump()
+    decisions = [ScreeningDecision.model_validate(d) for d in [*ta, *ft]]
+    exclusions = compute_exclusion_breakdown(decisions).model_dump()
+    counts = {
+        "identified": 5,
+        "identified_by_source": {"OpenAlex": 3, "Crossref": 2},
+        "duplicates_removed": 1,
+        "removed_automation": 0,
+        "removed_other": 0,
+        "screened": 4,
+        "excluded_ta": 1,
+        "excluded_ta_human": 0,
+        "excluded_ta_ai": 1,
+        "fulltext_assessed": 3,
+        "fulltext_abstract_only": 0,
+        "excluded_ft": 1,
+        "ft_exclusion_reasons": {"sin métricas": 1},
+        "included": 2,
+    }
+    # 4 T/A + 3 FT + 2 extracciones + 2 RoB + 1 síntesis, una cada 1,2 s.
+    calls = [
+        RunMeta(
+            provider="gemini",
+            model="gemini-2.5-flash",
+            seed=7,
+            temperature=0.0,
+            prompt_sha256=sha256_text(f"prompt {i}"),
+            response_sha256=sha256_text(f"respuesta {i}"),
+            timestamp_utc=_v07_marca(1 + 1.2 * i),
+            deterministic=False,
+        ).model_dump()
+        for i in range(12)
+    ]
+    protocol = ReviewProtocol(
+        slug="legado-v07",
+        title="Corrida v0.7 de referencia",
+        question={"text": "¿Sirven los LLM para cribar?", "framework": "PICO"},
+        databases=["OpenAlex", "Crossref"],
+        registration={"osf": "OSF-LEGADO"},
+        search_window={"from": "2015-01-01", "to": "2026-09-01", "executed": "2026-09-20"},
+        llm={"default": {"provider": "gemini", "model": "gemini-2.5-flash", "seed": 7}},
+    ).model_dump(mode="json")
+    manifest = {
+        "slug": "legado-v07",
+        "created_utc": _v07_marca(60),
+        "timestamp": "20260920-100000",
+        "provenance": "pipeline",
+        "protocol": protocol,
+        "counts": counts,
+        "llm_calls": calls,
+        "models_used": [_V07_MODELO],
+        "deterministic_token_level": False,
+        "verification": verification,
+        "risk_of_bias": assessments,
+        "exclusions": exclusions,
+    }
+
+    def _json(rel: str, data: object) -> None:
+        (run / rel).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    _json("03_screening/decisions.json", ta)
+    _json("03_screening/exclusions.json", exclusions)
+    _json("04_fulltext/decisions.json", ft)
+    _json("05_extraction/extractions.json", extractions)
+    _json("06_synthesis/verification.json", verification)
+    _json("07_rob/assessments.json", assessments)
+    (run / "manifest.yml").write_text(
+        yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
+
+    gates = (
+        ("screening_ta", "A1"),
+        ("screening_ft", "A0"),
+        ("extraccion", "A0"),
+        ("rob", "A0"),
+        ("reporte", "A1"),
+    )
+    ledger = []
+    for i, (gate, autonomy) in enumerate(gates):
+        (run / gate).mkdir()
+        (run / gate / "review_request.yml").write_text(f"stage: {gate}\n", encoding="utf-8")
+        (run / gate / "decision.yml").write_text(
+            "approved: true\nactor: human:revisora\n", encoding="utf-8"
+        )
+        entry = DecisionEntry(
+            stage=gate,
+            actor="human:revisora",
+            autonomy=autonomy,
+            action="approve",
+            timestamp_utc=_v07_marca(6 + 10 * i),
+        )
+        ledger.append(entry.model_dump_json() + "\n")
+    (run / "decisions_ledger.jsonl").write_text("".join(ledger), encoding="utf-8")
+
+    deliverable = run / "deliverable"
+    for name in (
+        "prisma_flow.md",
+        "metodologia.md",
+        "tabla_extraccion.md",
+        "risk_of_bias.md",
+        "referencias.bib",
+        "checklist_2020.md",
+        "checklist_traice.md",
+        "checklist_s.md",
+        "checklist_abstracts.md",
+    ):
+        (deliverable / name).write_text(f"# {name} (v0.7)\n", encoding="utf-8")
+    (deliverable / "documento.md").write_text(
+        "# Corrida v0.7\n\nEl cribado con LLM alcanza recall alto [10.2000/a].\n",
+        encoding="utf-8",
+    )
+    (deliverable / "interop" / "prisma2020_flow.csv").write_text(
+        render_prisma2020_flow_csv(PrismaCounts.model_validate(counts)), encoding="utf-8"
+    )
+    return run
 
 
 _SCRIPT_AUDITAR = (

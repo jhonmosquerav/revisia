@@ -75,6 +75,8 @@ CHECKS: tuple[CheckSpec, ...] = (
     CheckSpec("ledger", "trAIce M8 / PRISMA 8", None, checks_hitl.check_ledger),
     CheckSpec("hitl", "trAIce M8/R1 / PRISMA 8", None, checks_hitl.check_hitl),
     CheckSpec("final_gate", "trAIce M8", None, checks_hitl.check_final_gate),
+    CheckSpec("stage_artifacts", "PRISMA 16/27", None, checks_flow.check_stage_artifacts),
+    CheckSpec("arithmetic", "PRISMA 16 / trAIce R1", "reporte", checks_flow.check_arithmetic),
     CheckSpec("exclusions", "trAIce R1", "screening_ft", checks_flow.check_exclusions),
     CheckSpec("deliverable", "PRISMA 16/16b/17/18/27", "reporte", checks_flow.check_deliverable),
     CheckSpec("gold", "trAIce M9/R2", "screening_ta", checks_quality.check_gold),
