@@ -29,6 +29,7 @@ adjudicación quedan en el ledger, antes del ``approve`` al que pertenecen.
 from __future__ import annotations
 
 import json
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -58,6 +59,20 @@ _MAX_LISTED = 20
 # Claves que review_gate pone él mismo en la solicitud (``request_sha256`` solo en el
 # fichero): un payload que las traiga las pisaría y cambiaría lo que se hashea.
 _CLAVES_COMUNES = ("schema_version", "stage", "autonomy", "request_sha256")
+
+# Límites del texto libre de un comentario de la plantilla (título, afirmación, nota…): se
+# acota cada campo, no la línea. Así lo estructurado (propuesta, marcas, id citado, motivo
+# de la marca) siempre sobrevive a un título de 200 caracteres (revisión de la Tarea 21).
+_MAX_TEXTO = 120
+_MAX_NOTA = 120
+_MAX_PROPUESTA = 40
+_MAX_ID_CITADO = 60
+# Red de seguridad de la línea entera. Va por encima de la suma de los límites de arriba
+# más las partes fijas (peor caso de un registro: ~370), así que no corta nada en la práctica.
+_MAX_COMENTARIO = 400
+# YAML (PyYAML y libyaml) solo lee como clave implícita ``clave: valor`` hasta 1024
+# caracteres, contando las comillas y los escapes. Una más larga va en forma explícita.
+_MAX_CLAVE_IMPLICITA = 1000
 
 # Saltos de línea de YAML 1.1 que PyYAML, con ``allow_unicode=True``, escribe CRUDOS en
 # estilo plano o con comillas simples. ``safe_load`` pliega el NEL (U+0085) a un
@@ -240,20 +255,39 @@ class GateResult:
     flag_reviews: dict[str, FlagReview] = field(default_factory=dict)
 
 
-def _comment(text: str, limit: int = 200) -> str:
-    """Una línea de comentario YAML segura para texto del LLM o del registro (D4).
+def _plain(text: str) -> str:
+    """El texto en una sola línea, sin saltos, controles ni marcas de formato (D4).
 
     PyYAML y libyaml cierran un comentario con cualquier salto de línea de YAML 1.1
     (LF, CR, U+0085, U+2028, U+2029): lo que viniera detrás, p. ej. un
     ``approved: true`` dentro de un ``rationale``, sería una clave de verdad. Todo
-    espacio (esos saltos incluidos) y todo carácter no imprimible (controles C0 y
-    C1, sustitutos sueltos, marcas de formato) pasa a un espacio; los espacios se
-    pliegan y la línea se acota a ``limit`` caracteres.
+    espacio (esos saltos incluidos) y todo carácter no imprimible (controles C0 y C1,
+    sustitutos sueltos) pasa a un espacio, y los espacios se pliegan. Las marcas de
+    formato (categoría Cf: U+00AD, ZWNJ, ZWJ, U+200B, U+FEFF, las de dirección…) no
+    separan palabras, así que se borran: sustituirlas por un espacio partiría "intervención"
+    en dos.
     """
-    plain = " ".join("".join(ch if ch.isprintable() else " " for ch in text).split())
-    if len(plain) > limit:
-        plain = plain[: limit - 1] + "…"
-    return f"# {plain}"
+    visible = (
+        "" if unicodedata.category(ch) == "Cf" else ch if ch.isprintable() else " " for ch in text
+    )
+    return " ".join("".join(visible).split())
+
+
+def _acotar(text: str, limit: int) -> str:
+    """``_plain`` y, si pasa de ``limit`` caracteres, cortado con «…» dentro del límite."""
+    plain = _plain(text)
+    return plain if len(plain) <= limit else plain[: limit - 1] + "…"
+
+
+def _comment(text: str, limit: int = _MAX_COMENTARIO) -> str:
+    """Una línea de comentario YAML segura para texto del LLM o del registro (D4).
+
+    La línea se sanea con ``_plain`` y se acota a ``limit`` caracteres como red de
+    seguridad. El texto libre (título, afirmación, nota) se acota antes, campo a campo
+    con ``_acotar``: cortar aquí la línea entera borraría lo que va detrás de un título
+    largo.
+    """
+    return f"# {_acotar(text, limit)}"
 
 
 def _key(text: str) -> str:
@@ -290,17 +324,21 @@ def render_decision_template(
 
     ``approved: null`` la hace inválida tal cual: aprobar tiene que ser un acto
     deliberado. Con ``records`` lista cada registro de la solicitud con
-    ``label: null`` y, encima, un comentario con su título, la propuesta de la IA,
-    sus marcas (``obligatorio``, ``unclear``, ``no recuperado``) y su nota; con
-    ``flags``, cada cita marcada con ``verdict: null`` y su comentario. Un bloque
-    sin entradas es ``{}`` (``records:`` a secas se leería como ``null`` y la
-    decisión copiada no validaría); con ``None`` el bloque no aparece.
+    ``label: null`` y, encima, un comentario con la propuesta de la IA, sus marcas
+    (``obligatorio``, ``unclear``, ``no recuperado``), su título y su nota; con
+    ``flags``, cada cita marcada con ``verdict: null`` y su comentario (id citado,
+    motivo y afirmación). Un bloque sin entradas es ``{}`` (``records:`` a secas se
+    leería como ``null`` y la decisión copiada no validaría); con ``None`` el bloque
+    no aparece.
 
     Los valores son constantes (``null``, el hash hexadecimal): el único texto que
     llega de fuera va en comentarios de una línea (``_comment``) y en las claves
     (``_key``), por eso no pasa por ``dump_yaml``, cuyo volcado no pone cada
     registro en una línea con su comentario encima. Un título o un ``rationale``
-    con saltos de línea no puede inyectar claves (``approved: true``).
+    con saltos de línea no puede inyectar claves (``approved: true``). El texto
+    libre se acota campo a campo (``_acotar``) y va detrás de lo estructurado: un
+    título largo no se come la propuesta, las marcas ni el motivo. Una clave de más
+    de 1024 caracteres va en forma explícita (``_entrada``).
     """
     lines = [
         _comment(f"Decisión humana del gate '{stage}' (autonomía {autonomy})."),
@@ -349,22 +387,41 @@ def render_decision_template(
                 )
                 if hint.record_id in ids
             ]
-            summary = f"{hint.title} · propuesta IA: {hint.proposal or '—'}"
-            if marks:
-                summary += f" · {', '.join(marks)}"
-            if hint.note:
-                summary += f" · {hint.note}"
-            lines.append(f"  {_comment(summary)}")
-            lines.append(f"  {_key(hint.record_id)}: {{label: null, reason: null}}")
+            # Lo estructurado (propuesta, marcas) primero; el texto libre (título, nota)
+            # después y acotado campo a campo.
+            parts = [
+                f"propuesta IA: {_acotar(hint.proposal or '—', _MAX_PROPUESTA)}",
+                *marks,
+                f"«{_acotar(hint.title, _MAX_TEXTO)}»",
+            ]
+            if note := _acotar(hint.note, _MAX_NOTA):
+                parts.append(note)
+            lines.append(f"  {_comment(' · '.join(parts))}")
+            lines += _entrada(hint.record_id, "{label: null, reason: null}")
     if flags is not None:
         lines.append("flags:" if flags.flagged else "flags: {}")
         for claim in flags.flagged:
-            summary = f"[{claim.index}] cita {claim.cited_id!r}: «{claim.claim}»"
-            if claim.note:
-                summary += f" · {claim.note}"
-            lines.append(f"  {_comment(summary)}")
-            lines.append(f"  {_key(str(claim.index))}: {{verdict: null, reason: null}}")
+            parts = [f"[{claim.index}] cita {_acotar(repr(claim.cited_id), _MAX_ID_CITADO)}"]
+            if note := _acotar(claim.note or "", _MAX_NOTA):
+                parts.append(note)
+            parts.append(f"«{_acotar(claim.claim, _MAX_TEXTO)}»")
+            lines.append(f"  {_comment(' · '.join(parts))}")
+            lines += _entrada(str(claim.index), "{verdict: null, reason: null}")
     return "\n".join(lines) + "\n"
+
+
+def _entrada(id_: str, valor: str) -> list[str]:
+    """Las líneas YAML de ``id: valor`` con la clave de ``_key``.
+
+    Una clave de más de ``_MAX_CLAVE_IMPLICITA`` caracteres (ya entrecomillada y con sus
+    escapes) no cabe en una clave implícita de YAML (1024): dejaría ilegible toda la
+    plantilla (``ScannerError``). Esa va en forma explícita, ``? "<id>"`` y, en la línea
+    siguiente, ``: <valor>``, que ``yaml.safe_load`` lee igual.
+    """
+    clave = _key(id_)
+    if len(clave) <= _MAX_CLAVE_IMPLICITA:
+        return [f"  {clave}: {valor}"]
+    return [f"  ? {clave}", f"  : {valor}"]
 
 
 def _por_indice(key: str) -> tuple[int, int, str]:
@@ -622,18 +679,27 @@ def _from_ledger(
     return labels, reviews
 
 
-def _motivos_humano(records: RecordPolicy | None, force_human: bool) -> list[str]:
+def _motivos_humano(
+    records: RecordPolicy | None, flags: FlagPolicy | None, force_human: bool
+) -> list[str]:
     """Por qué solo una decisión humana en ``decision.yml`` cierra el gate (M5, D8, D9).
 
     Con motivos, ``--auto-approve`` no sirve (pausaría otra vez) y la pausa los explica
-    en lugar de sugerirlo.
+    en lugar de sugerirlo. Solo nombra el bloque ``flags`` si hay citas marcadas que
+    adjudicar en él (sin ``FlagPolicy`` o sin citas, la plantilla no lo trae o lo trae
+    vacío), y ``records`` si hay registros ``unclear`` que resolver.
     """
     motivos = []
-    if force_human:
+    if force_human and flags is not None and flags.flagged:
         motivos.append(
             "el verificador marcó citas y este gate exige una decisión humana (M5): adjudica "
             "cada una en `flags` (`verdict: false_positive` y `reason`) o rechaza "
             "(`approved: false`)"
+        )
+    elif force_human:
+        motivos.append(
+            "este gate exige una decisión humana (M5): aprueba (`approved: true`) o rechaza "
+            "(`approved: false`) en decision.yml, con `actor: human:<nombre>`"
         )
     if records is not None and records.must_resolve:
         motivos.append(
@@ -668,10 +734,11 @@ def review_gate(
     ``--auto-approve`` aprueba con las etiquetas de la IA, salvo que haya
     registros que solo resuelve un humano (``must_resolve``): entonces pausa
     (D9). Con ``force_human`` (citas marcadas, M5) se ignoran ``auto_approve`` y
-    una autonomía A2/A3, que pasa a A1 en la solicitud y el ledger, y del ledger
-    solo se reutiliza una decisión humana. Cuando solo un ``decision.yml`` humano
-    puede cerrar el gate (citas marcadas, ``unclear``), la pausa dice por qué y no
-    ofrece ``--auto-approve``.
+    una autonomía A2/A3, que pasa a A1 en la solicitud y el ledger, y solo vale una
+    decisión humana (``actor`` que empieza por ``human:``) tanto al leer
+    ``decision.yml`` como al reutilizar la del ledger. Cuando solo un
+    ``decision.yml`` humano puede cerrar el gate (citas marcadas, ``unclear``), la
+    pausa dice por qué y no ofrece ``--auto-approve``.
 
     Raises:
         ValueError: si ``review_payload`` trae alguna clave común de la solicitud
@@ -776,7 +843,7 @@ def review_gate(
                 labels,
                 reviews,
             )
-        motivos = _motivos_humano(records, force_human)
+        motivos = _motivos_humano(records, flags, force_human)
         if motivos:
             # Solo un decision.yml humano cierra este gate: no se sugiere --auto-approve,
             # que volvería a pausar; si el humano lo pasó, se le dice que no aplica.
@@ -806,6 +873,15 @@ def review_gate(
         )
 
     if from_file:
+        if force_human and not decision.actor.startswith(HUMAN_ACTOR_PREFIX):
+            # "Humano" se define igual al entrar que al reutilizar del ledger (arriba): un
+            # actor que no empiece por `human:` (`ana`, el de la aprobación de demostración)
+            # se registraría como `forced_human` y luego el ledger no lo reutilizaría.
+            raise DecisionFileError(
+                f"{decision_path}: este gate exige una decisión humana (M5) y `actor` es "
+                f"{decision.actor!r}: el actor debe ser `{HUMAN_ACTOR_PREFIX}<nombre>` "
+                f"(p. ej. `actor: {HUMAN_ACTOR_PREFIX}ana`)."
+            )
         # La sintética de --auto-approve no se valida: adopta las etiquetas de la
         # IA y no exige la completitud de A0 (D9).
         _validate(decision_path, decision, records=records, flags=flags)

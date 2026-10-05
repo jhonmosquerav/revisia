@@ -510,6 +510,46 @@ def test_force_human_no_reutiliza_una_aprobacion_de_demostracion(tmp_path: Path)
     assert len(ctx.ledger.read_all()) == total
 
 
+@pytest.mark.parametrize("actor", ["ana", "auto-approve (demo)", "agent:reporte"])
+@pytest.mark.parametrize("approved", [True, False])
+def test_force_human_rechaza_un_decision_yml_sin_actor_humano(
+    tmp_path: Path, actor: str, approved: bool
+) -> None:
+    # "Humano" se define igual al entrar que al reutilizar del ledger: el actor empieza por
+    # `human:`. Un decision.yml con otro actor no se acepta (ni se registra como
+    # `forced_human`: sería una decisión que luego el ledger no reutilizaría).
+    ctx = RunContext("demo", tmp_path, "T")
+    pausa = _gate(ctx, "reporte", marcas=_MARCAS, force_human=True)
+    decision = {"request_sha256": pausa.request_sha256, "approved": approved, "actor": actor}
+    (ctx.stage_dir("reporte") / "decision.yml").write_text(
+        yaml.safe_dump(decision), encoding="utf-8"
+    )
+
+    with pytest.raises(DecisionFileError, match=r"decisión humana.*human:<nombre>"):
+        _gate(ctx, "reporte", marcas=_MARCAS, force_human=True)
+    assert ctx.ledger.read_all() == []
+
+
+def test_force_human_acepta_un_actor_humano(tmp_path: Path) -> None:
+    _, result = _responder(
+        tmp_path,
+        "reporte",
+        marcas=_MARCAS,
+        force_human=True,
+        flags={
+            "0": {"verdict": "false_positive", "reason": "es un año"},
+            "3": {"verdict": "false_positive", "reason": "errata"},
+        },
+    )
+    assert (result.status, result.actor) == ("approved", "human:ana")
+
+
+def test_sin_force_human_el_actor_no_se_exige_humano(tmp_path: Path) -> None:
+    # Fuera de un gate forzado, el actor sigue siendo informativo (compatibilidad).
+    _, result = _responder(tmp_path, "screening_ta", actor="ana")
+    assert (result.status, result.actor) == ("approved", "ana")
+
+
 def test_adjudicaciones_se_reconstruyen_desde_el_ledger(tmp_path: Path) -> None:
     ctx, _ = _responder(
         tmp_path,
@@ -631,6 +671,16 @@ _SEPARADORES = {
     "DEL": "\x7f",
     "C1": "\x9f",
     "sustituto": chr(0xD800),
+}
+# Marcas de formato (categoría Cf): no son saltos de línea; en un comentario se borran.
+_FORMATO = {
+    "SHY": chr(0xAD),
+    "ZWSP": chr(0x200B),
+    "ZWNJ": chr(0x200C),
+    "ZWJ": chr(0x200D),
+    "WJ": chr(0x2060),
+    "RLO": chr(0x202E),
+    "BOM": chr(0xFEFF),
 }
 
 
@@ -807,14 +857,15 @@ def test_template_comenta_propuesta_marcas_y_nota_de_cada_registro_y_cita() -> N
     )
     lineas = [x.strip() for x in _plantilla(records=politica, flags=marcas).splitlines()]
 
+    # Lo estructurado (propuesta, marcas) va primero y el texto libre (título, nota) después.
     comentarios = {
-        "a": "# Estudio A · propuesta IA: include · obligatorio · 3/3 votos",
-        "b": "# Estudio B · propuesta IA: unclear · unclear: resuélvelo",
-        "c": "# Estudio C · propuesta IA: — · no recuperado: rescatable · sin PDF",
+        "a": "# propuesta IA: include · obligatorio · «Estudio A» · 3/3 votos",
+        "b": "# propuesta IA: unclear · unclear: resuélvelo · «Estudio B»",
+        "c": "# propuesta IA: — · no recuperado: rescatable · «Estudio C» · sin PDF",
     }
     for clave, comentario in comentarios.items():  # justo encima de su clave
         assert lineas[lineas.index(comentario) + 1] == f'"{clave}": {{label: null, reason: null}}'
-    cita = "# [2] cita '2019': «La IA reduce la carga.» · id citado no está"
+    cita = "# [2] cita '2019' · id citado no está · «La IA reduce la carga.»"
     assert lineas[lineas.index(cita) + 1] == '"2": {verdict: null, reason: null}'
     assert (
         "# Obligatorio etiquetar: 1 · `unclear` por resolver: 1 · no recuperados rescatables: 1."
@@ -823,11 +874,133 @@ def test_template_comenta_propuesta_marcas_y_nota_de_cada_registro_y_cita() -> N
     assert any(x.startswith("#") and "rechaza (`approved: false`)" in x for x in lineas)
 
 
-def test_template_acota_la_longitud_de_los_comentarios() -> None:
-    politica = RecordPolicy(hints=(RecordHint("a", "T" * 5000, "include"),))
-    comentario = next(x for x in _plantilla(records=politica).splitlines() if "TTT" in x).strip()
-    assert comentario.startswith("# TTT") and comentario.endswith("…")
-    assert len(comentario) <= 202
+def _linea(plantilla: str, fragmento: str) -> str:
+    """La primera línea de la plantilla que contiene ``fragmento``, sin sangría."""
+    return next(x for x in plantilla.splitlines() if fragmento in x).strip()
+
+
+def test_template_acota_el_titulo_y_conserva_propuesta_marcas_y_nota() -> None:
+    # Revisión de la Tarea 21: con un título realista de ~200 caracteres, acotar la línea
+    # entera borraba justo lo que el humano necesita (propuesta, marcas, nota). Se acota
+    # el texto libre, no la línea.
+    politica = RecordPolicy(
+        hints=(RecordHint("r1", "T" * 300, "unclear", "3/3 votos"),),
+        must_label=frozenset({"r1"}),
+        must_resolve=frozenset({"r1"}),
+    )
+    comentario = _linea(_plantilla(records=politica), "propuesta IA")
+    for conserva in ("propuesta IA: unclear", "obligatorio", "unclear: resuélvelo", "3/3 votos"):
+        assert conserva in comentario
+    assert "«" + "T" * 119 + "…»" in comentario  # el título, a 120 caracteres con su «…»
+
+
+def test_template_acota_la_afirmacion_y_conserva_la_cita_y_su_motivo() -> None:
+    marcas = FlagPolicy(flagged=(FlaggedClaim(4, "rec-9", "C" * 300, "id citado no está"),))
+    comentario = _linea(_plantilla(flags=marcas), "cita 'rec-9'")
+    assert comentario.startswith("# [4] cita 'rec-9' · id citado no está · «")
+    assert "«" + "C" * 119 + "…»" in comentario
+
+
+def test_template_con_todo_el_texto_libre_largo_no_pierde_nada_estructurado() -> None:
+    # El peor caso: título, propuesta y nota enormes y las tres marcas a la vez. La línea
+    # cabe en el tope sin que este corte nada: las marcas están enteras y la nota llega a
+    # su propio límite (120), no al del tope.
+    politica = RecordPolicy(
+        hints=(RecordHint("r1", "T" * 5000, "P" * 500, "n" * 5000),),
+        must_label=frozenset({"r1"}),
+        must_resolve=frozenset({"r1"}),
+        rescue_ids=frozenset({"r1"}),
+    )
+    comentario = _linea(_plantilla(records=politica), "propuesta IA")
+    for marca in ("obligatorio", "unclear: resuélvelo", "no recuperado: rescatable"):
+        assert marca in comentario
+    assert comentario.endswith("n" * 119 + "…")
+    assert len(comentario) <= 402
+
+
+@pytest.mark.parametrize("marca", list(_FORMATO.values()), ids=list(_FORMATO))
+def test_template_borra_las_marcas_de_formato_de_los_comentarios(marca: str) -> None:
+    # U+00AD, ZWNJ, ZWJ, U+200B, U+FEFF… no separan palabras: una marca invisible dentro
+    # de una palabra no la parte en dos ("inter vention"); se borra.
+    politica = RecordPolicy(
+        hints=(RecordHint("r1", f"inter{marca}vention", "include", f"vo{marca}tos"),)
+    )
+    marcas = FlagPolicy(flagged=(FlaggedClaim(1, "x", f"afirma{marca}ción", f"mo{marca}tivo"),))
+    plantilla = _plantilla(records=politica, flags=marcas)
+    assert "«intervention»" in plantilla and "· votos" in plantilla
+    assert "«afirmación»" in plantilla and "· motivo" in plantilla
+    assert marca not in plantilla
+
+
+@pytest.mark.parametrize("sep", list(_SEPARADORES.values()), ids=list(_SEPARADORES))
+def test_template_sigue_separando_con_un_espacio_los_saltos_y_controles(sep: str) -> None:
+    # Los saltos de línea y los controles no son parte de la palabra: separan.
+    politica = RecordPolicy(hints=(RecordHint("r1", f"uno{sep}dos", "include"),))
+    assert "«uno dos»" in _plantilla(records=politica)
+
+
+def _claves_largas() -> dict[str, str]:
+    return {
+        "500": "a" * 500,
+        "998": "a" * 998,
+        "1000": "a" * 1000,
+        "1100": "a" * 1100,
+        "5000": "a" * 5000,
+        "ñ1100": "ñ" * 1100,
+        "emoji1100": chr(0x1F600) * 1100,
+        # Pocos caracteres, pero cada U+0085 se escribe como un escape de 6: mide la clave
+        # ya escapada, no el id.
+        "escapes": "x" + chr(0x85) * 200,
+    }
+
+
+@pytest.mark.parametrize("id_largo", list(_claves_largas().values()), ids=list(_claves_largas()))
+def test_template_con_claves_de_mas_de_1024_caracteres_sigue_siendo_legible(
+    id_largo: str,
+) -> None:
+    # YAML limita a 1024 caracteres la clave implícita (`clave: valor` en una línea): una
+    # más larga dejaba toda la plantilla ilegible (ScannerError). Esas van con la forma
+    # explícita (`? clave` / `: valor`).
+    politica = RecordPolicy(
+        hints=(
+            RecordHint("corto", "t", "include"),
+            RecordHint(id_largo, "t", "include"),
+            RecordHint("otro", "t", None),
+        )
+    )
+    datos = yaml.safe_load(_plantilla(records=politica))
+    assert datos["approved"] is None
+    assert list(datos["records"]) == ["corto", id_largo, "otro"]
+    assert all(v == {"label": None, "reason": None} for v in datos["records"].values())
+
+
+def test_template_con_indice_de_cita_de_mas_de_1024_caracteres_sigue_siendo_legible() -> None:
+    indice = int("9" * 1100)
+    marcas = FlagPolicy(flagged=(FlaggedClaim(1, "x", "c"), FlaggedClaim(indice, "x", "c")))
+    datos = yaml.safe_load(_plantilla(flags=marcas))
+    assert list(datos["flags"]) == ["1", str(indice)]
+    assert all(v == {"verdict": None, "reason": None} for v in datos["flags"].values())
+
+
+def test_template_con_id_de_mas_de_1024_caracteres_se_rellena_y_aprueba(tmp_path: Path) -> None:
+    id_largo = "rec-" + "9" * 1100
+    politica = RecordPolicy(
+        hints=(RecordHint(id_largo, "t", "include"),), must_label=frozenset({id_largo})
+    )
+    ctx = RunContext("demo", tmp_path, "T")
+    assert _gate(ctx, "screening_ft", politica=politica).status == "paused"
+    carpeta = ctx.run_dir / "screening_ft"
+    datos = yaml.safe_load((carpeta / "decision.template.yml").read_text(encoding="utf-8"))
+    datos["approved"] = True
+    datos["records"][id_largo]["label"] = "include"
+
+    decision = HumanDecision.model_validate(datos)
+    assert decision.records[id_largo].label == "include"
+
+    (carpeta / "decision.yml").write_text(yaml.safe_dump(datos), encoding="utf-8")
+    result = _gate(ctx, "screening_ft", politica=politica)
+    assert result.status == "approved"
+    assert list(result.labels) == [id_largo]
 
 
 # ── pausa: no sugerir --auto-approve cuando volvería a pausar ──────────────
@@ -857,6 +1030,33 @@ def test_pausa_por_unclear_pide_una_decision_humana(tmp_path: Path, auto_approve
     assert "`records`" in result.message and "decision.yml" in result.message
     assert ("--auto-approve no aplica" in result.message) is auto_approve
     assert ("--auto-approve" in result.message) is auto_approve
+
+
+@pytest.mark.parametrize(
+    "marcas", [None, FlagPolicy(flagged=())], ids=["sin_politica", "sin_citas_marcadas"]
+)
+def test_pausa_forzada_sin_citas_marcadas_no_manda_adjudicar_en_flags(
+    tmp_path: Path, marcas: FlagPolicy | None
+) -> None:
+    # La plantilla no tiene bloque `flags` (o lo tiene vacío): el mensaje no puede mandar a
+    # adjudicar en él ni decir que el verificador marcó citas. Tampoco menciona `records`
+    # si no hay registros `unclear` que resolver.
+    ctx = RunContext("demo", tmp_path, "T")
+    politica = RecordPolicy(hints=_HINTS, must_label=frozenset({"a"}))
+    result = _gate(ctx, "reporte", politica=politica, marcas=marcas, force_human=True)
+    assert result.status == "paused"
+    assert "exige una decisión humana" in result.message
+    assert "`flags`" not in result.message and "marcó citas" not in result.message
+    assert "`records`" not in result.message
+    assert "approved: true" in result.message and "approved: false" in result.message
+
+
+def test_pausa_forzada_con_citas_marcadas_y_unclear_nombra_cada_bloque(tmp_path: Path) -> None:
+    ctx = RunContext("demo", tmp_path, "T")
+    politica = RecordPolicy(hints=_HINTS, must_resolve=frozenset({"b"}))
+    result = _gate(ctx, "reporte", politica=politica, marcas=_MARCAS, force_human=True)
+    assert result.status == "paused"
+    assert "`flags`" in result.message and "`records`" in result.message
 
 
 def test_pausa_generica_sigue_ofreciendo_auto_approve(tmp_path: Path) -> None:
