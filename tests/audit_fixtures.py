@@ -34,10 +34,12 @@ from revisia.audit import AuditCheck, AuditReport, run_audit
 from revisia.config import ReviewProtocol
 from revisia.exclusions import compute_exclusion_breakdown
 from revisia.exports import PrismaCounts, render_prisma2020_flow_csv
+from revisia.meta_analysis import meta_analyze
 from revisia.metrics import ScreeningMetrics, kappa_from_matrix, mcc, wmcc
 from revisia.provenance.ledger import DecisionEntry
 from revisia.provenance.runmeta import RunMeta, sha256_text
 from revisia.schemas.artifacts import JOURNAL_PATHS
+from revisia.schemas.effects import EffectInput
 from revisia.schemas.extraction import ExtractionRecord
 from revisia.schemas.rob import RoBAssessment
 from revisia.schemas.screening import ScreeningDecision, ScreeningVote
@@ -437,6 +439,168 @@ def write_legacy_v07(tmp_path: Path) -> Path:
     (deliverable / "interop" / "prisma2020_flow.csv").write_text(
         render_prisma2020_flow_csv(PrismaCounts.model_validate(counts)), encoding="utf-8"
     )
+    return run
+
+
+# ── Reconstrucción C3 (auditoría 2026-09-03 §3) ─────────────────────────
+
+
+def _c3_llamadas() -> list[dict]:
+    """140 llamadas `agent` en 1,3 ms: 94 de Opus y 46 de Sonnet, cuyos hashes de
+    respuesta son un subconjunto exacto de los de Opus.
+
+    La llamada ``i`` cae en ``inicio + round(i·1336/139) µs``, de modo que la primera y la
+    última son exactamente ``08:07:47.515524`` y ``08:07:47.516860`` (dividir un
+    ``timedelta`` por 139 redondea el paso a 10 µs y estiraría el intervalo a 1,39 ms).
+    """
+    inicio = datetime(2026, 7, 6, 8, 7, 47, 515524, tzinfo=UTC)
+    calls = []
+    for i in range(140):
+        opus = i < 94
+        respuesta = i if opus else (i - 94) * 2  # Sonnet repite respuestas de Opus
+        marca = inicio + timedelta(microseconds=round(i * 1336 / 139))
+        calls.append(
+            RunMeta(
+                provider="agent",
+                model="opus" if opus else "sonnet",
+                temperature=0.0,
+                prompt_sha256=sha256_text(f"c3 prompt {i}"),
+                response_sha256=sha256_text(f"c3 respuesta {respuesta}"),
+                timestamp_utc=marca.isoformat(),
+                deterministic=False,
+            ).model_dump()
+        )
+    return calls
+
+
+def write_c3_reconstruction(tmp_path: Path, provenance: str = "pipeline") -> Path:
+    """La reconstrucción de la corrida fundacional, fiel a la evidencia de C3.
+
+    Con ``provenance="pipeline"`` (por defecto) se falsifica la única marca que
+    la Ola 0 sabía comprobar: el resto de checks tiene que delatarla por sí
+    solo. Evidencia reproducida (``docs/auditoria/2026-09-03-auditoria-completa.md``
+    §3, C3):
+
+    - 140 ``llm_calls`` entre ``08:07:47.515524`` y ``08:07:47.516860``; los 46
+      hashes de respuesta de Sonnet son un subconjunto de los 94 de Opus.
+    - Ledger con ``propose``/``exclude``/``verify`` (que ``review_gate`` nunca
+      emite) a horas redondas, una semana antes de la corrida.
+    - ``metrics.json`` = ``{n: 47, recall: 1.0, mcc: 0.71, kappa: 0.75}`` sin
+      matriz (con FN=0, κ > MCC es imposible); ``excluded_human: 3``.
+    - Solo ``03_screening/``, ``06_synthesis/``, ``08_meta/`` y ``deliverable/``;
+      ``identified_by_source`` 40/40/40 con 28 identificados (lo que declara
+      su ``metodologia.md``) y 0 duplicados.
+    """
+    run = tmp_path / "runs" / "prisma-ia-origen-20260706-080747"
+    for sub in ("03_screening", "06_synthesis", "08_meta", "deliverable"):
+        (run / sub).mkdir(parents=True)
+
+    meta = meta_analyze(
+        [
+            EffectInput(study_id="Li:ChatGPT v4.0:BB2016", yi=2.52306, vi=0.14403),
+            EffectInput(study_id="Li:ChatGPT v4.0:BB2016 (dup)", yi=2.52306, vi=0.14403),
+            EffectInput(study_id="Li:Claude:BB2016", yi=3.04452, vi=0.69841),
+        ],
+        "precomputed",
+    ).model_dump()
+    manifest = {
+        "slug": "prisma-ia-origen",
+        "created_utc": "2026-07-06T08:07:49.869602+00:00",
+        "timestamp": "20260706-080747",
+        "provenance": provenance,
+        "engine": "revisia 0.4.0",
+        "protocol": {
+            "question": {"text": "¿Cómo se aplica la IA a las etapas de la metodología PRISMA?"},
+            "search_window": {"from": "2019-01-01", "to": "2026-06-29", "executed": "2026-06-29"},
+            "registration": {"prospero": "", "osf": ""},
+        },
+        "counts": {
+            "identified": 28,
+            "identified_by_source": {"OpenAlex": 40, "Crossref": 40, "Europe PMC": 40},
+            "duplicates_removed": 0,
+            "removed_automation": 0,
+            "removed_other": 0,
+            "screened": 120,
+            "excluded_ta": 92,
+            "excluded_ta_human": 0,
+            "excluded_ta_ai": 92,
+            "fulltext_assessed": 28,
+            "fulltext_abstract_only": 10,
+            "excluded_ft": 3,
+            "ft_exclusion_reasons": {
+                "RS de dominio que solo USA una herramienta de IA": 2,
+                "Registro sin texto ni abstract verificable": 1,
+            },
+            "included": 25,
+        },
+        "llm_calls": _c3_llamadas(),
+        "models_used": ["agent:opus", "agent:sonnet"],
+        "deterministic_token_level": False,
+        "meta_analysis": meta,
+    }
+    (run / "manifest.yml").write_text(
+        yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
+    ledger = [
+        ("screening_ta", "agent:opus+sonnet", "A1", "propose", None, "00:00"),
+        ("screening_ta", "human:jhon", "A1", "approve", None, "00:05"),
+        ("screening_ft", "human:jhon", "A0", "exclude", "3 RS de dominio / sin texto", "00:10"),
+        ("extraccion", "human:jhon", "A0", "verify", None, "00:20"),
+        ("rob", "human:jhon", "A0", "verify", None, "00:30"),
+        ("reporte", "human:jhon", "A1", "approve", None, "00:40"),
+    ]
+    lines = []
+    for stage, actor, autonomy, action, target, hora in ledger:
+        entry = {"stage": stage, "actor": actor, "autonomy": autonomy, "action": action}
+        if target is not None:
+            entry["target"] = target
+        entry["timestamp_utc"] = f"2026-06-29T{hora}:00+00:00"
+        lines.append(json.dumps(entry, ensure_ascii=False) + "\n")
+    (run / "decisions_ledger.jsonl").write_text("".join(lines), encoding="utf-8")
+
+    def _json(rel: str, data: object) -> None:
+        (run / rel).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    _json(
+        "03_screening/metrics.json",
+        {
+            "n": 47,
+            "recall": 1.0,
+            "lost_evidence": 0.0,
+            "cohen_kappa": 0.75,
+            "mcc": 0.71,
+            "wmcc": 0.83,
+        },
+    )
+    _json(
+        "03_screening/exclusions.json",
+        {
+            "total_excluded": 95,
+            "excluded_ai": 92,
+            "excluded_human": 3,
+            "overridden_to_include": 0,
+            "overridden_to_exclude": 3,
+        },
+    )
+    _json(
+        "06_synthesis/verification.json",
+        {"hallucination_flagged": False, "n_claims": 21, "n_grounded": 21},
+    )
+    _json("08_meta/meta_analysis.json", meta)
+    for name in (
+        "checklist_2020.md",
+        "checklist_abstracts.md",
+        "checklist_s.md",
+        "checklist_traice.md",
+        "documento.md",
+        "meta_analisis.md",
+        "metodologia.md",
+        "prisma_flow.md",
+        "referencias.bib",
+        "risk_of_bias.md",
+        "tabla_extraccion.md",
+    ):
+        (run / "deliverable" / name).write_text(f"# {name}\n", encoding="utf-8")
     return run
 
 
