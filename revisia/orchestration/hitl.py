@@ -716,6 +716,19 @@ def _motivos_humano(
     return motivos
 
 
+def effective_autonomy(autonomy: str, *, forced_human: bool) -> str:
+    """Autonomía con la que se aplica un gate que puede quedar forzado a humano (M5).
+
+    Con ``forced_human`` (citas marcadas), una A2/A3 declarada pasa a A1: el gate
+    pide y registra una decisión humana. Una A0/A1 no cambia, y sin ``forced_human``
+    ninguna cambia. Es la única regla de esa degradación: la usan ``review_gate``
+    (lo que se pide y se registra) y el pipeline (la ``autonomy_effective`` del
+    manifiesto y del checklist trAIce), para que lo declarado, lo aplicado y lo
+    informado no puedan separarse.
+    """
+    return "A1" if forced_human and autonomy in {"A2", "A3"} else autonomy
+
+
 def review_gate(
     *,
     stage: str,
@@ -761,8 +774,7 @@ def review_gate(
             "de la solicitud y pisarlas cambiaría en silencio lo que se hashea (error de "
             "programación)."
         )
-    if force_human and autonomy in {"A2", "A3"}:
-        autonomy = "A1"
+    autonomy = effective_autonomy(autonomy, forced_human=force_human)
     payload = {
         "schema_version": ARTIFACT_SCHEMA_VERSION,
         "stage": stage,

@@ -38,6 +38,7 @@ from revisia.orchestration.hitl import (
     FlaggedClaim,
     FlagPolicy,
     RecordLabel,
+    effective_autonomy,
     render_decision_template,
 )
 from revisia.orchestration.pipeline import run_pipeline
@@ -2135,6 +2136,162 @@ def test_autonomy_effective_solo_baja_a_a1_un_reporte_a2_o_a3_forzado(
     assert set(resultado) == {"screening_ta", "screening_ft", "extraccion", "rob", "reporte"}
     otros = {g: a for g, a in resultado.items() if g != "reporte"}
     assert otros == {g: protocol.autonomy_for(g) for g in otros}
+
+
+@pytest.mark.parametrize(
+    ("declarada", "forzado", "efectiva"),
+    [
+        ("A0", True, "A0"),
+        ("A1", True, "A1"),
+        ("A2", True, "A1"),
+        ("A3", True, "A1"),
+        ("A2", False, "A2"),
+        ("A3", False, "A3"),
+    ],
+)
+def test_effective_autonomy_es_la_unica_regla_del_a2_a3_forzado_a_a1(
+    declarada: str, forzado: bool, efectiva: str
+) -> None:
+    # La usan `review_gate` (lo que se pide y se registra) y `_autonomy_effective` (lo que
+    # dice el manifiesto): una sola regla, para que no puedan separarse.
+    assert effective_autonomy(declarada, forced_human=forzado) == efectiva
+
+
+def test_reporte_a3_declarado_se_fuerza_a_a1_y_solo_se_completa_con_adjudicacion_humana(
+    tmp_path: Path, con_cita_inventada
+) -> None:
+    proto = _proto_reporte(tmp_path, "A3")  # A3 no pausaría, no pediría humano: M5 lo exige
+    protocol = load_protocol(proto)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+    kwargs = {"search_fn": _busqueda_ft, "fetch_fn": fetch_disponible}
+
+    pausa = run_pipeline(protocol, proto, ctx, auto_approve=True, **kwargs)  # ni --auto-approve
+
+    assert (pausa.status, pausa.stage) == ("paused", "reporte")
+    solicitud = leer_solicitud(ctx.run_dir, "reporte")
+    assert (solicitud["autonomy"], solicitud["forced_human"]) == ("A1", True)
+    assert not [e for e in ctx.ledger.read_all() if e.stage == "reporte"]  # ni auto-proceed
+    assert _manifest(ctx)["autonomy_effective"]["reporte"] == "A1"
+
+    (indice,) = solicitud["must_adjudicate"]
+    responder_gate(
+        ctx.run_dir,
+        "reporte",
+        flags={str(indice): {"verdict": "false_positive", "reason": "[2019] es un año"}},
+    )
+    result = run_pipeline(protocol, proto, RunContext.open(ctx.run_dir), **kwargs)
+
+    assert (result.status, result.stage) == ("completed", None)
+    reporte = [e for e in ctx.ledger.read_all() if e.stage == "reporte"]
+    assert [(e.action, e.autonomy) for e in reporte] == [("flag_review", "A1"), ("approve", "A1")]
+    resumen = summarize_gates(ctx.ledger.read_all())["reporte"]
+    assert (resumen.actor, resumen.forced_human, resumen.n_flag_reviews) == (
+        "human:revisora",
+        True,
+        1,
+    )
+
+
+def test_reporte_forzado_rechazado_y_despues_aprobado_adjudicando_queda_en_el_ledger_d14(
+    tmp_path: Path, con_cita_inventada
+) -> None:
+    # D14: rechazar el reporte no cierra la corrida para siempre; se puede reanudar y aprobar
+    # adjudicando la cita. Las tres decisiones quedan en el ledger, en orden, y la efectiva es
+    # la última (un reductor, el mismo del auditor).
+    proto = _proto_reporte(tmp_path)
+    protocol = load_protocol(proto)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+    kwargs = {"search_fn": _busqueda_ft, "fetch_fn": fetch_disponible}
+    correr_hasta(protocol, proto, ctx, parar_en="reporte", **kwargs)
+    (indice,) = leer_solicitud(ctx.run_dir, "reporte")["must_adjudicate"]
+
+    responder_gate(ctx.run_dir, "reporte", approved=False, reason="[2019] parece inventada")
+    rechazado = run_pipeline(protocol, proto, RunContext.open(ctx.run_dir), **kwargs)
+    assert (rechazado.status, rechazado.stage) == ("rejected", "reporte")
+    assert read_run_info(ctx.run_dir).status == "rejected"
+
+    responder_gate(
+        ctx.run_dir,
+        "reporte",
+        flags={str(indice): {"verdict": "false_positive", "reason": "[2019] es un año"}},
+    )
+    result = run_pipeline(protocol, proto, RunContext.open(ctx.run_dir), **kwargs)
+
+    assert (result.status, result.stage) == ("completed", None)
+    assert read_run_info(ctx.run_dir).status == "completed"
+    reporte = [e for e in ctx.ledger.read_all() if e.stage == "reporte"]
+    assert [(e.action, e.target) for e in reporte] == [
+        ("reject", None),
+        ("flag_review", f"flag:{indice}"),
+        ("approve", None),
+    ]
+    resumen = summarize_gates(ctx.ledger.read_all())["reporte"]
+    assert (resumen.action, resumen.forced_human, resumen.n_flag_reviews) == ("approve", True, 1)
+    manifest = _manifest(ctx)
+    assert manifest["run"]["status"] == "completed"
+    assert manifest["final_gate"] == {"forced_human": True, "reason": "hallucination_flagged"}
+
+
+def _editar_diario_de_verificacion(ctx: RunContext, *, marcada: bool) -> None:
+    """Fuerza ``hallucination_flagged`` en el diario de la verificación (edición a mano)."""
+    ruta = ctx.run_dir / "06_synthesis" / "verification.jsonl"
+    (linea,) = [json.loads(x) for x in ruta.read_text(encoding="utf-8").splitlines() if x.strip()]
+    linea["output"]["hallucination_flagged"] = marcada
+    ruta.write_text(json.dumps(linea, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def test_diario_editado_a_no_marcado_con_citas_marcadas_sigue_forzando_humano(
+    tmp_path: Path, con_cita_inventada
+) -> None:
+    # El gate se fuerza por las citas marcadas (las que hay que adjudicar), no por la bandera
+    # del diario: editada a `false` con una cita marcada daba `forced_human: false` y un
+    # `must_adjudicate` no vacío, y con `reporte` en A2 el gate no pausaba.
+    proto = _proto_reporte(tmp_path)
+    protocol = load_protocol(proto)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+    kwargs = {"search_fn": _busqueda_ft, "fetch_fn": fetch_disponible}
+    correr_hasta(protocol, proto, ctx, parar_en="reporte", **kwargs)
+    antes = leer_solicitud(ctx.run_dir, "reporte")
+    _editar_diario_de_verificacion(ctx, marcada=False)
+
+    pausa = run_pipeline(protocol, proto, RunContext.open(ctx.run_dir), **kwargs)
+
+    assert (pausa.status, pausa.stage) == ("paused", "reporte")
+    assert pausa.hallucination_flagged is True
+    # verification.json (que lee el auditor) no contradice al gate: se reescribe recalculada.
+    assert _json(ctx, "06_synthesis/verification.json")["hallucination_flagged"] is True
+    solicitud = leer_solicitud(ctx.run_dir, "reporte")
+    assert (solicitud["autonomy"], solicitud["forced_human"]) == ("A1", True)
+    assert solicitud["must_adjudicate"] == antes["must_adjudicate"] != []
+    assert solicitud["request_sha256"] == antes["request_sha256"]
+    manifest = _manifest(ctx)
+    assert manifest["final_gate"] == {"forced_human": True, "reason": "hallucination_flagged"}
+    assert manifest["autonomy_effective"]["reporte"] == "A1"
+    assert not [e for e in ctx.ledger.read_all() if e.stage == "reporte"]
+
+
+def test_diario_editado_a_marcado_sin_citas_marcadas_no_fuerza_humano(
+    tmp_path: Path, proveedor
+) -> None:
+    # Al revés: una bandera `true` sin ninguna cita marcada no deja un gate forzado con nada
+    # que adjudicar. Reporte en A1 (pausa igualmente): la solicitud no pide adjudicar nada.
+    proto = _proto_reporte(tmp_path, "A1")
+    protocol = load_protocol(proto)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+    kwargs = {"search_fn": _busqueda_ft, "fetch_fn": fetch_disponible}
+    correr_hasta(protocol, proto, ctx, parar_en="reporte", **kwargs)
+    antes = leer_solicitud(ctx.run_dir, "reporte")
+    assert antes["forced_human"] is False
+    _editar_diario_de_verificacion(ctx, marcada=True)
+
+    pausa = run_pipeline(protocol, proto, RunContext.open(ctx.run_dir), **kwargs)
+
+    assert (pausa.status, pausa.stage, pausa.hallucination_flagged) == ("paused", "reporte", False)
+    solicitud = leer_solicitud(ctx.run_dir, "reporte")
+    assert (solicitud["forced_human"], solicitud["must_adjudicate"]) == (False, [])
+    assert solicitud["request_sha256"] == antes["request_sha256"]
+    assert _json(ctx, "06_synthesis/verification.json")["hallucination_flagged"] is False
+    assert _manifest(ctx)["final_gate"] == {"forced_human": False, "reason": None}
 
 
 def _verificacion(*checks: CitationCheck) -> VerificationReport:

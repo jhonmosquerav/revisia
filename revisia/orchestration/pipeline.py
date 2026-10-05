@@ -85,6 +85,7 @@ from revisia.orchestration.hitl import (
     FlagPolicy,
     GateResult,
     RecordPolicy,
+    effective_autonomy,
     review_gate,
 )
 from revisia.orchestration.journal import JournalError, StageJournal, entry_output, journaled
@@ -948,7 +949,7 @@ def _synthesize_and_verify(
         inputs={
             "narrativa_sha256": sha256_text(narrative),
             "fuentes_sha256": canonical_sha256(sources),
-            "modo": getattr(run.protocol, "grounding", "embedder"),
+            "modo": run.protocol.grounding,
         },
         model=VerificationReport,
         compute=partial(
@@ -963,6 +964,11 @@ def _synthesize_and_verify(
         ),
         run_ctx=run.ctx,
     )
+    # La bandera sale de las citas (`checks`), no del diario: este, editado a mano, podría
+    # dejar `hallucination_flagged: false` con citas marcadas y el gate final, la solicitud, el
+    # manifiesto y el auditor (que lee verification.json) se contradirían (revisión de la
+    # Tarea 26). Es la misma derivación que hace el verificador al crear el informe.
+    verification.recompute_flag()
     run.ctx.write_json("06_synthesis/verification.json", verification.model_dump())
     return narrative, verification
 
@@ -1126,8 +1132,7 @@ def _autonomy_effective(protocol: ReviewProtocol, *, forced_human: bool) -> dict
     el protocolo declaraba.
     """
     effective = {g: protocol.autonomy_for(g) for g in GATED_STAGES}
-    if forced_human and effective["reporte"] in {"A2", "A3"}:
-        effective["reporte"] = "A1"
+    effective["reporte"] = effective_autonomy(effective["reporte"], forced_human=forced_human)
     return effective
 
 
@@ -1315,6 +1320,7 @@ def _run_stages(
     run.stage = "sintesis"
     meta_result, meta_display = _meta_analysis(run)
     narrative, verification = _synthesize_and_verify(run, included, extractions, ft.texts, embedder)
+    forced = verification.hallucination_flagged  # recalculada de las citas al verificar
     run.stage = "reporte"
     counts = _build_counts(
         raw_records=raw_records,
@@ -1346,7 +1352,6 @@ def _run_stages(
     # Checkpoint final del reporte (A1). La solicitud no lleva rutas absolutas (su
     # hash tiene que ser estable entre reanudaciones): el documento va por su hash.
     # Con citas marcadas el gate exige humano y cada cita se adjudica (M5, D8).
-    forced = verification.hallucination_flagged
     documento = (deliverable / "documento.md").read_text(encoding="utf-8")
     final_gate = run.gate(
         "reporte",
@@ -1354,7 +1359,7 @@ def _run_stages(
             included=included,
             verification=verification,
             documento=documento,
-            grounding_mode=getattr(protocol, "grounding", "embedder"),
+            grounding_mode=protocol.grounding,
             forced_human=forced,
         ),
         flags=report_policy(verification),
