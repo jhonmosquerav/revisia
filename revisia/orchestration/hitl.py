@@ -240,16 +240,70 @@ class GateResult:
     flag_reviews: dict[str, FlagReview] = field(default_factory=dict)
 
 
-def render_decision_template(*, stage: str, autonomy: str, request_sha256: str) -> str:
+def _comment(text: str, limit: int = 200) -> str:
+    """Una línea de comentario YAML segura para texto del LLM o del registro (D4).
+
+    PyYAML y libyaml cierran un comentario con cualquier salto de línea de YAML 1.1
+    (LF, CR, U+0085, U+2028, U+2029): lo que viniera detrás, p. ej. un
+    ``approved: true`` dentro de un ``rationale``, sería una clave de verdad. Todo
+    espacio (esos saltos incluidos) y todo carácter no imprimible (controles C0 y
+    C1, sustitutos sueltos, marcas de formato) pasa a un espacio; los espacios se
+    pliegan y la línea se acota a ``limit`` caracteres.
+    """
+    plain = " ".join("".join(ch if ch.isprintable() else " " for ch in text).split())
+    if len(plain) > limit:
+        plain = plain[: limit - 1] + "…"
+    return f"# {plain}"
+
+
+def _key(text: str) -> str:
+    """Clave YAML entre comillas dobles que ``yaml.safe_load`` devuelve idéntica (D4).
+
+    Sin comillas, ``010`` se lee como el entero 8 (YAML 1.1), ``2019`` como número y
+    ``yes`` como booleano. ``json.dumps(..., ensure_ascii=False)`` deja tal cual los
+    caracteres fuera del plano básico (con ``ensure_ascii=True`` serían un par de
+    escapes de sustitutos que PyYAML lee como dos caracteres sueltos), pero también
+    deja crudos U+0085, U+2028 y U+2029 (saltos de línea de YAML 1.1: la clave se
+    parte en dos) y los controles C1 y U+007F (``ReaderError``). Esos y todo carácter
+    no imprimible se escriben como escape de comillas dobles de YAML.
+    """
+    return "".join(_yaml_char(ch) for ch in json.dumps(text, ensure_ascii=False))
+
+
+def _yaml_char(ch: str) -> str:
+    """El carácter si es imprimible; si no, su escape YAML de 4 u 8 dígitos hexadecimales."""
+    if ch.isprintable():
+        return ch
+    code = ord(ch)
+    return f"\\u{code:04x}" if code <= 0xFFFF else f"\\U{code:08x}"
+
+
+def render_decision_template(
+    *,
+    stage: str,
+    autonomy: str,
+    request_sha256: str,
+    records: RecordPolicy | None,
+    flags: FlagPolicy | None,
+) -> str:
     """``decision.template.yml``: la decisión a medio rellenar (D4).
 
     ``approved: null`` la hace inválida tal cual: aprobar tiene que ser un acto
-    deliberado. Las cadenas van entre comillas dobles (JSON es YAML válido) y no hay
-    texto libre: el hash es hexadecimal y ``stage``/``autonomy`` solo van en
-    comentarios, así que no necesita ``dump_yaml``.
+    deliberado. Con ``records`` lista cada registro de la solicitud con
+    ``label: null`` y, encima, un comentario con su título, la propuesta de la IA,
+    sus marcas (``obligatorio``, ``unclear``, ``no recuperado``) y su nota; con
+    ``flags``, cada cita marcada con ``verdict: null`` y su comentario. Un bloque
+    sin entradas es ``{}`` (``records:`` a secas se leería como ``null`` y la
+    decisión copiada no validaría); con ``None`` el bloque no aparece.
+
+    Los valores son constantes (``null``, el hash hexadecimal): el único texto que
+    llega de fuera va en comentarios de una línea (``_comment``) y en las claves
+    (``_key``), por eso no pasa por ``dump_yaml``, cuyo volcado no pone cada
+    registro en una línea con su comentario encima. Un título o un ``rationale``
+    con saltos de línea no puede inyectar claves (``approved: true``).
     """
     lines = [
-        f"# Decisión humana del gate '{stage}' (autonomía {autonomy}).",
+        _comment(f"Decisión humana del gate '{stage}' (autonomía {autonomy})."),
         "#",
         "# 1. Revisa review_request.yml, en esta misma carpeta.",
         "# 2. Copia este fichero como decision.yml y pon `approved: true` (aprobar)",
@@ -260,11 +314,56 @@ def render_decision_template(*, stage: str, autonomy: str, request_sha256: str) 
         "#",
         "# `request_sha256` ata la decisión a esta solicitud: si la solicitud cambia,",
         "# una decisión vieja no se aplica y la corrida vuelve a pausar.",
+    ]
+    if flags is not None:
+        lines += [
+            "#",
+            "# Citas marcadas por el verificador: para APROBAR, adjudica cada una con",
+            "# `verdict: false_positive` y una `reason`. Si alguna es una alucinación real,",
+            "# rechaza (`approved: false`): no existe un veredicto «aceptar el riesgo» (D8).",
+        ]
+    if records is not None:
+        lines += [
+            "#",
+            "# Registros: `label: include` o `label: exclude`, con `reason` (obligatoria al",
+            "# excluir en texto completo y al rescatar un no recuperado). `label: null` deja",
+            "# la propuesta de la IA como está: no es una decisión humana (D5).",
+            f"# Obligatorio etiquetar: {len(records.must_label)} · `unclear` por resolver: "
+            f"{len(records.must_resolve)} · no recuperados rescatables: {len(records.rescue_ids)}.",
+        ]
+    lines += [
         f"request_sha256: {json.dumps(request_sha256)}",
         "approved: null",
         'actor: "human:desconocido"',
         "reason: null",
     ]
+    if records is not None:
+        lines.append("records:" if records.hints else "records: {}")
+        for hint in records.hints:
+            marks = [
+                text
+                for ids, text in (
+                    (records.must_label, "obligatorio"),
+                    (records.must_resolve, "unclear: resuélvelo"),
+                    (records.rescue_ids, "no recuperado: rescatable"),
+                )
+                if hint.record_id in ids
+            ]
+            summary = f"{hint.title} · propuesta IA: {hint.proposal or '—'}"
+            if marks:
+                summary += f" · {', '.join(marks)}"
+            if hint.note:
+                summary += f" · {hint.note}"
+            lines.append(f"  {_comment(summary)}")
+            lines.append(f"  {_key(hint.record_id)}: {{label: null, reason: null}}")
+    if flags is not None:
+        lines.append("flags:" if flags.flagged else "flags: {}")
+        for claim in flags.flagged:
+            summary = f"[{claim.index}] cita {claim.cited_id!r}: «{claim.claim}»"
+            if claim.note:
+                summary += f" · {claim.note}"
+            lines.append(f"  {_comment(summary)}")
+            lines.append(f"  {_key(str(claim.index))}: {{verdict: null, reason: null}}")
     return "\n".join(lines) + "\n"
 
 
@@ -523,6 +622,27 @@ def _from_ledger(
     return labels, reviews
 
 
+def _motivos_humano(records: RecordPolicy | None, force_human: bool) -> list[str]:
+    """Por qué solo una decisión humana en ``decision.yml`` cierra el gate (M5, D8, D9).
+
+    Con motivos, ``--auto-approve`` no sirve (pausaría otra vez) y la pausa los explica
+    en lugar de sugerirlo.
+    """
+    motivos = []
+    if force_human:
+        motivos.append(
+            "el verificador marcó citas y este gate exige una decisión humana (M5): adjudica "
+            "cada una en `flags` (`verdict: false_positive` y `reason`) o rechaza "
+            "(`approved: false`)"
+        )
+    if records is not None and records.must_resolve:
+        motivos.append(
+            f"{len(records.must_resolve)} registro(s) `unclear` solo los resuelve un humano "
+            "(D9): etiquétalos en `records` (`label: include` o `label: exclude`)"
+        )
+    return motivos
+
+
 def review_gate(
     *,
     stage: str,
@@ -548,7 +668,10 @@ def review_gate(
     ``--auto-approve`` aprueba con las etiquetas de la IA, salvo que haya
     registros que solo resuelve un humano (``must_resolve``): entonces pausa
     (D9). Con ``force_human`` (citas marcadas, M5) se ignoran ``auto_approve`` y
-    una autonomía A2/A3, que pasa a A1 en la solicitud y el ledger.
+    una autonomía A2/A3, que pasa a A1 en la solicitud y el ledger, y del ledger
+    solo se reutiliza una decisión humana. Cuando solo un ``decision.yml`` humano
+    puede cerrar el gate (citas marcadas, ``unclear``), la pausa dice por qué y no
+    ofrece ``--auto-approve``.
 
     Raises:
         ValueError: si ``review_payload`` trae alguna clave común de la solicitud
@@ -607,7 +730,13 @@ def review_gate(
     )
     run_ctx.write_text(
         f"{stage}/{TEMPLATE_FILE}",
-        render_decision_template(stage=stage, autonomy=autonomy, request_sha256=request_sha256),
+        render_decision_template(
+            stage=stage,
+            autonomy=autonomy,
+            request_sha256=request_sha256,
+            records=records,
+            flags=flags,
+        ),
     )
     request_path = stage_dir / REQUEST_FILE
     decision_path = stage_dir / DECISION_FILE
@@ -647,25 +776,17 @@ def review_gate(
                 labels,
                 reviews,
             )
-        if auto_approve and force_human:
+        motivos = _motivos_humano(records, force_human)
+        if motivos:
+            # Solo un decision.yml humano cierra este gate: no se sugiere --auto-approve,
+            # que volvería a pausar; si el humano lo pasó, se le dice que no aplica.
+            aviso = "--auto-approve no aplica aquí. " if auto_approve else ""
             return GateResult(
                 "paused",
                 (
-                    f"Checkpoint humano en '{stage}': el verificador marcó citas y este gate "
-                    "exige una decisión humana (M5); --auto-approve no aplica aquí. Revisa "
-                    f"{request_path} y rellena {stage_dir / TEMPLATE_FILE} como "
+                    f"Checkpoint humano en '{stage}': {'; '.join(motivos)}. {aviso}Revisa "
+                    f"{request_path}, rellena {stage_dir / TEMPLATE_FILE} y guárdalo como "
                     f"{decision_path}. {resume}"
-                ),
-                request_sha256,
-            )
-        if auto_approve and records is not None and records.must_resolve:
-            return GateResult(
-                "paused",
-                (
-                    f"Checkpoint humano en '{stage}': {len(records.must_resolve)} registro(s) "
-                    "`unclear` solo los resuelve un humano (D9): --auto-approve no adopta una "
-                    f"etiqueta que la IA no dio. Etiquétalos en {decision_path} (`records`, "
-                    f"desde {stage_dir / TEMPLATE_FILE}). {resume}"
                 ),
                 request_sha256,
             )
