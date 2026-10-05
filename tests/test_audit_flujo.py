@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -29,6 +30,9 @@ from audit_fixtures import (
 )
 
 from revisia.audit import CHECKS
+from revisia.audit.artifacts import AuditContext, load_run
+from revisia.audit.checks_flow import _limitar, collect_relations
+from revisia.exports import PrismaCounts
 
 TA = "03_screening/decisions.json"
 FT = "04_fulltext/decisions.json"
@@ -361,16 +365,6 @@ def test_arithmetic_celda_enorme_del_csv_se_acota(corrida) -> None:
     assert len(arithmetic.detail) < 1_500
 
 
-def test_arithmetic_csv_con_campo_mayor_que_el_limite_es_no_verificable(corrida) -> None:
-    # El módulo `csv` rechaza campos de más de 131 072 caracteres con `csv.Error`.
-    ruta = corrida / "deliverable" / "interop" / "prisma2020_flow.csv"
-    ruta.write_text("data,n\nrecords_screened," + "9" * 200_000 + "\n", encoding="utf-8")
-    arithmetic = fila(auditar(corrida), "arithmetic")
-    assert "error interno" not in arithmetic.detail
-    assert arithmetic.status == "WARN"
-    assert "11 · CSV PRISMA2020" in arithmetic.detail
-
-
 _LLAMADA_HOSTIL = "- {provider: *a9, model: *a9, deterministic: *a9, timestamp_utc: *a9}\n"
 
 
@@ -406,6 +400,273 @@ def test_arithmetic_bomba_de_alias_no_cuelga_ni_llena_el_detalle(
     assert len(filas) == len(CHECKS)
 
 
+# ── Fail-closed: ninguna relación se omite (revisión de la Tarea 7) ────────
+#
+# Cada relación termina verificada, rota (FAIL) o no verificable (WARN). Lo que el motor
+# escribe siempre y falta es manipulación (rota); el WARN es para lo que de verdad no se puede
+# saber. Antes, un manifiesto sin `counts` o sin `protocol` y un CSV que `csv` no puede leer
+# dejaban `arithmetic` en WARN y la corrida publicable.
+
+SIN_CONTEOS = "counts ausente en el manifiesto (el motor siempre lo escribe)"
+SIN_PROTOCOLO = "protocol ausente en el manifiesto (el motor siempre lo escribe)"
+VOTOS = "§9.3 · un voto por screener T/A configurado"
+HERRAMIENTA_ROB = "§9.3 · assessment.tool == protocol.rob_tool"
+PESO_WMCC = "§9.3 · wmcc_fn_weight == protocolo"
+DOBLE_DECLARADA = "§9.3 · doble extracción declarada en el protocolo"
+SUMA_POR_BASE = "1 · Σ identified_by_source == identified"
+RELACION_6 = "6 · excluded_ta_human + excluded_ta_ai == excluded_ta"
+COTA_LLAMADAS = "§9.3 · llamadas ≥ cota inferior de las decisiones"
+RESCATADOS = "v0.7 · fulltext_rescued == 0 (el motor v0.7 no rescata textos completos)"
+FICHERO_DOBLE = "§9.3 · 05_extraction/agreement.json de la doble extracción declarada"
+COPIA_DOBLE = "§9.3 · copia `extraction_agreement` del manifiesto"
+
+
+def _relaciones(run: Path) -> dict[str, tuple[bool | None, str]]:
+    """Las relaciones de ``arithmetic`` (``nombre → (ok, detalle)``), sin nombres repetidos."""
+    relaciones = collect_relations(AuditContext(load_run(run)))
+    nombres = [r.name for r in relaciones]
+    assert len(nombres) == len(set(nombres)), nombres
+    return {r.name: (r.ok, r.detail) for r in relaciones}
+
+
+def _quitar_de_counts(*claves: str) -> Callable[[dict], None]:
+    def _editar(manifest: dict) -> None:
+        for clave in claves:
+            del manifest["counts"][clave]
+
+    return _editar
+
+
+def test_arithmetic_corrida_real_cuenta_sus_relaciones_verificadas(corrida) -> None:
+    # 48 antes de la revisión + `fulltext_rescued == 0` (corrida sin run.json). Las relaciones que
+    # ahora son incondicionales (Σ por base, desglose humano/IA, protocolo, doble extracción) no
+    # suman nada a una corrida sana: en ella ya se verificaban todas.
+    relaciones = _relaciones(corrida)
+    assert [n for n, (ok, _) in relaciones.items() if ok is not True] == []
+    assert len(relaciones) == 49
+    assert "49 relaciones verificadas" in fila(auditar(corrida), "arithmetic").detail
+
+
+def test_arithmetic_manifiesto_sin_counts_falla(corrida) -> None:
+    edit_yaml(corrida / "manifest.yml", _sin_clave("counts"))
+    report = auditar(corrida)
+    arithmetic = fila(report, "arithmetic")
+    assert arithmetic.status == "FAIL"
+    assert SIN_CONTEOS in arithmetic.detail
+    assert report.publishable is False
+    # Cada relación que depende de `counts` queda rota por ausencia, ninguna se omite.
+    relaciones = _relaciones(corrida)
+    for nombre in (
+        "conteos del embudo",
+        "10 · exclusions.total_excluded == excluded_ta + excluded_ft",
+        "11 · CSV PRISMA2020",
+        "§9.3 · cota inferior de llamadas",
+    ):
+        assert relaciones[nombre] == (False, SIN_CONTEOS), nombre
+    exclusions = fila(report, "exclusions")
+    assert exclusions.status == "FAIL"
+    assert SIN_CONTEOS in exclusions.detail
+
+
+def test_arithmetic_manifiesto_sin_protocol_falla(corrida) -> None:
+    edit_yaml(corrida / "manifest.yml", _sin_clave("protocol"))
+    report = auditar(corrida)
+    arithmetic = fila(report, "arithmetic")
+    assert arithmetic.status == "FAIL"
+    assert SIN_PROTOCOLO in arithmetic.detail
+    assert report.publishable is False
+    # Las relaciones que dependen del protocolo aparecen rotas, no desaparecen.
+    relaciones = _relaciones(corrida)
+    for nombre in (VOTOS, HERRAMIENTA_ROB, PESO_WMCC, DOBLE_DECLARADA):
+        assert relaciones[nombre] == (False, SIN_PROTOCOLO), nombre
+    # La cota de llamadas sigue verificándose con un solo screener (la cota más baja).
+    assert relaciones[COTA_LLAMADAS][0] is True
+
+
+def test_arithmetic_protocolo_invalido_es_no_verificable(corrida) -> None:
+    # Presente pero que no valida: lo marca `schemas`; aquí queda no verificable, no rota.
+    edit_yaml(corrida / "manifest.yml", lambda m: m["protocol"].update(rob_tool="no-existe"))
+    relaciones = _relaciones(corrida)
+    for nombre in (VOTOS, HERRAMIENTA_ROB, PESO_WMCC, DOBLE_DECLARADA):
+        ok, detalle = relaciones[nombre]
+        assert ok is None, nombre
+        assert "manifest.protocol inválido" in detalle
+
+
+def test_arithmetic_csv_con_campo_mayor_que_el_limite_falla(corrida) -> None:
+    # El módulo `csv` rechaza campos de más de 131 072 caracteres con `csv.Error`: el motor
+    # siempre escribe un CSV legible, así que no poder leerlo es manipulación.
+    ruta = corrida / "deliverable" / "interop" / "prisma2020_flow.csv"
+    ruta.write_text("data,n\nrecords_screened," + "9" * 200_000 + "\n", encoding="utf-8")
+    report = auditar(corrida)
+    arithmetic = fila(report, "arithmetic")
+    assert "error interno" not in arithmetic.detail
+    assert arithmetic.status == "FAIL"
+    assert "11 · CSV PRISMA2020: " in arithmetic.detail
+    assert "no se pudo leer como CSV (Error)" in arithmetic.detail
+    assert len(arithmetic.detail) < 1_500
+    assert report.publishable is False
+
+
+def test_arithmetic_csv_que_no_es_utf8_falla(corrida) -> None:
+    ruta = corrida / "deliverable" / "interop" / "prisma2020_flow.csv"
+    ruta.write_bytes(b"\xff\xfe\x00 no es utf-8")
+    arithmetic = fila(auditar(corrida), "arithmetic")
+    assert arithmetic.status == "FAIL"
+    assert "11 · CSV PRISMA2020: " in arithmetic.detail
+    assert "ilegible" in arithmetic.detail
+
+
+@pytest.mark.parametrize(
+    ("ruta", "relacion"),
+    [
+        pytest.param(TA, "relaciones del cribado T/A", id="decisiones-ta"),
+        pytest.param(FT, "relaciones del texto completo", id="decisiones-ft"),
+        pytest.param(
+            "05_extraction/extractions.json",
+            "10 · claves de 05_extraction/extractions.json",
+            id="extracciones",
+        ),
+        pytest.param(
+            "07_rob/assessments.json", "10 · claves de 07_rob/assessments.json", id="evaluaciones"
+        ),
+        pytest.param(
+            "03_screening/exclusions.json",
+            "10 · exclusions.total_excluded == excluded_ta + excluded_ft",
+            id="exclusiones",
+        ),
+    ],
+)
+def test_arithmetic_artefacto_que_el_motor_siempre_escribe_ausente_es_relacion_rota(
+    corrida, ruta: str, relacion: str
+) -> None:
+    (corrida / ruta).unlink()
+    assert fila(auditar(corrida), "arithmetic").status == "FAIL"
+    detalle = f"{ruta} ausente (el motor siempre lo escribe)"
+    assert _relaciones(corrida)[relacion] == (False, detalle)
+
+
+def test_arithmetic_artefacto_invalido_es_no_verificable(corrida) -> None:
+    (corrida / TA).write_text("{}", encoding="utf-8")  # un mapa donde va una lista de decisiones
+    ok, detalle = _relaciones(corrida)["relaciones del cribado T/A"]
+    assert ok is None
+    assert f"{TA} inválido" in detalle
+
+
+# ── Fail-closed: lo que antes se omitía en silencio ──
+
+
+def test_arithmetic_identified_by_source_vacio_con_identificados_falla(corrida) -> None:
+    edit_yaml(corrida / "manifest.yml", lambda m: m["counts"].update(identified_by_source={}))
+    assert fila(auditar(corrida), "arithmetic").status == "FAIL"
+    assert _relaciones(corrida)[SUMA_POR_BASE][0] is False
+
+
+def test_arithmetic_identified_by_source_vacio_sin_identificados_se_verifica(tmp_path) -> None:
+    run = tmp_path / "runs" / "vacia-20260101-000000"
+    run.mkdir(parents=True)
+    manifest = {"counts": PrismaCounts().model_dump()}
+    (run / "manifest.yml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    assert _relaciones(run)[SUMA_POR_BASE][0] is True
+
+
+def test_arithmetic_sin_desglose_humano_ia_en_counts_no_es_verificable(corrida) -> None:
+    # Un manifiesto anterior al desglose pudo no traerlos: no se puede saber (WARN, no FAIL).
+    edit_yaml(corrida / "manifest.yml", _quitar_de_counts("excluded_ta_human", "excluded_ta_ai"))
+    report = auditar(corrida)
+    arithmetic = fila(report, "arithmetic")
+    assert arithmetic.status == "WARN"
+    assert f"no verificables: {RELACION_6} (counts sin excluded_ta_human/ai" in arithmetic.detail
+    assert _relaciones(corrida)[RELACION_6][0] is None
+    exclusions = fila(report, "exclusions")
+    assert exclusions.status == "WARN"
+    assert "counts sin excluded_ta_human/ai" in exclusions.detail
+    assert report.publishable is True
+
+
+def test_arithmetic_solo_uno_de_los_conteos_humano_ia_falla(corrida) -> None:
+    # El motor escribe ambos a la vez: que falte uno es manipulación.
+    edit_yaml(corrida / "manifest.yml", _quitar_de_counts("excluded_ta_ai"))
+    report = auditar(corrida)
+    assert fila(report, "arithmetic").status == "FAIL"
+    assert "solo uno de excluded_ta_human/ai" in fila(report, "arithmetic").detail
+    assert fila(report, "exclusions").status == "FAIL"
+    assert "solo uno de excluded_ta_human/ai" in fila(report, "exclusions").detail
+
+
+def test_arithmetic_doble_extraccion_declarada_sin_fichero_ni_copia_falla(corrida) -> None:
+    # Quitar la copia del manifiesto no puede ser la forma de quitar el fichero.
+    (corrida / "05_extraction" / "agreement.json").unlink()
+    edit_yaml(corrida / "manifest.yml", _sin_clave("extraction_agreement"))
+    report = auditar(corrida)
+    assert fila(report, "arithmetic").status == "FAIL"
+    assert report.publishable is False
+    relaciones = _relaciones(corrida)
+    assert relaciones[FICHERO_DOBLE][0] is False
+    assert "05_extraction/agreement.json ausente" in relaciones[FICHERO_DOBLE][1]
+    assert relaciones[COPIA_DOBLE][0] is False
+
+
+def test_arithmetic_fulltext_rescued_sin_run_json_es_relacion_rota(corrida) -> None:
+    # La corrida de referencia no tiene run.json: el motor es el v0.7 y nunca rescata textos.
+    edit_yaml(corrida / "manifest.yml", lambda m: m["counts"].update(fulltext_rescued=1))
+    arithmetic = fila(auditar(corrida), "arithmetic")
+    assert arithmetic.status == "FAIL"
+    assert "1 relación(es) rota(s)" in arithmetic.detail
+    assert f"{RESCATADOS}: 1 ≠ 0" in arithmetic.detail
+
+
+def test_arithmetic_fulltext_rescued_no_baja_la_cota_de_llamadas(corrida) -> None:
+    # Con rescates declarados la cota bajaba y una corrida con llamadas de menos pasaba.
+    edit_yaml(
+        corrida / "manifest.yml",
+        lambda m: m["counts"].update(fulltext_rescued=m["counts"]["fulltext_assessed"]),
+    )
+    editar_llamadas(corrida, lambda calls: calls[:23])
+    arithmetic = fila(auditar(corrida), "arithmetic")
+    assert arithmetic.status == "FAIL"
+    assert RESCATADOS in arithmetic.detail
+    assert "23 llamadas < 24" in arithmetic.detail
+
+
+# ── _limitar: el sufijo «(+k más)» de una relación sobrevive al recorte ──
+
+
+def test_limitar_no_parte_el_sufijo_de_ids_dentro_de_una_relacion() -> None:
+    relacion = "5 · ensemble_label == recall_biased_label(votes): " + ", ".join(["r" * 60] * 3)
+    relacion += " (+4 más)"
+    assert len(relacion) > 240
+    assert _limitar([relacion]).endswith(" (+4 más)")
+
+
+def test_limitar_conserva_el_sufijo_de_ids_aunque_le_siga_mas_texto() -> None:
+    relacion = "5 · final_label == human_label or ensemble_label: " + ", ".join(["r" * 60] * 3)
+    relacion += " (+4 más) (más texto detrás del sufijo)"
+    resultado = _limitar([relacion])
+    assert "(+4 más)" in resultado
+    assert "(+4 …" not in resultado
+    assert len(resultado) <= 240
+
+
+def test_limitar_sigue_acotando_lo_que_no_lleva_sufijo() -> None:
+    resultado = _limitar(["x" * 5_000, "corta"])
+    assert resultado == "x" * 239 + "…; corta"
+
+
+def test_arithmetic_ids_enormes_no_dejan_un_sufijo_cortado(corrida) -> None:
+    def _hostil(decisions: list[dict]) -> None:
+        for i, decision in enumerate(decisions):
+            decision["final_label"] = "include"
+            decision["ensemble_label"] = "unclear"  # ≠ recall_biased_label(votes) en todas
+            decision["record_id"] = f"{'r' * 50_000}-{i}"
+
+    edit_json(corrida / TA, _hostil)
+    arithmetic = fila(auditar(corrida), "arithmetic")
+    assert arithmetic.status == "FAIL"
+    assert "(+" in arithmetic.detail
+    assert re.search(r"\(\+\d+(?!\d| más\))", arithmetic.detail) is None, arithmetic.detail
+
+
 # ── stage_artifacts ────────────────────────────────────────────────────
 
 
@@ -436,6 +697,23 @@ def test_stage_artifacts_en_pausa_solo_exige_las_etapas_alcanzadas(corrida) -> N
     assert stage.status == "PASS"
     assert "screening_ta" in stage.detail
     assert "screening_ft" not in stage.detail
+
+
+def test_stage_artifacts_doble_extraccion_declarada_sin_fichero_ni_copia_falla(corrida) -> None:
+    # Quitar también la copia del manifiesto no puede relajar la exigencia: la fija el protocolo.
+    (corrida / "05_extraction" / "agreement.json").unlink()
+    edit_yaml(corrida / "manifest.yml", _sin_clave("extraction_agreement"))
+    stage = fila(auditar(corrida), "stage_artifacts")
+    assert stage.status == "FAIL"
+    assert "extraccion: 05_extraction/agreement.json" in stage.detail
+
+
+def test_stage_artifacts_sin_incluidos_no_exige_la_doble_extraccion(corrida) -> None:
+    # El motor solo escribe agreement.json si hay un 2.º extractor e incluidos.
+    (corrida / "05_extraction" / "agreement.json").unlink()
+    edit_yaml(corrida / "manifest.yml", _sin_clave("extraction_agreement"))
+    edit_json(corrida / FT, lambda decisions: decisions.clear())
+    assert fila(auditar(corrida), "stage_artifacts").status == "PASS"
 
 
 # ── exclusions ─────────────────────────────────────────────────────────
