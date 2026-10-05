@@ -70,7 +70,7 @@ FulltextReason = Literal["sin_url_oa", "sin_httpx", "error_http", "texto_vacio",
 # (``sin_url_oa``, ``texto_vacio``, ``no_disponible``) y los éxitos sí se escriben. Lo comparten
 # el pipeline (qué no se escribe en el diario) y el gate de texto completo (qué avisa de que
 # se reintentará al reanudar).
-TRANSIENT_FULLTEXT_REASONS: frozenset[str] = frozenset({"error_http", "sin_httpx"})
+TRANSIENT_FULLTEXT_REASONS: frozenset[FulltextReason] = frozenset({"error_http", "sin_httpx"})
 
 # Ruta (relativa al directorio de la corrida) del diario de cada etapa (§4.2).
 JOURNAL_PATHS: dict[str, str] = {
