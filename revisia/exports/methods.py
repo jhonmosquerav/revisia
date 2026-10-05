@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from revisia.exports.checklist import engine_search_date, label_databases
 from revisia.metrics import fmt_metric
 
 if TYPE_CHECKING:
@@ -18,6 +19,7 @@ if TYPE_CHECKING:
     from revisia.exports.prisma_flow import PrismaCounts
     from revisia.extraction_agreement import ExtractionAgreement
     from revisia.metrics import ScreeningMetrics
+    from revisia.schemas.artifacts import SearchLog
 
 
 def _registration_line(registration: dict[str, str]) -> str:
@@ -42,11 +44,18 @@ def render_methods(
     quantitative: bool = False,
     exclusions: ExclusionBreakdown | None = None,
     extraction_agreement: ExtractionAgreement | None = None,
+    search_log: SearchLog | None = None,
 ) -> str:
-    """Renderiza la sección de métodos (``metodologia.md``) de la revisión."""
+    """Renderiza la sección de métodos (``metodologia.md``) de la revisión.
+
+    Con ``search_log`` (Ola 1) la fecha de búsqueda es la registrada por el
+    motor, se dice en qué bases se usó la pregunta como cadena (PRISMA-S 8) y las
+    bases cuya búsqueda falló se marcan en «Bases consultadas».
+    """
     q = protocol.question
     components = "; ".join(f"{k}={v}" for k, v in q.components.items()) or "(no detallados)"
-    bases = ", ".join(protocol.databases) or "OpenAlex"
+    # Con log, una base que falló se marca: «consultada» sería falso (revisión de la pista C).
+    bases = ", ".join(label_databases(protocol.databases or ["OpenAlex"], search_log))
     kappa = (
         f"Cohen's kappa humano-IA = {fmt_metric(metrics.cohen_kappa)}"
         if metrics is not None
@@ -68,8 +77,25 @@ def render_methods(
         f"Componentes: {components}",
         f"Bases consultadas: {bases}",
         f"Ventana de búsqueda: {_window_line(protocol.search_window)}",
-        "Cadenas de búsqueda: ver protocols/<slug>/search_strings/ (PRISMA-S).",
-        "Criterios: ver inclusion_exclusion.yml (declarados antes de ver resultados).",
+    ]
+    # Sin log no se sabe qué se usó y se conserva la cita; con log solo si alguna base
+    # leyó su cadena de search_strings/ (una búsqueda inyectada no usa cadenas por base).
+    if search_log is None or any(e.query_origin == "file" for e in search_log.entries):
+        lines.append(
+            "Cadenas de búsqueda: 00_protocol/search_strings/ de la corrida (copia congelada "
+            "del protocolo; PRISMA-S)."
+        )
+    lines.append("Criterios: ver inclusion_exclusion.yml (declarados antes de ver resultados).")
+    if search_log is not None:
+        lines.append(
+            f"Búsqueda ejecutada (fecha registrada por el motor): {engine_search_date(search_log)}."
+        )
+        fallback = [e.database for e in search_log.entries if e.query_origin == "question_fallback"]
+        if fallback:
+            lines.append(
+                f"Sin cadena propia en {', '.join(fallback)}: se usó la pregunta como cadena."
+            )
+    lines += [
         "",
         "### Selección (screening)",
         f"Dos fases (título/abstract y texto completo) con ensemble multi-modelo "

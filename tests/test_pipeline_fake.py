@@ -8,15 +8,19 @@ entregables y manifiesto reproducible.
 from __future__ import annotations
 
 import json
+import shutil
+from collections import Counter
 from pathlib import Path
 
 import pytest
 import yaml
 from fakes import ScriptedProvider, fetch_disponible, fetch_no_disponible
+from hitl_helpers import correr_hasta
 
 from revisia.audit import run_audit
 from revisia.config import load_protocol
 from revisia.orchestration import pipeline as pipeline_mod
+from revisia.orchestration import search_stage as search_stage_mod
 from revisia.orchestration.pipeline import run_pipeline
 from revisia.orchestration.run_context import RunContext
 from revisia.schemas.records import SearchRecord
@@ -131,14 +135,24 @@ def test_pipeline_ensemble_y_metricas(tmp_path) -> None:
 
 
 def test_rejected_final_gate_is_not_completed(tmp_path) -> None:
+    # Desde la Ola 1 una decisión.yml lleva el request_sha256 de su solicitud, así
+    # que no se puede escribir antes de correr: el humano responde a cada pausa
+    # (aprueba los gates de juicio) y rechaza el reporte final.
     protocol = load_protocol(EXAMPLE)
     ctx = RunContext(protocol.slug, tmp_path, "TEST")
-    (ctx.stage_dir("reporte") / "decision.yml").write_text(
-        "approved: false\nactor: human:revisora\nreason: síntesis sin respaldo\n",
-        encoding="utf-8",
-    )
-    result = run_pipeline(
-        protocol, EXAMPLE, ctx, max_results=10, auto_approve=True, search_fn=_fake_search
+
+    def rechazar_el_reporte(stage: str, _solicitud: dict) -> dict | None:
+        if stage == "reporte":
+            return {"approved": False, "reason": "síntesis sin respaldo"}
+        return None
+
+    result = correr_hasta(
+        protocol,
+        EXAMPLE,
+        ctx,
+        search_fn=_fake_search,
+        fetch_fn=fetch_disponible,
+        etiquetar=rechazar_el_reporte,
     )
     assert result.status == "rejected"  # antes: "completed"
     assert "rechazado por human:revisora" in result.message
@@ -155,16 +169,21 @@ def test_rejected_final_gate_is_not_completed(tmp_path) -> None:
 
 def test_paused_run_final_gate_falla_en_auditoria(tmp_path) -> None:
     # Aprueba en humano las etapas de juicio previas al reporte (screening_ta,
-    # screening_ft, extraccion, rob) para que, sin auto-approve, la corrida
-    # llegue viva hasta el checkpoint final y pause justo ahí (A1): es ese gate
-    # el que queremos ver fallar en la auditoría, no uno anterior.
+    # screening_ft, extraccion, rob), respondiendo a cada pausa con el
+    # request_sha256 de su solicitud, para que la corrida llegue viva hasta el
+    # checkpoint final y pause justo ahí (A1): es ese gate el que queremos ver
+    # fallar en la auditoría, no uno anterior.
     protocol = load_protocol(EXAMPLE)
     ctx = RunContext(protocol.slug, tmp_path, "TEST-PAUSED")
-    decision_humana = "approved: true\nactor: human:revisora\n"
-    for stage in ("screening_ta", "screening_ft", "extraccion", "rob"):
-        (ctx.stage_dir(stage) / "decision.yml").write_text(decision_humana, encoding="utf-8")
 
-    result = run_pipeline(protocol, EXAMPLE, ctx, auto_approve=False, search_fn=_fake_search)
+    result = correr_hasta(
+        protocol,
+        EXAMPLE,
+        ctx,
+        search_fn=_fake_search,
+        fetch_fn=fetch_disponible,
+        parar_en="reporte",
+    )
     assert result.status == "paused"
     assert "reporte" in result.message
     assert (ctx.run_dir / "reporte" / "review_request.yml").exists()
@@ -247,3 +266,115 @@ def test_ft_exclusion_ia_llega_a_16b(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert [(e["record_id"], e["reason_source"]) for e in excluidos] == [("rec-2", "ai")]
     md = (ctx.run_dir / "deliverable" / "excluidos_texto_completo.md").read_text(encoding="utf-8")
     assert "población incorrecta | IA |" in md
+
+
+def test_pipeline_result_indica_la_etapa_de_la_pausa(tmp_path: Path) -> None:
+    # Refactor de la Ola 1 (spec 2026-10-04 §7): el resultado dice en qué gate se
+    # detuvo la corrida; la reanudación (PR-C) y los helpers de test lo usan.
+    protocol = load_protocol(EXAMPLE)
+    pausa = run_pipeline(
+        protocol, EXAMPLE, RunContext(protocol.slug, tmp_path, "T-PAUSA"), search_fn=_fake_search
+    )
+    assert (pausa.status, pausa.stage) == ("paused", "screening_ta")
+
+    completa = run_pipeline(
+        protocol,
+        EXAMPLE,
+        RunContext(protocol.slug, tmp_path, "T-FIN"),
+        auto_approve=True,
+        search_fn=_fake_search,
+        fetch_fn=fetch_disponible,
+    )
+    assert (completa.status, completa.stage) == ("completed", None)
+
+
+def test_llm_calls_etiquetadas_por_etapa_y_registro(tmp_path: Path) -> None:
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T-CALLS")
+    run_pipeline(
+        protocol,
+        EXAMPLE,
+        ctx,
+        auto_approve=True,
+        search_fn=_fake_search,
+        fetch_fn=fetch_disponible,
+    )
+    lineas = (ctx.run_dir / "llm_calls.jsonl").read_text(encoding="utf-8").splitlines()
+    calls = [json.loads(x) for x in lineas]
+    assert Counter(c["stage"] for c in calls) == {
+        "screening_ta": 4,  # 2 registros × 2 miembros del ensemble
+        "screening_ft": 2,
+        "extraccion": 2,
+        "extraccion_2": 1,
+        "rob": 2,
+        "sintesis": 1,
+    }
+    ta = [(c["record_id"], c["role"]) for c in calls if c["stage"] == "screening_ta"]
+    assert ta == [
+        ("rec-1", "member:0"),
+        ("rec-1", "member:1"),
+        ("rec-2", "member:0"),
+        ("rec-2", "member:1"),
+    ]
+    manifest = yaml.safe_load((ctx.run_dir / "manifest.yml").read_text(encoding="utf-8"))
+    assert manifest["llm_calls"] == calls
+    assert manifest["autonomy_effective"] == {
+        "screening_ta": "A1",
+        "screening_ft": "A0",
+        "extraccion": "A0",
+        "rob": "A0",
+        "reporte": "A1",
+    }
+
+
+@pytest.mark.parametrize(
+    ("executed", "difiere"),
+    [("2026-06-26", True), ("2026-03-01", False)],
+    ids=["fecha_tecleada_distinta", "fechas_coincidentes"],
+)
+def test_entregables_de_busqueda_salen_del_log_del_motor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, executed: str, difiere: bool
+) -> None:
+    # M12 · cableado: PRISMA-S, el checklist de resúmenes y metodologia.md reciben el
+    # log de búsqueda. Quitar `search_log=` de cualquiera de las tres llamadas lo rompe.
+    monkeypatch.setattr(search_stage_mod, "utc_now_iso", lambda: "2026-03-01T10:00:00+00:00")
+    proto = tmp_path / "proto"
+    shutil.copytree(EXAMPLE, proto)
+    ficha = proto / "protocol.yml"
+    ficha.write_text(
+        ficha.read_text(encoding="utf-8").replace(
+            'executed: "2026-06-26"', f'executed: "{executed}"'
+        ),
+        encoding="utf-8",
+    )
+    protocol = load_protocol(proto)
+    assert protocol.search_window["executed"] == executed
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T-LOG")
+    result = run_pipeline(
+        protocol,
+        proto,
+        ctx,
+        auto_approve=True,
+        search_fn=_fake_search,
+        fetch_fn=fetch_disponible,
+    )
+    assert result.status == "completed"
+    entregable = ctx.run_dir / "deliverable"
+
+    def item(fichero: str, prefijo: str) -> str:
+        texto = (entregable / fichero).read_text(encoding="utf-8")
+        return next(x for x in texto.splitlines() if x.startswith(prefijo))
+
+    # PRISMA-S: la rama «injected» (sin cadena por base) y la fecha del motor.
+    item_8 = item("checklist_s.md", "- [ ] 8.")
+    assert "búsqueda inyectada (search_fn): sin cadena por base" in item_8
+    item_13 = item("checklist_s.md", "- [ ] 13.")
+    assert "(fecha del motor): 2026-03-01" in item_13
+    assert ("Difiere de search_window.executed" in item_13) is difiere
+    assert ("⚠" in item_13) is difiere
+    # Resúmenes: ítem 4 con la fecha registrada por el motor.
+    assert "2026-03-01 (registrada por el motor)" in item("checklist_abstracts.md", "- [ ] 4.")
+    # Métodos: fecha del motor y sin cita de cadenas por base (la búsqueda fue inyectada).
+    metodologia = (entregable / "metodologia.md").read_text(encoding="utf-8")
+    assert "(fecha registrada por el motor): 2026-03-01" in metodologia
+    assert "00_protocol/search_strings/" not in metodologia

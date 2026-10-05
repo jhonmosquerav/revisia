@@ -328,9 +328,10 @@ def test_preflight_cadena_que_es_un_directorio_se_reporta(proto_dir: Path) -> No
 
 
 def test_preflight_cadena_ilegible_de_base_manual_tambien_es_error(proto_dir: Path) -> None:
-    # El pipeline lee `search_strings/<base>.txt` de TODA base declarada antes de mirar si
-    # tiene backend (`_multi_database_search`): un `scopus.txt` en cp1252 lo tumba aunque
-    # Scopus sea manual. El preflight lo reporta igual que para una base con backend.
+    # `search_stage._query_for` lee `search_strings/<base>.txt` también de las bases
+    # `manual_only` y la instantánea lee todos los `*.txt`: un `scopus.txt` en cp1252 tumba
+    # la corrida aunque Scopus sea manual. El preflight lo reporta igual que para una base
+    # con backend.
     (proto_dir / "search_strings" / "scopus.txt").write_bytes("búsqueda".encode("cp1252"))
     report = _run(_proto(databases=["Scopus"]), proto_dir)  # no debe lanzar
     errores = _messages(report.errors)

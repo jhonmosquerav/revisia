@@ -2,8 +2,18 @@
 
 from __future__ import annotations
 
-from revisia.agents.dedup import deduplicate
+import json
+from pathlib import Path
+
+from revisia.agents.dedup import deduplicate, deduplicate_with_report
+from revisia.config import load_protocol
+from revisia.ingest import parse_ris
+from revisia.orchestration.pipeline import run_pipeline
+from revisia.orchestration.run_context import RunContext
+from revisia.schemas.artifacts import DedupReport
 from revisia.schemas.records import SearchRecord
+
+EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "demo-mini-review"
 
 
 def test_dedup_por_doi_normalizado() -> None:
@@ -62,3 +72,50 @@ def test_dedup_no_sobreescribe_extra_existente() -> None:
     ]
     unique, _ = deduplicate(recs)
     assert unique[0].extra["pmcid"] == "PMC_KEEP"  # el valor del conservado no se pisa
+
+
+def test_dedup_ids_repetidos_se_desambiguan() -> None:
+    # Hallazgo 3 del spec: el RIS conserva doi="https://doi.org/…" (otra clave de
+    # dedup) pero su id es el mismo que el del artículo traído de OpenAlex.
+    ris = "TY  - JOUR\nTI  - Mismo artículo\nDO  - https://doi.org/10.1000/ABC\nER  -\n"
+    (importado,) = parse_ris(ris)
+    openalex = SearchRecord(
+        record_id="10.1000/abc", title="Mismo artículo", doi="10.1000/abc", source_db="OpenAlex"
+    )
+    assert importado.record_id == openalex.record_id == "10.1000/abc"
+
+    unicos, informe = deduplicate_with_report([openalex, importado, importado.model_copy()])
+    assert [r.record_id for r in unicos] == ["10.1000/abc", "10.1000/abc#2"]
+    assert [(r.from_id, r.to_id) for r in informe.renamed] == [("10.1000/abc", "10.1000/abc#2")]
+    assert (informe.n_in, informe.n_out) == (3, 2)
+    (duplicado,) = informe.duplicates
+    assert duplicado.kept_record_id == "10.1000/abc#2"  # el id final del conservado
+    assert duplicado.key == "doi:https://doi.org/10.1000/abc"
+    assert importado.record_id == "10.1000/abc"  # el original no se toca
+
+
+def test_records_json_previo_a_fusion_de_dedup(tmp_path: Path) -> None:
+    def busqueda(query: str, n: int) -> list[SearchRecord]:
+        return [
+            SearchRecord(record_id="a", title="Uno", doi="10.1/x", source_db="OpenAlex"),
+            SearchRecord(
+                record_id="b",
+                title="Uno (PubMed)",
+                doi="10.1/X",
+                source_db="PubMed",
+                extra={"pmcid": "PMC1"},
+            ),
+        ]
+
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    run_pipeline(protocol, EXAMPLE, ctx, search_fn=busqueda)
+
+    crudos = json.loads((ctx.run_dir / "01_search" / "records.json").read_text("utf-8"))
+    assert [r["extra"] for r in crudos] == [{}, {"pmcid": "PMC1"}]  # antes de la fusión
+    unicos = json.loads((ctx.run_dir / "02_dedup" / "records.json").read_text("utf-8"))
+    assert [(r["record_id"], r["extra"]) for r in unicos] == [("a", {"pmcid": "PMC1"})]
+    informe = DedupReport.model_validate_json(
+        (ctx.run_dir / "02_dedup" / "dedup.json").read_text("utf-8")
+    )
+    assert [(d.record_id, d.kept_record_id) for d in informe.duplicates] == [("b", "a")]

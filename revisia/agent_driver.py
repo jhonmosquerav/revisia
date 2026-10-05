@@ -24,37 +24,49 @@ from revisia.orchestration.pipeline import (
     run_pipeline,
 )
 from revisia.orchestration.run_context import RunContext
+from revisia.orchestration.snapshot import SNAPSHOT_DIR
 
 
 def run_review_with_agent(
-    protocol_dir: str | Path,
+    protocol_dir: str | Path | None,
     callback: AgentCallback,
     *,
-    timestamp: str,
+    timestamp: str | None = None,
     runs_root: str | Path = "runs",
     max_results: int = 25,
     auto_approve: bool = True,
     mailto: str | None = None,
     search_fn: SearchFn | None = None,
     fetch_fn: FetchFn | None = None,
+    run_dir: str | Path | None = None,
 ) -> PipelineResult:
     """Ejecuta el pipeline usando ``callback`` como motor de razonamiento.
 
     Args:
-        protocol_dir: carpeta del protocolo (con ``protocol.yml``).
+        protocol_dir: carpeta del protocolo (con ``protocol.yml``); puede ser
+            ``None`` al reanudar con ``run_dir``.
         callback: función ``(LLMRequest, schema|None) -> objeto|dict|str`` que el
             proveedor ``agent`` invoca por etapa; el agente la implementa leyendo
             ``req.prompt`` y devolviendo algo que cumpla ``schema``.
-        timestamp: marca de tiempo de la corrida (``runs/<slug>-<timestamp>/``).
+        timestamp: marca de tiempo de una corrida nueva
+            (``runs/<slug>-<timestamp>/``); obligatoria si no se pasa ``run_dir``.
         auto_approve: por defecto ``True`` (el agente conduce y aprueba los
             checkpoints); pon ``False`` para pausar en cada gate HITL.
         search_fn / fetch_fn: inyecciones opcionales (tests / corpus fijado).
+        run_dir: carpeta de una corrida existente para reanudarla (Ola 1, D3):
+            el protocolo sale de su ``00_protocol/`` y ``timestamp`` se ignora.
 
     Returns:
         El :class:`PipelineResult` de la corrida.
     """
-    protocol = load_protocol(protocol_dir)
-    ctx = RunContext(protocol.slug, runs_root, timestamp)
+    if run_dir is not None:
+        ctx = RunContext.open(run_dir)
+        protocol = load_protocol(ctx.run_dir / SNAPSHOT_DIR, default_slug=ctx.slug)
+    else:
+        if timestamp is None or protocol_dir is None:
+            raise ValueError("una corrida nueva necesita protocol_dir y timestamp (o run_dir)")
+        protocol = load_protocol(protocol_dir)
+        ctx = RunContext(protocol.slug, runs_root, timestamp)
     with use_agent_callback(callback):
         return run_pipeline(
             protocol,

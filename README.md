@@ -120,6 +120,7 @@ uv run revisia validate protocols/mi-revision
 
 # 4. Ejecutar el pipeline (se pausa en cada checkpoint humano)
 uv run revisia run protocols/mi-revision --brain cerebro
+#    tras decidir (o si se interrumpe): uv run revisia run --resume runs/mi-revision-<fecha>
 
 # 5. Auditar la corrida antes de usarla (PASS/WARN/FAIL + publicabilidad)
 uv run revisia audit runs/mi-revision-<fecha>
@@ -134,26 +135,39 @@ uv run revisia check manuscrito.md          # 27 ítems: ✅/🟡/❌ + evidenci
 ## Checkpoint humano (`decision.yml`)
 
 En cada etapa con autonomía A0/A1 el pipeline escribe
-`runs/<slug>-<fecha>/<etapa>/review_request.yml` con lo que debes revisar y se
-pausa. Tu decisión va en `<etapa>/decision.yml`:
+`runs/<slug>-<fecha>/<etapa>/review_request.yml` con lo que debes revisar y, a
+su lado, `decision.template.yml`, y se pausa. Copia la plantilla como
+`<etapa>/decision.yml`, rellénala y reanuda **la misma** corrida:
 
 ```yaml
-approved: true                          # booleano YAML, sin comillas
+request_sha256: "9f2c…"                 # viene en la plantilla: ata la decisión a ESTA solicitud
+approved: true                          # booleano YAML, sin comillas (la plantilla trae null)
 actor: human:tu-nombre                  # queda en decisions_ledger.jsonl
 reason: revisé los 12 excluidos por IA  # opcional; los campos extra también se registran
 ```
 
-Un `decision.yml` vacío, con YAML roto, sin `approved` o con `"false"` entre
-comillas detiene la corrida con un mensaje que dice qué corregir: no se toma
+```bash
+uv run revisia run --resume runs/<slug>-<fecha>
+```
+
+Si la solicitud cambió desde que la revisaste, la decisión no se aplica y la
+corrida vuelve a pausar con la solicitud nueva. Un `decision.yml` vacío, con
+YAML roto, sin `request_sha256`, sin `approved` o con `"false"` entre comillas
+detiene la corrida con un mensaje que dice qué corregir (código 2): no se toma
 como rechazo ni como aprobación. Con `approved: false` en el reporte final la
 corrida termina como `rejected` (código 1) y no se sedimenta en `--brain`.
 
-> **Limitación actual (Ola 1 del plan de remediación).** `revisia run` crea una
-> carpeta nueva en cada ejecución, así que aún no reanuda una corrida pausada
-> leyendo su `decision.yml`, y la decisión es por etapa, no registro a registro.
-> Mientras tanto, `--auto-approve` sirve para demostraciones: `revisia audit`
-> las marca con WARN en `hitl` y en `final_gate` porque ningún humano aprobó,
-> aunque todavía no las declara no publicables (eso también llega en la Ola 1).
+Reanudar no repite la búsqueda ni ninguna llamada ya hecha: todo queda en los
+diarios de la corrida. Si la corrida se interrumpe (un 429, la red), sale con
+código 3, deja el error en `run.json` y se reanuda igual; con Ctrl+C, código
+130. No reanudes la misma corrida en dos procesos a la vez, y si empezaste con
+`--mailto`, pásalo también al reanudar.
+
+> **Limitación actual (Ola 1 del plan de remediación).** La decisión todavía es
+> por etapa, no registro a registro (llega con la PR-D de la Ola 1). Mientras
+> tanto, `--auto-approve` sirve para demostraciones: `revisia audit` las marca
+> con WARN en `hitl` y en `final_gate` porque ningún humano aprobó, aunque
+> todavía no las declara no publicables (eso también llega en la Ola 1).
 
 ## Exportar el artículo (HTML / PDF)
 
