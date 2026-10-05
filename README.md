@@ -27,8 +27,10 @@ razona con tu suscripción Max sin API key (ver
 > **La IA es un acelerador, no un reemplazo.** Siguiendo la posición de la
 > comunidad de síntesis de evidencia (Cochrane/JBI 2025), `revisia`
 > mantiene **revisión humana obligatoria** (HITL) en cada etapa crítica:
-> screening, extracción, riesgo de sesgo y síntesis. La decisión final es
-> siempre humana. El sistema acelera y documenta; no decide solo.
+> screening, extracción, riesgo de sesgo y síntesis. Para que una corrida sea
+> publicable, cada gate de juicio y la decisión final tienen que ser humanos
+> (`--auto-approve` existe solo para demostraciones y el checklist lo declara).
+> El sistema acelera y documenta; no decide solo.
 
 ## Qué hace
 
@@ -139,35 +141,78 @@ En cada etapa con autonomía A0/A1 el pipeline escribe
 su lado, `decision.template.yml`, y se pausa. Copia la plantilla como
 `<etapa>/decision.yml`, rellénala y reanuda **la misma** corrida:
 
-```yaml
-request_sha256: "9f2c…"                 # viene en la plantilla: ata la decisión a ESTA solicitud
-approved: true                          # booleano YAML, sin comillas (la plantilla trae null)
-actor: human:tu-nombre                  # queda en decisions_ledger.jsonl
-reason: revisé los 12 excluidos por IA  # opcional; los campos extra también se registran
-```
-
 ```bash
 uv run revisia run --resume runs/<slug>-<fecha>
 ```
 
-Si la solicitud cambió desde que la revisaste, la decisión no se aplica y la
-corrida vuelve a pausar con la solicitud nueva. Un `decision.yml` vacío, con
-YAML roto, sin `request_sha256`, sin `approved` o con `"false"` entre comillas
-detiene la corrida con un mensaje que dice qué corregir (código 2): no se toma
-como rechazo ni como aprobación. Con `approved: false` en el reporte final la
-corrida termina como `rejected` (código 1) y no se sedimenta en `--brain`.
+La plantilla trae `approved: null` (no vale tal cual: aprobar tiene que ser un
+acto deliberado) y un `request_sha256` que ata la decisión a esa solicitud: si
+la solicitud cambia, la decisión no se aplica y la corrida vuelve a pausar.
 
-Reanudar no repite la búsqueda ni ninguna llamada ya hecha: todo queda en los
-diarios de la corrida. Si la corrida se interrumpe (un 429, la red), sale con
-código 3, deja el error en `run.json` y se reanuda igual; con Ctrl+C, código
-130. No reanudes la misma corrida en dos procesos a la vez, y si empezaste con
+**Cribado (`screening_ta`, `screening_ft`): decisión por registro.** La
+solicitud lista cada registro con la propuesta de la IA (y el voto de cada
+modelo en título/abstract) y la plantilla trae una línea por registro:
+
+```yaml
+request_sha256: "9f2c…"
+approved: true
+actor: human:tu-nombre
+reason: revisé las 12 exclusiones de la IA
+records:
+  "10.1000/abc": {label: include, reason: trata cribado con LLM}   # rescata una exclusión de la IA
+  "rec-7": {label: exclude, reason: población no elegible}
+  "rec-9": {label: null, reason: null}                              # sin etiqueta: queda la propuesta IA
+```
+
+- En título/abstract (A1, por defecto) apruebas la propuesta de la IA y
+  etiquetas solo las excepciones. Si el protocolo tiene gold, la solicitud
+  dice el recall y el kappa de la IA y lista sus exclusiones (`ai_excluded`):
+  con un recall bajo `recall_target`, etiquétalas para que la corrida sea
+  publicable.
+- En texto completo (A0, por defecto) etiquetas cada informe recuperado
+  (`must_label`); excluir exige `reason`, que va a la lista de excluidos
+  (PRISMA 2020, 16b). Un `unclear` nunca pasa sin etiqueta humana
+  (`must_resolve`). Un informe no recuperado (`rescuable`) se puede rescatar si
+  conseguiste el texto por otra vía: etiquétalo con `reason`.
+- Una etiqueta explícita queda como decisión humana (`human_label`) en
+  `decisions.json` y en el ledger; aprobar en bloque deja la propuesta como
+  "IA avalada".
+
+**Extracción y RoB** se aprueban por etapa: la solicitud trae la tabla
+completa por estudio y el hash del artefacto que apruebas (`records` ahí es un
+error).
+
+**Reporte final con citas marcadas.** Si el verificador marcó citas, este gate
+exige decisión humana (aunque pases `--auto-approve`) y, para aprobar, cada
+cita marcada necesita una adjudicación con razón:
+
+```yaml
+flags:
+  "3": {verdict: false_positive, reason: "[2019] es un año, no un id de estudio"}
+```
+
+Si alguna marca es una alucinación real, rechaza (`approved: false`): no hay
+un veredicto "aceptar el riesgo".
+
+Un `decision.yml` vacío, con YAML roto, sin `request_sha256` ni `approved`,
+con ids que no están en la solicitud o incompleto para aprobar detiene la
+corrida con un mensaje que nombra qué falta (código 2): no se toma como
+rechazo ni como aprobación. Con `approved: false` en el reporte final la
+corrida termina como `rejected` (código 1) y no se sedimenta en `--brain`.
+Reanudar no repite la búsqueda ni ninguna llamada ya hecha; una corrida
+interrumpida (un 429, la red) sale con código 3 y se reanuda igual. No
+reanudes la misma corrida en dos procesos a la vez, y si empezaste con
 `--mailto`, pásalo también al reanudar.
 
-> **Limitación actual (Ola 1 del plan de remediación).** La decisión todavía es
-> por etapa, no registro a registro (llega con la PR-D de la Ola 1). Mientras
-> tanto, `--auto-approve` sirve para demostraciones: `revisia audit` las marca
-> con WARN en `hitl` y en `final_gate` porque ningún humano aprobó, aunque
-> todavía no las declara no publicables (eso también llega en la Ola 1).
+`--auto-approve` sirve para demostraciones: aprueba con las etiquetas de la IA
+(actor `auto-approve (demo)`, que el checklist trAIce y `metodologia.md`
+declaran como no humano) y pausa si hay un `unclear` en texto completo o citas
+marcadas.
+
+> **Limitación actual (Ola 1 del plan de remediación).** `revisia audit` todavía
+> marca `--auto-approve` solo con WARN en `hitl` y en `final_gate`, sin
+> declararlo no publicable; el auditor estricto llega con la última PR de la
+> Ola 1.
 
 ## Exportar el artículo (HTML / PDF)
 

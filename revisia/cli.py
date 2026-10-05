@@ -25,13 +25,13 @@ import yaml
 from pydantic import ValidationError
 
 from revisia import __version__
-from revisia.config import STAGES, load_protocol
+from revisia.config import STAGES, ReviewProtocol, load_protocol
 from revisia.llm.preflight import PreflightReport, preflight
 from revisia.llm.providers.gemini import DEFAULT_MODEL as GEMINI_DEFAULT_MODEL
 from revisia.metrics import fmt_metric
 
 
-def _protocol_warnings(protocol, protocol_dir: str) -> list[str]:
+def _protocol_warnings(protocol: ReviewProtocol, protocol_dir: str) -> list[str]:
     """Advertencias de buenas prácticas (no bloquean): evitan que una corrida
     arranque con las limitaciones típicas de una RS rápida."""
     warns: list[str] = []
@@ -50,7 +50,7 @@ def _protocol_warnings(protocol, protocol_dir: str) -> list[str]:
             "Sin gold.yml: no se calcularán kappa/recall/lost-evidence. Crea uno "
             "(o usa 'revisia gold-template <run_dir>')."
         )
-    if getattr(protocol, "grounding", "embedder") == "embedder":
+    if protocol.grounding == "embedder":
         warns.append(
             "grounding=embedder (léxico, NO cruza idiomas). Si revisas en un idioma "
             "distinto al de las fuentes, usa 'grounding: agent' (cross-lingual, gratis)."
@@ -364,16 +364,23 @@ def _cmd_run(args: argparse.Namespace) -> int:
     icon = {"completed": "✓", "paused": "⏸", "rejected": "✗"}.get(result.status, "•")
     print(f"\n{icon} {result.status.upper()} · {result.message}")
     if result.run_dir:
+        # La orden de reanudar ya va al final del mensaje de la pausa (`review_gate`): no se
+        # repite en su propia línea.
         print(f"  Corrida: {result.run_dir}")
-        if result.status == "paused":
-            print(f"  Reanuda con: revisia run --resume {result.run_dir}")
     if result.status == "completed":
         c = result.counts
         print(
             f"  PRISMA: identificados={c.identified} · dedup={c.duplicates_removed} "
             f"· cribados={c.screened} · incluidos={c.included}"
         )
-        if result.hallucination_flagged:
+        if result.hallucination_flagged and result.flags_adjudicated_by:
+            # El gate final exige una decisión humana con cada cita marcada adjudicada (M5):
+            # «revisar» mandaría a repetir un trabajo ya hecho.
+            print(
+                f"  ✓ Verificador: citas marcadas adjudicadas por {result.flags_adjudicated_by} "
+                "(una a una, en el ledger)."
+            )
+        elif result.hallucination_flagged:
             print("  ⚠ El verificador marcó posibles citas no fundamentadas: revisar.")
         print(f"  Entregable: {result.run_dir / 'deliverable'}")
         if args.brain and result.run_dir:
@@ -408,7 +415,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         recall = "n/d" if m.recall is None else f"{m.recall:.2f}"
         lost = "n/d" if m.lost_evidence is None else f"{m.lost_evidence:.2f}"
         print(
-            f"  Métricas (vs gold n={m.n}): recall={recall} · lost-evidence={lost} "
+            f"  Métricas (propuesta de la IA frente al gold humano, n={m.n}): "
+            f"recall={recall} · lost-evidence={lost} "
             f"· MCC={fmt_metric(m.mcc, '.2f')} · WMCC={fmt_metric(m.wmcc, '.2f')} "
             f"· kappa={fmt_metric(m.cohen_kappa, '.2f')}"
         )

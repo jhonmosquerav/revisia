@@ -8,7 +8,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from revisia.orchestration.run_context import RunContext, RunDirExistsError, RunInterrupted
+from revisia.orchestration.run_context import (
+    RunContext,
+    RunDirExistsError,
+    RunInterrupted,
+    resume_command,
+)
 from revisia.provenance.runmeta import RunMeta, sha256_text
 from revisia.schemas.artifacts import LLMCall
 
@@ -60,3 +65,16 @@ def test_run_interrupted_dice_como_reanudar(tmp_path: Path) -> None:
     exc = RunInterrupted(tmp_path / "demo-T", "screening_ta", "RuntimeError: 429")
     assert (exc.stage, exc.error) == ("screening_ta", "RuntimeError: 429")
     assert f"revisia run --resume {tmp_path / 'demo-T'}" in str(exc)
+
+
+def test_resume_command_entrecomilla_la_ruta_solo_si_tiene_espacios(tmp_path: Path) -> None:
+    # Sin comillas, el shell parte `runs/mi revisión-T` en dos argumentos y el comando falla.
+    sin_espacios = tmp_path / "demo-T"
+    con_espacios = tmp_path / "mis corridas" / "demo-T"
+
+    assert resume_command(sin_espacios) == f"revisia run --resume {sin_espacios}"
+    assert resume_command(con_espacios) == f'revisia run --resume "{con_espacios}"'
+    assert resume_command(str(con_espacios)) == resume_command(con_espacios)
+    # Lo usan también los mensajes de una interrupción.
+    exc = RunInterrupted(con_espacios, "rob", "RuntimeError: 429")
+    assert f'Reanuda con: revisia run --resume "{con_espacios}"' in str(exc)

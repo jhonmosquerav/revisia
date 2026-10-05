@@ -1,9 +1,10 @@
 """Agente de extracción de datos (🤖 razonamiento).
 
 Llena el formulario de extracción (definido en ``extraction_form.yml``) a partir
-del abstract, guardando la **cita textual de origen** por campo. Sin cita
-verificable, el campo queda ``not_found``/``needs_review`` y va al checkpoint
-humano (autonomía A0). En H3 se ampliará a full-text.
+del abstract y pide al modelo la **cita textual de origen** por campo; la cita se
+guarda junto al valor, pero no se verifica contra el texto. Un campo encontrado queda
+``needs_review`` y uno que no, ``not_found``; el humano revisa la tabla en el checkpoint
+(autonomía A0). En H3 se ampliará a full-text.
 """
 
 from __future__ import annotations

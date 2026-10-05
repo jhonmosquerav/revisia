@@ -92,10 +92,44 @@ def test_cli_resume_no_avisa_de_mailto_si_no_hace_falta(
     assert "empezó con --mailto" not in capsys.readouterr().out
 
 
-def test_cli_pausa_dice_como_reanudar(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+def test_cli_pausa_dice_como_reanudar_una_sola_vez(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    # El mensaje de la pausa ya termina con «Reanuda con: …»: el CLI lo imprimía otra vez
+    # en su propia línea.
     run_dir = _corrida_en_pausa(tmp_path)
     assert cli.main(["run", "--resume", str(run_dir)]) == 0
-    assert f"Reanuda con: revisia run --resume {run_dir}" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert f"Reanuda con: revisia run --resume {run_dir}" in out
+    assert out.count("Reanuda con:") == 1
+
+
+def test_cli_pausa_entrecomilla_la_ruta_con_espacios(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    run_dir = _corrida_en_pausa(tmp_path / "mis corridas")
+    assert " " in str(run_dir)
+    assert cli.main(["run", "--resume", str(run_dir)]) == 0
+    out = capsys.readouterr().out
+    assert f'Reanuda con: revisia run --resume "{run_dir}"' in out
+    assert out.count("Reanuda con:") == 1
+
+
+def test_cli_metricas_dicen_que_miden_la_propuesta_de_la_ia(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    # D6 (revisión de la Tarea 23): κ y recall evalúan la propuesta del ensemble, no la
+    # decisión final con las correcciones humanas; «vs gold» no lo decía.
+    proto = tmp_path / "proto"
+    shutil.copytree(EXAMPLE, proto)
+    (proto / "gold.yml").write_text("gold:\n  rec-1: true\n  rec-2: false\n", encoding="utf-8")
+    run_dir = _corrida_en_pausa(tmp_path, proto)
+
+    assert cli.main(["run", "--resume", str(run_dir), "--auto-approve"]) == 0
+
+    out = capsys.readouterr().out
+    assert "Métricas (propuesta de la IA frente al gold humano, n=2)" in out
+    assert "vs gold" not in out
 
 
 @pytest.mark.parametrize(

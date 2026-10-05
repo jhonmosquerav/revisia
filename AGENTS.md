@@ -3,7 +3,8 @@
 `RevisIA` es un sistema **multiagéntico mono-tarea**: cada etapa del
 pipeline PRISMA la ejecuta un agente con una sola responsabilidad, un nivel de
 autonomía explícito y una verificación posterior. Ningún agente decide solo en
-etapas de juicio; la decisión final es siempre humana (Cochrane/JBI 2025).
+etapas de juicio; para que una corrida sea publicable, cada gate de juicio y la
+decisión final los firma un humano (Cochrane/JBI 2025).
 
 ## Niveles de autonomía (A0–A3)
 
@@ -29,7 +30,7 @@ incumpla (o con una etapa o nivel desconocidos) no carga, y `revisia validate` y
 | `dedup` | Deduplicación | ⚙️ determinista | A2 | Conteo de descartes trazado |
 | `screening_ta` | Cribado título/abstract | 🤖 LLM (ensemble + voto pro-recall) | A1 | Gold humano → recall/lost-evidence/MCC/WMCC/κ; checkpoint HITL |
 | `screening_ft` | Cribado a texto completo | 🤖 LLM | A0 | Decisión humana registro a registro |
-| `extraccion` | Extracción de datos (+ doble extracción 20% con κ) | 🤖 LLM | A0 | Acuerdo entre extracciones; revisión campo a campo |
+| `extraccion` | Extracción de datos (+ doble extracción 20% con κ) | 🤖 LLM | A0 | Acuerdo entre extracciones (κ); el humano aprueba la tabla completa por estudio con el hash del artefacto |
 | `rob` | Riesgo de sesgo (RoB2/ROBINS-I/NOS/AMSTAR-2/QUADAS-2/GRADE) | 🤖 LLM propone | A0 | Juicio final del experto; export robvis |
 | `meta-analisis` | Síntesis cuantitativa (IV fijo/aleatorio DL, Q/I²/τ², Egger, forest/funnel) | ⚙️ determinista | A2 | Solo corre si el protocolo aporta `effects.yml`; export metafor |
 | `sintesis` | Síntesis narrativa (SWiM) | 🤖 LLM | A1 | **Verificador anti-alucinación** antes del gate humano |

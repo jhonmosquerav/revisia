@@ -61,6 +61,17 @@ JournalStage = Literal[
 # genérico cuando quien recupera no da uno (p. ej. un ``fetch_fn`` inyectado).
 FulltextReason = Literal["sin_url_oa", "sin_httpx", "error_http", "texto_vacio", "no_disponible"]
 
+# Motivos de fallo que NO se escriben en el diario de la recuperación: un error de red
+# (``error_http``) o la falta de ``httpx`` (``sin_httpx``) no es una respuesta definitiva sobre
+# el informe, así que congelarla haría que reanudar nunca lo reintentara y que "informes
+# no recuperados" contara fallos que ya se habrían resuelto (auditoría 2026-09-03, A9:
+# un fallo transitorio se resuelve reanudando). Se usan en esta invocación y en
+# ``retrieval.json`` y se piden otra vez al reanudar. Los motivos permanentes
+# (``sin_url_oa``, ``texto_vacio``, ``no_disponible``) y los éxitos sí se escriben. Lo comparten
+# el pipeline (qué no se escribe en el diario) y el gate de texto completo (qué avisa de que
+# se reintentará al reanudar).
+TRANSIENT_FULLTEXT_REASONS: frozenset[FulltextReason] = frozenset({"error_http", "sin_httpx"})
+
 # Ruta (relativa al directorio de la corrida) del diario de cada etapa (§4.2).
 JOURNAL_PATHS: dict[str, str] = {
     "screening_ta": "03_screening/journal.jsonl",

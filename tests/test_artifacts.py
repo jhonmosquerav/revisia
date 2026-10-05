@@ -13,6 +13,7 @@ from revisia.schemas.artifacts import (
     ARTIFACT_SCHEMA_VERSION,
     GATED_STAGES,
     JOURNAL_PATHS,
+    TRANSIENT_FULLTEXT_REASONS,
     DedupReport,
     ExcludedReport,
     FulltextReason,
@@ -127,6 +128,15 @@ def test_gated_stages_en_orden_canonico() -> None:
 def test_literales_del_contrato(alias: object, esperado: list[str]) -> None:
     # `sorted` y no `set`: además de los miembros, descarta un miembro repetido.
     assert sorted(get_args(alias)) == sorted(esperado)
+
+
+def test_motivos_transitorios_de_recuperacion_del_contrato() -> None:
+    # Escrito a mano, como los literales: ampliarlo cambia qué informes se reintentan al
+    # reanudar (A9) y qué avisa el gate de FT, y tiene que romper aquí. Y no puede nombrar
+    # un motivo que `FulltextReason` no tenga (un typo lo dejaría sin efecto en silencio).
+    assert isinstance(TRANSIENT_FULLTEXT_REASONS, frozenset)
+    assert sorted(TRANSIENT_FULLTEXT_REASONS) == ["error_http", "sin_httpx"]
+    assert set(TRANSIENT_FULLTEXT_REASONS) <= set(get_args(FulltextReason))
 
 
 def test_llm_call_hereda_runmeta_y_etiqueta() -> None:
