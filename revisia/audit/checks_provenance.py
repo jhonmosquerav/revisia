@@ -119,7 +119,7 @@ def check_schemas(ctx: AuditContext) -> Verdict:
     ]
     if errors:
         shown = "; ".join(errors[:_MAX_ERRORES])
-        more = sufijo_mas(len(errors) - _MAX_ERRORES, "artefactos")
+        more = sufijo_mas(len(errors) - _MAX_ERRORES, "artefacto")
         return "FAIL", (
             f"{len(errors)} artefacto(s) no cargan o no validan su modelo: {shown}{more}."
         )

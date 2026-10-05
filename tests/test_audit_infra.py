@@ -7,7 +7,6 @@ Spec 2026-10-04 §9.1-§9.2. Las corridas salen de la fixture ``corrida``
 from __future__ import annotations
 
 import json
-import time
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated
@@ -18,17 +17,20 @@ from audit_fixtures import (
     auditar,
     auditar_en_subproceso,
     bomba_de_alias,
+    edit_yaml,
     fila,
     pausar_en_screening_ft,
 )
-from pydantic import AfterValidator, TypeAdapter
+from pydantic import AfterValidator, BaseModel, TypeAdapter, ValidationError
 
 import revisia.audit as audit_pkg
 import revisia.audit.artifacts as artifacts_mod
 from revisia.audit import CHECKS, AuditCheck, AuditReport, CheckSpec, render_audit_md
 from revisia.audit.artifacts import (
+    NA_PROTOCOLO,
     AuditContext,
     Loaded,
+    format_validation,
     load_run,
     read_json,
     read_jsonl,
@@ -36,6 +38,7 @@ from revisia.audit.artifacts import (
     read_yaml,
     short_repr,
     short_text,
+    sufijo_mas,
     validate,
 )
 from revisia.audit.render import _md_cell
@@ -399,6 +402,17 @@ def test_bomba_de_claves_de_fusion_no_cuelga_la_carga(corrida) -> None:
 # construye con aritmética de enteros grandes, cuadrática en su longitud (400 KB ≈ 15 s), y N
 # claves enteras que colisionan en el hash (`i·(2⁶¹−1)` da hash 0 para todas) llenan el
 # diccionario en O(N²) (40 000 claves ≈ 16 s). El motor no escribe ninguno de los dos.
+#
+# Tercer vector (segunda revisión de la fase 1): las mismas claves colisionantes, pero escritas
+# como ALIAS de enteros anclados en posición de valor (`- &a1 <i·(2⁶¹−1)>` … `*a1 : 1`). Un alias
+# no es un escalar plano, así que el contador de claves enteras no lo veía (40 000 ≈ 15 s, 80 000
+# ≈ 105 s). El motor tampoco escribe nunca claves-alias (`safe_dump` no ancla escalares).
+def _claves_alias(n: int) -> str:
+    """``n`` enteros colisionantes anclados en una lista y ``n`` alias suyos como claves."""
+    anclas = "".join(f"  - &a{i} {i * (2**61 - 1)}\n" for i in range(n))
+    return "anclas:\n" + anclas + "mapa:\n" + "".join(f"  *a{i} : 1\n" for i in range(n))
+
+
 _VECTORES_CUADRATICOS = [
     pytest.param(
         lambda: "x: " + "1:" * 200_000 + "1\n", "escalar numérico", id="sexagesimal-400KB"
@@ -408,15 +422,16 @@ _VECTORES_CUADRATICOS = [
         "claves enteras",
         id="40000-claves-enteras-colisionando",
     ),
+    pytest.param(
+        lambda: _claves_alias(40_000), "alias como clave", id="40000-claves-alias-colisionando"
+    ),
 ]
 
 
 @pytest.mark.parametrize(("texto", "motivo"), _VECTORES_CUADRATICOS)
 def test_yaml_con_costes_cuadraticos_no_cuelga_la_carga(corrida, texto, motivo: str) -> None:
     (corrida / "manifest.yml").write_text(texto(), encoding="utf-8")
-    inicio = time.monotonic()
-    filas = auditar_en_subproceso(corrida, timeout=10)
-    assert time.monotonic() - inicio < 10
+    filas = auditar_en_subproceso(corrida, timeout=10)  # el `timeout` es la cota de tiempo
     assert filas["manifest"][0] == "FAIL"
     assert motivo in filas["manifest"][1]
     assert len(filas["manifest"][1]) < 500  # un motivo, no el valor hostil
@@ -457,6 +472,121 @@ def test_guarda_de_costes_cuadraticos_respeta_sus_limites(tmp_path) -> None:
     # Solo cuentan las claves: los valores enteros, las claves de texto y las entrecomilladas no.
     assert cargar("".join(f"k{i}: {i}\n" for i in range(20_000))).ok
     assert cargar("".join(f'"{i}": 1\n' for i in range(20_000))).ok
+
+
+_ALIAS_COMO_CLAVE = [
+    pytest.param("x: &k 1\n*k : 2\n", id="mapa-raiz"),
+    pytest.param("x: &k 1\n*k: 2\n", id="sin-espacio-antes-de-los-dos-puntos"),
+    pytest.param("x: &k a\ny: {*k : 2}\n", id="mapa-de-flujo"),
+    pytest.param("x: &k a\ny: [*k : 2]\n", id="par-suelto-en-secuencia-de-flujo"),
+    pytest.param("x: &k a\ny:\n  - z: 1\n    *k : 2\n", id="mapa-anidado-en-secuencia"),
+    pytest.param("x: &k a\nm:\n  p: {q: 1}\n  *k : 2\n", id="tras-un-valor-colección"),
+]
+_ALIAS_COMO_VALOR = [
+    pytest.param("a: &x 1\nb: *x\n", {"a": 1, "b": 1}, id="entero"),
+    pytest.param("a: &x [1, 2]\nb: [*x, *x]\nc: {k: *x}\n", None, id="en-secuencia-y-mapa"),
+    pytest.param("x: &k 1\nm:\n  p: {q: 1}\n  r: *k\n", None, id="tras-un-valor-colección"),
+    pytest.param("- &k 1\n- *k\n- *k\n", None, id="en-secuencia-raiz"),
+]
+
+
+@pytest.mark.parametrize("texto", _ALIAS_COMO_CLAVE)
+def test_guarda_rechaza_un_alias_en_posicion_de_clave(tmp_path, texto: str) -> None:
+    # Un alias no es un escalar plano: el contador de claves enteras no lo veía, y N alias de
+    # enteros anclados que colisionan en el hash cuestan O(N²) igual que N claves planas. El
+    # motor nunca escribe un alias como clave (`safe_dump` no ancla escalares): se rechaza
+    # cualquiera, tenga el tamaño que tenga, con un motivo acotado.
+    (tmp_path / "x.yml").write_text(texto, encoding="utf-8")
+    cargado = read_yaml(tmp_path, "x.yml", root=(dict, list))
+    assert not cargado.ok
+    assert cargado.error == (
+        "alias como clave de mapping: no admitido en artefactos del motor; no se carga porque "
+        "los alias de enteros que colisionan en el hash cuestan tiempo cuadrático"
+    )
+
+
+@pytest.mark.parametrize(("texto", "esperado"), _ALIAS_COMO_VALOR)
+def test_guarda_admite_los_alias_en_posicion_de_valor(tmp_path, texto: str, esperado) -> None:
+    # Los alias normales comparten nodos y el motor puede escribirlos en valores: siguen
+    # permitidos (solo el alias en posición de CLAVE se rechaza).
+    (tmp_path / "x.yml").write_text(texto, encoding="utf-8")
+    cargado = read_yaml(tmp_path, "x.yml", root=(dict, list))
+    assert cargado.ok, cargado.error
+    if esperado is not None:
+        assert cargado.value == esperado
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        pytest.param("? [a, b]\n: 1\n", id="clave-lista"),
+        pytest.param("? {a: 1}\n: 1\n", id="clave-mapa"),
+    ],
+)
+def test_clave_compleja_es_un_yaml_invalido_limpio(tmp_path, corrida, texto: str) -> None:
+    # El motor tampoco escribe claves complejas, y el `SafeLoader` ya las rechaza al construir
+    # (una lista o un mapa no son hashables): el veredicto es un «YAML inválido» limpio de la
+    # fila `manifest`, no un «error interno» de otro check.
+    (tmp_path / "x.yml").write_text(texto, encoding="utf-8")
+    assert read_yaml(tmp_path, "x.yml").error == "YAML inválido (ConstructorError)"
+    (corrida / "manifest.yml").write_text(texto, encoding="utf-8")
+    report = auditar(corrida)
+    manifest = fila(report, "manifest")
+    assert manifest.status == "FAIL"
+    assert "YAML inválido" in manifest.detail
+    assert [c.check_id for c in report.checks if "error interno" in c.detail] == []
+    assert len(report.checks) == len(CHECKS)
+
+
+def test_manifiesto_con_un_entero_de_1500_cifras_falla_sin_error_interno(corrida) -> None:
+    # Un entero llano de más de 1 000 caracteres es el vector cuadrático de los sexagesimales
+    # con otra forma: la guarda lo rechaza al leer el manifiesto, y el resto de los checks lo
+    # ven como un manifiesto ilegible (N/A), no como un fallo propio.
+    edit_yaml(corrida / "manifest.yml", lambda m: m["counts"].update(identified=10**1499))
+    report = auditar(corrida)
+    manifest = fila(report, "manifest")
+    assert manifest.status == "FAIL"
+    assert "escalar numérico" in manifest.detail
+    assert len(manifest.detail) < 500  # un motivo, no el entero hostil
+    assert [c.check_id for c in report.checks if "error interno" in c.detail] == []
+    assert len(report.checks) == len(CHECKS)
+
+
+def test_na_protocolo_no_apunta_a_una_fila_concreta() -> None:
+    # La causa de un protocolo ilegible puede estar en `manifest`, en `schemas` o en cualquier
+    # otra fila que lo lea: el N/A manda a mirar las filas en FAIL, no a dos filas fijas.
+    assert NA_PROTOCOLO == (
+        "no aplica: sin protocolo legible en el manifiesto (ver las filas en FAIL)."
+    )
+
+
+def test_sufijo_mas_va_en_singular_para_uno() -> None:
+    assert sufijo_mas(0) == ""
+    assert sufijo_mas(-3, "error") == ""
+    assert sufijo_mas(1) == " (+1 más)"
+    assert sufijo_mas(5) == " (+5 más)"
+    assert sufijo_mas(1, "error") == " (+1 error más)"
+    assert sufijo_mas(2, "error") == " (+2 errores más)"
+    assert sufijo_mas(1, "artefacto") == " (+1 artefacto más)"
+    assert sufijo_mas(7, "artefacto") == " (+7 artefactos más)"
+
+
+def test_format_validation_dice_un_error_mas_en_singular() -> None:
+    class Modelo(BaseModel):
+        a: int
+        b: int
+        c: int
+        d: int
+        e: int
+
+    def detalle(cuerpo: dict) -> str:
+        with pytest.raises(ValidationError) as info:
+            Modelo.model_validate(cuerpo)
+        return format_validation(info.value)
+
+    assert detalle({"a": 1}).endswith(" (+1 error más)")  # 4 errores, se listan 3
+    assert detalle({}).endswith(" (+2 errores más)")  # 5 errores, se listan 3
+    assert "más)" not in detalle({"a": 1, "b": 1})  # 3 errores: caben todos
 
 
 def test_short_repr_acota_coste_y_longitud() -> None:

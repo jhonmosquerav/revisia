@@ -176,6 +176,16 @@ def test_schemas_distingue_errores_de_un_artefacto_y_artefactos_con_error(corrid
     assert len(schemas.detail) < 1_500
 
 
+def test_schemas_dice_un_artefacto_mas_en_singular(corrida) -> None:
+    # 6 artefactos con error: se listan 5 y queda 1 («(+1 artefacto más)», no «artefactos»).
+    for rel in ARTEFACTOS_JSON[:6]:
+        (corrida / rel).write_text("{no es json", encoding="utf-8")
+    schemas = fila(auditar(corrida), "schemas")
+    assert schemas.status == "FAIL"
+    assert "(+1 artefacto más)" in schemas.detail
+    assert "artefactos más" not in schemas.detail
+
+
 # ── ledger ─────────────────────────────────────────────────────────────
 
 

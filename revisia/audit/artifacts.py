@@ -11,8 +11,8 @@ ilegible no verifica nada. «Nunca lanzan» incluye lo que ningún ``except`` at
 YAML con miles de niveles de anidamiento desborda la pila nativa de ``CSafeLoader`` y
 mata el proceso sin informe, y una bomba de claves de fusión (``<<``), un entero
 sexagesimal de cientos de KB o decenas de miles de claves enteras que colisionan en
-el hash cuelgan la carga misma; todos se rechazan antes de cargar (revisiones de la
-Tarea 4 y de la fase 1 de PR-E).
+el hash (como escalares o como alias) cuelgan la carga misma; todos se rechazan antes de
+cargar (revisiones de la Tarea 4 y de la fase 1 de PR-E).
 
 ``AuditContext`` reúne lo que los checks comparten (manifiesto, ledger,
 decisiones efectivas, estado, protocolo) y lo calcula una sola vez.
@@ -78,6 +78,12 @@ _YAML_LOADER: type = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 #   `_YAML_MAX_CLAVES_ENTERAS` (10 000) claves de mapa planas que resuelvan a `int`; el límite
 #   es del documento y no de cada mapa, porque cien mapas de 9 999 claves costarían lo mismo que
 #   uno solo de un millón. Los valores enteros (`seed: 7`) y las claves de texto no cuentan.
+#   Un ALIAS en posición de clave (`*a1 : 1`, con `a1` un entero anclado en un valor) no es un
+#   escalar y esquivaba el contador: 40 000 ≈ 15 s, 80 000 ≈ 105 s. El motor nunca escribe un
+#   alias como clave (`safe_dump` no ancla escalares: `SafeRepresenter.ignore_aliases`), así que
+#   se rechaza cualquiera, de cualquier tamaño; en valores siguen permitidos. Las claves
+#   complejas (`? [a, b]`) no hacen falta: el `SafeLoader` las rechaza al construir (no son
+#   hashables) con un «YAML inválido» limpio.
 #
 # Se mide por **eventos** del parser, no con regex sobre el texto: el parser ya resolvió
 # comillas, escapes, comentarios, el BOM y los saltos de línea que libyaml reconoce (U+2028,
@@ -115,6 +121,10 @@ _YAML_ERR_CLAVES = (
     f"más de {_YAML_MAX_CLAVES_ENTERAS} claves enteras en el documento, no admitidas en "
     "artefactos del motor; no se carga porque las que colisionan en el hash cuestan tiempo "
     "cuadrático"
+)
+_YAML_ERR_ALIAS_CLAVE = (
+    "alias como clave de mapping: no admitido en artefactos del motor; no se carga porque los "
+    "alias de enteros que colisionan en el hash cuestan tiempo cuadrático"
 )
 
 
@@ -213,7 +223,7 @@ NA_MANIFIESTO = "no aplica: el manifiesto no se pudo leer (ver `manifest`)."
 # Ídem para los checks que leen el protocolo registrado en el manifiesto (``thresholds``,
 # ``search_window`` y ``registration``): sin manifiesto, o con ``protocol`` ausente o inválido, la
 # causa ya está en otra fila (``manifest`` o ``schemas``) y aquí es un N/A (§9.2).
-NA_PROTOCOLO = "no aplica: sin protocolo legible en el manifiesto (ver `manifest` y `schemas`)."
+NA_PROTOCOLO = "no aplica: sin protocolo legible en el manifiesto (ver las filas en FAIL)."
 
 
 def sufijo_mas(resto: int, unidad: str = "") -> str:
@@ -221,11 +231,16 @@ def sufijo_mas(resto: int, unidad: str = "") -> str:
 
     Una fila con dos listas acotadas (en ``schemas``, los errores de un artefacto y los
     artefactos con error) no puede dar el mismo ``(+N más)`` para las dos: el lector no sabría
-    qué le falta por ver (revisión de la fase 1 de PR-E). ``""`` si no queda resto.
+    qué le falta por ver (revisión de la fase 1 de PR-E). ``unidad`` va en **singular**
+    (``"error"``, ``"artefacto"``) y aquí se pluraliza: ``+1 error más``, ``+2 errores más``.
+    ``""`` si no queda resto.
     """
     if resto <= 0:
         return ""
-    return f" (+{resto} {unidad} más)" if unidad else f" (+{resto} más)"
+    if not unidad:
+        return f" (+{resto} más)"
+    plural = unidad + ("s" if unidad[-1] in "aeiou" else "es")
+    return f" (+{resto} {unidad if resto == 1 else plural} más)"
 
 
 def format_validation(exc: ValidationError, *, limit: int = 3) -> str:
@@ -235,7 +250,7 @@ def format_validation(exc: ValidationError, *, limit: int = 3) -> str:
         f"{'.'.join(str(p) for p in err['loc']) or '(raíz)'}: {err['msg']}"
         for err in errors[:limit]
     ]
-    return "; ".join(parts) + sufijo_mas(len(errors) - limit, "errores")
+    return "; ".join(parts) + sufijo_mas(len(errors) - limit, "error")
 
 
 def read_text(run_dir: Path, rel: str) -> Loaded[str]:
@@ -286,8 +301,9 @@ def _yaml_guard(text: str) -> str | None:
     Recorre los eventos del parser (pila en el heap: aquí no hay la recursión nativa que
     sí tiene el compositor y que desborda) y rechaza el anidamiento por encima de
     ``_YAML_MAX_DEPTH``, cualquier clave de fusión, los escalares numéricos de más de
-    ``_YAML_MAX_ESCALAR_NUMERICO`` caracteres y los documentos con más de
-    ``_YAML_MAX_CLAVES_ENTERAS`` claves enteras planas. Ver el comentario de las constantes.
+    ``_YAML_MAX_ESCALAR_NUMERICO`` caracteres, los documentos con más de
+    ``_YAML_MAX_CLAVES_ENTERAS`` claves enteras planas y cualquier alias en posición de clave.
+    Ver el comentario de las constantes.
 
     Un ``yaml.YAMLError`` (YAML mal formado; también el ``ReaderError`` por un carácter de
     control, que el loader de Python puro lanza al construirse) no es un problema de
@@ -298,8 +314,9 @@ def _yaml_guard(text: str) -> str | None:
     (``!!merge "<<"`` y ``!!merge cualquier-cosa`` también fusionan). Un escalar plano trae
     ``style == ""`` con libyaml y ``None`` con Python puro: se mira con ``not style``.
 
-    Para saber si un escalar es una clave se lleva, por cada mapa abierto, cuántos nodos hijos
-    ha visto (los pares van clave, valor, clave, valor…); una secuencia no lleva cuenta.
+    Para saber si un escalar o un alias es una clave se lleva, por cada mapa abierto, cuántos
+    nodos hijos ha visto (los pares van clave, valor, clave, valor…); una secuencia no lleva
+    cuenta.
     """
     loader = None
     try:
@@ -312,7 +329,10 @@ def _yaml_guard(text: str) -> str | None:
             if isinstance(event, yaml.NodeEvent) and abiertas and abiertas[-1] is not None:
                 es_clave = abiertas[-1][0] % 2 == 0
                 abiertas[-1][0] += 1
-            if isinstance(event, yaml.ScalarEvent):
+            if isinstance(event, yaml.AliasEvent):
+                if es_clave:
+                    return _YAML_ERR_ALIAS_CLAVE
+            elif isinstance(event, yaml.ScalarEvent):
                 if event.tag == _YAML_MERGE_TAG or (event.value == "<<" and not event.style):
                     return _YAML_ERR_MERGE
                 largo = len(event.value) > _YAML_MAX_ESCALAR_NUMERICO
@@ -358,7 +378,12 @@ def read_yaml(run_dir: Path, rel: str, *, root: type | tuple[type, ...] = dict) 
 
     Antes de cargar, ``_yaml_guard`` rechaza el YAML con miles de niveles de anidamiento
     (desbordaría la pila nativa del loader en C y mataría el proceso) y el que lleva claves
-    de fusión (cuelgan la carga): revisiones de la Tarea 4. PyYAML tampoco lanza solo
+    de fusión (cuelgan la carga): revisiones de la Tarea 4. También rechaza (revisiones de la
+    fase 1 de PR-E) los escalares numéricos de más de 1 000 caracteres (su construcción es
+    cuadrática), los documentos con más de 10 000 claves enteras planas y todo alias en
+    posición de clave (las claves enteras que colisionan en el hash cuestan O(N²) al cargar,
+    escritas como escalares o como alias de enteros anclados): el motor no escribe nada de
+    eso. Los alias en valores siguen permitidos. PyYAML tampoco lanza solo
     ``YAMLError``: una etiqueta explícita como ``!!timestamp foo`` o ``!!bool maybe``
     produce ``AttributeError``/``KeyError``, por eso se captura ``Exception``, guarda
     incluida («nunca lanza» vale también para ella).
