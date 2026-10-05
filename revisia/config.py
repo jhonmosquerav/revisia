@@ -9,6 +9,7 @@ orquestador y los agentes consumen.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import yaml
@@ -55,6 +56,13 @@ JUDGMENT_STAGES: tuple[str, ...] = ("screening_ta", "screening_ft", "extraccion"
 # umbral en silencio (auditoría 2026-09-03, A11; D7).
 KNOWN_THRESHOLDS: frozenset[str] = frozenset({"kappa_min", "recall_target", "wmcc_fn_weight"})
 
+# Rango (cerrado) de los umbrales acotados. κ de Cohen va de -1 a 1; el recall, de 0 a 1.
+# ``wmcc_fn_weight`` solo exige ser positivo (es un peso, sin tope).
+_THRESHOLD_RANGES: dict[str, tuple[float, float]] = {
+    "recall_target": (0.0, 1.0),
+    "kappa_min": (-1.0, 1.0),
+}
+
 
 class ReviewProtocol(BaseModel):
     """Protocolo de una revisión sistemática concreta (config validada).
@@ -68,7 +76,8 @@ class ReviewProtocol(BaseModel):
         prisma_extension: extensión PRISMA aplicable (ej. ``PRISMA-2020``).
         llm: config de proveedor por etapa; la clave ``default`` es el fallback.
         autonomy: nivel de autonomía por etapa (``A0``..``A3``).
-        thresholds: umbrales (ej. ``kappa_min``, ``recall_target``).
+        thresholds: umbrales (ej. ``kappa_min``, ``recall_target``); todos finitos, con
+            ``recall_target`` en [0, 1], ``kappa_min`` en [-1, 1] y ``wmcc_fn_weight`` > 0.
         registration: registro del protocolo (ej. ``{"prospero": "CRD..."}``).
         ensemble: nombres de etapas que corren en modo ensemble multi-modelo.
         search_window: ventana temporal de la búsqueda (``{from, to, executed}``),
@@ -117,6 +126,35 @@ class ReviewProtocol(BaseModel):
                     "AGENTS.md: screening, extracción y riesgo de sesgo nunca superan A1 "
                     "(la decisión final es siempre humana). Usa A0 o A1."
                 )
+        return value
+
+    @field_validator("thresholds")
+    @classmethod
+    def _umbrales_validos(cls, value: dict[str, float]) -> dict[str, float]:
+        """Todo umbral es finito y los conocidos están en su rango.
+
+        ``.nan`` e ``.inf`` son YAML válido y ``dict[str, float]`` los acepta: un
+        ``wmcc_fn_weight: .nan`` daba un WMCC nan y ``json.dumps(allow_nan=False)``
+        reventaba en el cribado, otra vez en cada reanudación (rc 3 en bucle). Ahora el
+        protocolo no carga (rc 2 en ``validate`` y ``run``). Una clave desconocida solo
+        debe ser finita: el auditor ya avisa de las erratas (``KNOWN_THRESHOLDS``).
+        """
+        for key, number in value.items():
+            if not math.isfinite(number):
+                raise ValueError(
+                    f"thresholds.{key}: {number} no es un número finito (`.nan` e `.inf` son "
+                    "YAML válido, pero un umbral así rompe las métricas); usa un número."
+                )
+            if key in _THRESHOLD_RANGES:
+                low, high = _THRESHOLD_RANGES[key]
+                if not low <= number <= high:
+                    raise ValueError(f"thresholds.{key}: {number:g} fuera de [{low:g}, {high:g}].")
+        weight = value.get("wmcc_fn_weight")
+        if weight is not None and weight <= 0:
+            raise ValueError(
+                f"thresholds.wmcc_fn_weight: {weight:g} debe ser mayor que 0 (es el peso del "
+                "falso negativo en el WMCC)."
+            )
         return value
 
     def autonomy_for(self, stage: str) -> str:

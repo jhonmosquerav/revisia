@@ -24,7 +24,7 @@ from revisia.orchestration.hitl import (
     review_gate,
 )
 from revisia.orchestration.run_context import RunContext
-from revisia.provenance.ledger import summarize_gates
+from revisia.provenance.ledger import DecisionEntry, summarize_gates
 
 _HINTS = (
     RecordHint("a", "Estudio A", "include"),
@@ -546,6 +546,67 @@ def test_force_human_acepta_un_actor_humano(tmp_path: Path) -> None:
     assert (result.status, result.actor) == ("approved", "human:ana")
 
 
+_SIN_NOMBRE = ["human:", "human:   ", "human:\t", "human:" + chr(0xA0)]
+
+
+@pytest.mark.parametrize("actor", _SIN_NOMBRE, ids=["vacio", "espacios", "tab", "nbsp"])
+@pytest.mark.parametrize("approved", [True, False])
+def test_force_human_rechaza_un_actor_humano_sin_nombre(
+    tmp_path: Path, actor: str, approved: bool
+) -> None:
+    # `human:` a secas empezaba por el prefijo y contaba como humano: una decisión anónima
+    # cerraba el gate forzado por una cita marcada. Hace falta al menos un carácter no blanco
+    # tras el prefijo; el mensaje dice qué poner.
+    ctx = RunContext("demo", tmp_path, "T")
+    pausa = _gate(ctx, "reporte", marcas=_MARCAS, force_human=True)
+    decision = {"request_sha256": pausa.request_sha256, "approved": approved, "actor": actor}
+    if approved:
+        decision["flags"] = {
+            "0": {"verdict": "false_positive", "reason": "es un año"},
+            "3": {"verdict": "false_positive", "reason": "errata"},
+        }
+    (ctx.stage_dir("reporte") / "decision.yml").write_text(
+        yaml.safe_dump(decision), encoding="utf-8"
+    )
+
+    with pytest.raises(DecisionFileError, match=r"sin nombre.*`actor: human:ana`"):
+        _gate(ctx, "reporte", marcas=_MARCAS, force_human=True)
+    assert ctx.ledger.read_all() == []
+
+
+def test_force_human_no_reutiliza_del_ledger_una_decision_de_actor_humano_sin_nombre(
+    tmp_path: Path,
+) -> None:
+    # La misma definición de «humano» al reutilizar la decisión ya registrada: una aprobación
+    # de `human:` de esta misma solicitud no cierra el gate forzado.
+    ctx = RunContext("demo", tmp_path, "T")
+    pausa = _gate(ctx, "reporte", marcas=_MARCAS, force_human=True)
+    assert pausa.status == "paused"
+
+    def registrar(actor: str) -> None:
+        ctx.ledger.append(
+            DecisionEntry(
+                stage="reporte",
+                actor=actor,
+                autonomy="A1",
+                action="approve",
+                detail={
+                    "request_sha256": pausa.request_sha256,
+                    "decision_sha256": "d" * 64,
+                    "forced_human": True,
+                },
+            )
+        )
+
+    registrar("human:")
+    anonima = _gate(ctx, "reporte", marcas=_MARCAS, force_human=True)
+    assert (anonima.status, anonima.request_sha256) == ("paused", pausa.request_sha256)
+
+    registrar("human:ana")
+    nombrada = _gate(ctx, "reporte", marcas=_MARCAS, force_human=True)
+    assert (nombrada.status, nombrada.actor) == ("approved", "human:ana")
+
+
 def test_sin_force_human_el_actor_no_se_exige_humano(tmp_path: Path) -> None:
     # Fuera de un gate forzado, el actor sigue siendo informativo (compatibilidad).
     _, result = _responder(tmp_path, "screening_ta", actor="ana")
@@ -834,6 +895,25 @@ def test_template_sin_registros_ni_citas_deja_mapas_vacios() -> None:
     datos = yaml.safe_load(_plantilla(records=RecordPolicy(hints=()), flags=FlagPolicy(flagged=())))
     assert datos["records"] == {}
     assert datos["flags"] == {}
+
+
+@pytest.mark.parametrize(
+    ("records", "flags"),
+    [(None, None), (RecordPolicy(hints=_HINTS), None), (None, _MARCAS)],
+    ids=["solo_decision", "con_registros", "con_citas"],
+)
+def test_template_pide_sustituir_desconocido_por_el_nombre_al_pie(
+    records: RecordPolicy | None, flags: FlagPolicy | None
+) -> None:
+    # El default `human:desconocido` no cambia (el auditor le da WARN), pero la plantilla acaba
+    # con una línea que pide poner el nombre de verdad, que es lo último que se lee.
+    plantilla = _plantilla(records=records, flags=flags)
+
+    ultima = plantilla.rstrip("\n").splitlines()[-1]
+    assert ultima.startswith("#")
+    assert "desconocido" in ultima and "human:<nombre>" in ultima
+    assert 'actor: "human:desconocido"' in plantilla
+    assert yaml.safe_load(plantilla)["actor"] == "human:desconocido"
 
 
 def test_template_sin_politicas_solo_lleva_la_decision() -> None:

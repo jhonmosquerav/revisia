@@ -107,6 +107,36 @@ def test_run_con_modelo_por_retirarse_avisa_y_ejecuta(
     assert "2027-05-07" in out
 
 
+@pytest.mark.parametrize("comando", ["validate", "run"])
+def test_umbral_no_finito_sale_2_en_validate_y_run(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    entorno_listo: None,
+    comando: str,
+) -> None:
+    # `wmcc_fn_weight: .nan` cargaba, y el cribado reventaba con rc 3 en bucle (el WMCC nan no
+    # se puede volcar a JSON). Ahora el protocolo no carga: error de uso, rc 2, ya en `validate`.
+    def _no_debe_correr(*_a, **_k):
+        raise AssertionError("run_review no debe llamarse con un umbral no finito")
+
+    monkeypatch.setattr("revisia.orchestration.flow.run_review", _no_debe_correr)
+    proto = tmp_path / "p"
+    shutil.copytree(TEMPLATE_DIR, proto)
+    ficha = proto / "protocol.yml"
+    raw = yaml.safe_load(ficha.read_text(encoding="utf-8"))
+    raw["thresholds"]["wmcc_fn_weight"] = float("nan")
+    ficha.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+
+    rc = cli.main([comando, str(proto)])
+
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "protocol.yml inválido" in err
+    assert "thresholds.wmcc_fn_weight" in err and "no es un número finito" in err
+    assert "Traceback" not in err
+
+
 def test_validate_detecta_retirado_con_prefijo_de_openrouter(
     tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:

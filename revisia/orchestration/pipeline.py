@@ -86,6 +86,7 @@ from revisia.orchestration.hitl import (
     GateResult,
     RecordPolicy,
     effective_autonomy,
+    is_human_actor,
     review_gate,
 )
 from revisia.orchestration.journal import JournalError, StageJournal, entry_output, journaled
@@ -161,6 +162,10 @@ class PipelineResult:
     run_dir: Path | None = None
     # Gate en el que se detuvo la corrida (pausa o rechazo); None si se completó.
     stage: str | None = None
+    # Quién adjudicó las citas marcadas por el verificador cuando la corrida se completó:
+    # el actor humano de la decisión efectiva de `reporte`, si adjudicó cada cita marcada
+    # (``flag_review``). ``None`` si no había citas marcadas o ningún humano las adjudicó.
+    flags_adjudicated_by: str | None = None
 
 
 def _criteria_to_text(ie: dict) -> str:
@@ -450,7 +455,9 @@ def _screen_ta(
             run_ctx=run.ctx,
             role_of=_member_role,
         )
-        decision.final_label = decision.human_label or decision.ensemble_label
+        # Lo que sale del diario es la propuesta de la IA: nunca lleva `human_*`. Las
+        # etiquetas humanas explícitas las aplica `gates.apply_labels` tras el gate (D5).
+        decision.final_label = decision.ensemble_label
         decisions.append(decision)
     run.ctx.write_json("03_screening/decisions.json", [d.model_dump() for d in decisions])
 
@@ -672,7 +679,9 @@ def _fulltext(run: _Run, passed_ta: list[SearchRecord], fetch_fn: FetchFn | None
             ),
             run_ctx=run.ctx,
         )
-        decision.final_label = decision.human_label or decision.ensemble_label
+        # La propuesta de la IA, sin `human_*` (ver `_screen_ta`): el rescate y las
+        # etiquetas del humano las aplica `gates.apply_labels` tras el gate (D2, D5).
+        decision.final_label = decision.ensemble_label
         ft_decisions.append(decision)
     run.ctx.write_json("04_fulltext/decisions.json", [d.model_dump() for d in ft_decisions])
     return _FullTextStage(ft_decisions, fulltexts, outcomes)
@@ -888,7 +897,7 @@ def _verify_one(
     """
     metas: list[RunMeta] = []
     verify_kwargs: dict = {"sources": sources}
-    grounding_mode = getattr(run.protocol, "grounding", "embedder")
+    grounding_mode = run.protocol.grounding
     if grounding_mode == "agent":
         from revisia.rag.grounding import make_provider_judge
 
@@ -1144,6 +1153,23 @@ def _write_deliverables(
     return deliverable
 
 
+def _flags_adjudicated_by(marcadas: FlagPolicy | None, gate: GateResult) -> str | None:
+    """El humano que adjudicó cada cita marcada en la decisión efectiva de ``reporte``.
+
+    ``None`` si no había citas marcadas, si el actor no es un humano identificado o si
+    falta alguna por adjudicar (``flag_review`` con veredicto en la decisión efectiva).
+    El CLI lo usa para no mandar a «revisar» unas citas que un humano ya adjudicó.
+    """
+    if marcadas is None or not marcadas.flagged or gate.actor is None:
+        return None
+    if not is_human_actor(gate.actor):
+        return None
+    adjudicadas = {i for i, r in gate.flag_reviews.items() if r.verdict is not None}
+    if {str(c.index) for c in marcadas.flagged} <= adjudicadas:
+        return gate.actor
+    return None
+
+
 def _autonomy_effective(protocol: ReviewProtocol, *, forced_human: bool) -> dict[str, str]:
     """Autonomía con la que se aplica cada gate (spec §4.3, ``autonomy_effective``).
 
@@ -1375,6 +1401,7 @@ def _run_stages(
     # hash tiene que ser estable entre reanudaciones): el documento va por su hash.
     # Con citas marcadas el gate exige humano y cada cita se adjudica (M5, D8).
     documento = (deliverable / "documento.md").read_text(encoding="utf-8")
+    marcadas = report_policy(verification)
     final_gate = run.gate(
         "reporte",
         report_payload(
@@ -1384,16 +1411,18 @@ def _run_stages(
             grounding_mode=protocol.grounding,
             forced_human=forced,
         ),
-        flags=report_policy(verification),
+        flags=marcadas,
         force_human=forced,
     )
     # Un reporte rechazado ya no se informa como "completed" (auditoría
     # 2026-09-03, C1). El estado va a run.json antes del manifiesto, que lo copia.
     status, message, stage = final_gate.status, final_gate.message, "reporte"
+    adjudicadas_por = None
     if final_gate.status == "approved":
         status = "completed"
         message = f"Revisión completada · {counts.included} estudios incluidos."
         stage = None
+        adjudicadas_por = _flags_adjudicated_by(marcadas, final_gate)
     run.finish(status, stage)
     manifest_extra: dict = {
         "verification": verification.model_dump(),
@@ -1423,4 +1452,5 @@ def _run_stages(
         metrics=run.metrics,
         run_dir=run.ctx.run_dir,
         stage=stage,
+        flags_adjudicated_by=adjudicadas_por,
     )

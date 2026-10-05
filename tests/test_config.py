@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from revisia.config import ReviewProtocol, load_protocol
 
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "protocols" / "_TEMPLATE"
+EXAMPLE_DIR = Path(__file__).resolve().parent.parent / "examples" / "demo-mini-review"
 
 
 def test_plantilla_valida() -> None:
@@ -89,6 +90,74 @@ def test_load_protocol_con_a3_en_juicio_falla(tmp_path: Path) -> None:
     (proto / "protocol.yml").write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
     with pytest.raises(ValidationError):
         load_protocol(proto)
+
+
+# ── umbrales: finitos y en su rango ──────────────────────────────────────
+
+
+@pytest.mark.parametrize("valor", [float("nan"), float("inf"), -float("inf")])
+@pytest.mark.parametrize("clave", ["kappa_min", "recall_target", "wmcc_fn_weight", "kapa_min"])
+def test_umbral_no_finito_rechazado(clave: str, valor: float) -> None:
+    # `.nan` e `.inf` son YAML válido y `dict[str, float]` los aceptaba: un
+    # `wmcc_fn_weight: .nan` daba un WMCC nan y `json.dumps(allow_nan=False)` reventaba en
+    # el cribado, una y otra vez al reanudar. Vale para toda clave, también una errata.
+    raw = _template_raw()
+    raw["thresholds"][clave] = valor
+    with pytest.raises(ValidationError, match=rf"thresholds\.{clave}: .*no es un número finito"):
+        ReviewProtocol.model_validate(raw)
+
+
+@pytest.mark.parametrize(
+    ("clave", "valor", "rango"),
+    [
+        ("recall_target", -0.01, r"\[0, 1\]"),
+        ("recall_target", 1.01, r"\[0, 1\]"),
+        ("kappa_min", -1.01, r"\[-1, 1\]"),
+        ("kappa_min", 1.01, r"\[-1, 1\]"),
+        ("wmcc_fn_weight", 0.0, "mayor que 0"),
+        ("wmcc_fn_weight", -3.0, "mayor que 0"),
+    ],
+)
+def test_umbral_fuera_de_rango_rechazado(clave: str, valor: float, rango: str) -> None:
+    raw = _template_raw()
+    raw["thresholds"][clave] = valor
+    with pytest.raises(ValidationError, match=rf"thresholds\.{clave}: .*{rango}"):
+        ReviewProtocol.model_validate(raw)
+
+
+@pytest.mark.parametrize(
+    ("clave", "valor"),
+    [
+        ("recall_target", 0.0),
+        ("recall_target", 1.0),
+        ("kappa_min", -1.0),  # κ admite [-1, 1]; los extremos valen
+        ("kappa_min", 0.6),
+        ("kappa_min", 1.0),
+        ("wmcc_fn_weight", 0.5),
+        ("wmcc_fn_weight", 10.0),
+        ("otro_umbral", 5.0),  # una clave desconocida solo debe ser finita (el auditor avisa)
+    ],
+)
+def test_umbral_valido_se_acepta(clave: str, valor: float) -> None:
+    raw = _template_raw()
+    raw["thresholds"] = {clave: valor}
+    assert ReviewProtocol.model_validate(raw).thresholds == {clave: valor}
+
+
+def test_load_protocol_con_umbral_nan_en_el_yaml_falla(tmp_path: Path) -> None:
+    proto = tmp_path / "p"
+    shutil.copytree(TEMPLATE_DIR, proto)
+    raw = yaml.safe_load((proto / "protocol.yml").read_text(encoding="utf-8"))
+    raw["thresholds"]["wmcc_fn_weight"] = float("nan")  # safe_dump lo escribe como `.nan`
+    (proto / "protocol.yml").write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+    assert ".nan" in (proto / "protocol.yml").read_text(encoding="utf-8")
+    with pytest.raises(ValidationError, match="wmcc_fn_weight"):
+        load_protocol(proto)
+
+
+@pytest.mark.parametrize("carpeta", [TEMPLATE_DIR, EXAMPLE_DIR], ids=["_TEMPLATE", "demo"])
+def test_los_protocolos_incluidos_cumplen_los_umbrales(carpeta: Path) -> None:
+    assert load_protocol(carpeta).thresholds  # declaran umbrales y siguen cargando
 
 
 @pytest.mark.parametrize("contenido", ["- a\n", "hola\n", "42\n", "", "# solo un comentario\n"])

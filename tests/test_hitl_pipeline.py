@@ -15,6 +15,7 @@ from fakes import ScriptedProvider, fetch_disponible, fetch_no_disponible
 from hitl_helpers import correr_hasta, leer_solicitud, responder_gate
 from pydantic import BaseModel
 
+from revisia import cli
 from revisia.agents.fulltext import FullText
 from revisia.config import load_protocol
 from revisia.exports import PrismaCounts, render_methods, render_traice_checklist
@@ -43,7 +44,7 @@ from revisia.orchestration.hitl import (
     effective_autonomy,
     render_decision_template,
 )
-from revisia.orchestration.pipeline import run_pipeline
+from revisia.orchestration.pipeline import PipelineResult, run_pipeline
 from revisia.orchestration.run_context import RunContext
 from revisia.orchestration.snapshot import read_run_info
 from revisia.provenance.ledger import AUTO_APPROVE_ACTOR, summarize_gates
@@ -891,23 +892,24 @@ def test_ta_payload_recall_meets_target_segun_recall_y_umbral(recall, umbrales, 
 @pytest.mark.parametrize(
     ("clave", "valor"),
     [
-        ("recall_target", ".nan"),
-        ("recall_target", ".inf"),
-        ("kappa_min", ".nan"),
-        ("kappa_min", "-.inf"),
+        ("recall_target", float("nan")),
+        ("recall_target", float("inf")),
+        ("kappa_min", float("nan")),
+        ("kappa_min", -float("inf")),
     ],
 )
 def test_review_request_ta_con_umbral_no_finito_pausa_y_lo_deja_en_none(
-    tmp_path: Path, proveedor, clave: str, valor: str
+    tmp_path: Path, proveedor, clave: str, valor: float
 ) -> None:
     # `.nan` y `.inf` son YAML válido: copiados tal cual a la solicitud, `canonical_sha256`
     # (allow_nan=False) lanzaba `ValueError` y la corrida moría en `screening_ta` sin pausar.
+    # `load_protocol` ya los rechaza (rc 2, `test_umbral_no_finito_rechazado`), pero esta es la
+    # defensa de la solicitud: un protocolo armado en código (`model_copy` no valida) puede
+    # traerlos, y la solicitud los deja en `None` en vez de reventar.
     proto = _proto_con_gold(tmp_path)
-    ruta = proto / "protocol.yml"
-    umbrales = {"recall_target": "0.95", clave: valor}
-    bloque = "".join(f"  {k}: {v}\n" for k, v in umbrales.items())
-    ruta.write_text(ruta.read_text("utf-8").replace("  recall_target: 0.95\n", bloque), "utf-8")
-    protocol = load_protocol(proto)
+    protocol = load_protocol(proto).model_copy(
+        update={"thresholds": {"recall_target": 0.95, clave: valor}}
+    )
     assert not math.isfinite(protocol.thresholds[clave])
     ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
 
@@ -2869,3 +2871,83 @@ def test_corrida_con_reporte_a2_sin_citas_marcadas_dice_auto_proceed_previsto(
     assert "- reporte (A2): auto-proceed previsto (A2): sin revisión humana" in traice
     assert "Reporte final: auto-proceed previsto (A2): sin revisión humana." in metodos
     assert "pendiente de la decisión final" not in traice + metodos
+
+
+# ── el CLI tras completar con citas marcadas ya adjudicadas (revisión de la Tarea 22) ──
+
+_AVISO_CITAS = "⚠ El verificador marcó posibles citas no fundamentadas: revisar."
+
+
+def test_pipeline_result_dice_quien_adjudico_las_citas_marcadas(
+    tmp_path: Path, con_cita_inventada
+) -> None:
+    proto = _proto_reporte(tmp_path)
+    protocol = load_protocol(proto)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+    kwargs = {"search_fn": _busqueda_ft, "fetch_fn": fetch_disponible}
+    correr_hasta(protocol, proto, ctx, parar_en="reporte", **kwargs)
+    (indice,) = leer_solicitud(ctx.run_dir, "reporte")["must_adjudicate"]
+    responder_gate(
+        ctx.run_dir,
+        "reporte",
+        actor="human:ana",
+        flags={str(indice): {"verdict": "false_positive", "reason": "[2019] es un año"}},
+    )
+
+    result = run_pipeline(protocol, proto, RunContext.open(ctx.run_dir), **kwargs)
+
+    assert (result.status, result.hallucination_flagged) == ("completed", True)
+    assert result.flags_adjudicated_by == "human:ana"
+
+
+def test_cli_completado_con_citas_adjudicadas_no_manda_revisarlas(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    con_cita_inventada,
+) -> None:
+    # Un humano ya adjudicó cada cita marcada (así lo exige el gate, M5): imprimir «revisar»
+    # después de eso mandaba a repetir un trabajo hecho.
+    monkeypatch.setattr(cli, "_load_dotenv", lambda: None)
+    proto = _proto_reporte(tmp_path)
+    protocol = load_protocol(proto)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+    correr_hasta(
+        protocol,
+        proto,
+        ctx,
+        parar_en="reporte",
+        search_fn=_busqueda_ft,
+        fetch_fn=fetch_disponible,
+    )
+    (indice,) = leer_solicitud(ctx.run_dir, "reporte")["must_adjudicate"]
+    responder_gate(
+        ctx.run_dir,
+        "reporte",
+        flags={str(indice): {"verdict": "false_positive", "reason": "[2019] es un año"}},
+    )
+
+    assert cli.main(["run", "--resume", str(ctx.run_dir)]) == 0
+
+    out = capsys.readouterr().out
+    assert "COMPLETED" in out
+    assert "citas marcadas adjudicadas por human:revisora" in out
+    assert _AVISO_CITAS not in out
+    assert "⚠" not in out
+
+
+def test_cli_completado_con_citas_marcadas_sin_adjudicar_sigue_avisando(
+    tmp_path: Path, capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Si ningún humano las adjudicó (`flags_adjudicated_by` vacío), el aviso se mantiene.
+    monkeypatch.setattr(cli, "_load_dotenv", lambda: None)
+    resultado = PipelineResult(
+        "completed", "ok", counts=PrismaCounts(), hallucination_flagged=True, run_dir=tmp_path
+    )
+    monkeypatch.setattr("revisia.orchestration.flow.resume_review", lambda *_a, **_k: resultado)
+
+    assert cli.main(["run", "--resume", str(tmp_path)]) == 0
+
+    out = capsys.readouterr().out
+    assert _AVISO_CITAS in out
+    assert "adjudicadas por" not in out

@@ -38,7 +38,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError, field_validator
 
-from revisia.orchestration.run_context import RunContext
+from revisia.orchestration.run_context import RunContext, resume_command
 from revisia.provenance.ledger import (
     AUTO_APPROVE_ACTOR,
     HUMAN_ACTOR_PREFIX,
@@ -414,6 +414,12 @@ def render_decision_template(
             parts.append(f"«{_acotar(claim.claim, _MAX_TEXTO)}»")
             lines.append(f"  {_comment(' · '.join(parts))}")
             lines += _entrada(str(claim.index), "{verdict: null, reason: null}")
+    # Al pie, que es lo último que se lee antes de guardar: el default no identifica a nadie
+    # (el auditor le da WARN) y en un gate forzado ni siquiera vale (M5).
+    lines += [
+        "#",
+        "# Antes de guardar: sustituye `desconocido` en `actor` por tu nombre (human:<nombre>).",
+    ]
     return "\n".join(lines) + "\n"
 
 
@@ -716,6 +722,18 @@ def _motivos_humano(
     return motivos
 
 
+def is_human_actor(actor: str) -> bool:
+    """¿``actor`` es un humano identificado? ``human:<nombre>``, con un nombre.
+
+    El prefijo solo no basta: ``human:`` (o ``human:`` y espacios) no dice quién decidió
+    y no puede cerrar un gate que exige una decisión humana (M5). El default de la
+    plantilla, ``human:desconocido``, sí cuenta (tiene nombre; el auditor le da WARN).
+    """
+    return actor.startswith(HUMAN_ACTOR_PREFIX) and bool(
+        actor.removeprefix(HUMAN_ACTOR_PREFIX).strip()
+    )
+
+
 def effective_autonomy(autonomy: str, *, forced_human: bool) -> str:
     """Autonomía con la que se aplica un gate que puede quedar forzado a humano (M5).
 
@@ -755,8 +773,8 @@ def review_gate(
     registros que solo resuelve un humano (``must_resolve``): entonces pausa
     (D9). Con ``force_human`` (citas marcadas, M5) se ignoran ``auto_approve`` y
     una autonomía A2/A3, que pasa a A1 en la solicitud y el ledger, y solo vale una
-    decisión humana (``actor`` que empieza por ``human:``) tanto al leer
-    ``decision.yml`` como al reutilizar la del ledger. Cuando solo un
+    decisión humana (``actor`` ``human:<nombre>``, con nombre: ``is_human_actor``)
+    tanto al leer ``decision.yml`` como al reutilizar la del ledger. Cuando solo un
     ``decision.yml`` humano puede cerrar el gate (citas marcadas, ``unclear``), la
     pausa dice por qué y no ofrece ``--auto-approve``.
 
@@ -826,7 +844,8 @@ def review_gate(
     )
     request_path = stage_dir / REQUEST_FILE
     decision_path = stage_dir / DECISION_FILE
-    resume = f"Reanuda con: revisia run --resume {run_ctx.run_dir}"
+    # Una sola vez: el CLI imprime este mensaje tal cual y no repite la orden de reanudar.
+    resume = f"Reanuda con: {resume_command(run_ctx.run_dir)}"
 
     decision = _read_decision(decision_path)
     from_file = decision is not None
@@ -848,7 +867,7 @@ def review_gate(
             and effective.request_sha256 == request_sha256
             # Con `force_human` solo vale una decisión humana: una aprobación de
             # demostración de la misma solicitud no resuelve una cita marcada (M5, D8).
-            and (not force_human or effective.actor.startswith(HUMAN_ACTOR_PREFIX))
+            and (not force_human or is_human_actor(effective.actor))
         ):
             # El ledger manda: la decisión de esta solicitud ya está registrada.
             approved = effective.action != "reject"
@@ -892,10 +911,17 @@ def review_gate(
         )
 
     if from_file:
-        if force_human and not decision.actor.startswith(HUMAN_ACTOR_PREFIX):
+        if force_human and not is_human_actor(decision.actor):
             # "Humano" se define igual al entrar que al reutilizar del ledger (arriba): un
             # actor que no empiece por `human:` (`ana`, el de la aprobación de demostración)
-            # se registraría como `forced_human` y luego el ledger no lo reutilizaría.
+            # o que no tenga nombre (`human:`) se registraría como `forced_human` y luego el
+            # ledger no lo reutilizaría.
+            if decision.actor.startswith(HUMAN_ACTOR_PREFIX):
+                raise DecisionFileError(
+                    f"{decision_path}: este gate exige una decisión humana (M5) y `actor` es "
+                    f"{decision.actor!r}, sin nombre tras `{HUMAN_ACTOR_PREFIX}`: pon quién "
+                    f"decide (p. ej. `actor: {HUMAN_ACTOR_PREFIX}ana`)."
+                )
             raise DecisionFileError(
                 f"{decision_path}: este gate exige una decisión humana (M5) y `actor` es "
                 f"{decision.actor!r}: el actor debe ser `{HUMAN_ACTOR_PREFIX}<nombre>` "
