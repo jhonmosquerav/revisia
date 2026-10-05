@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -282,6 +283,12 @@ def test_la_guarda_no_depende_de_libyaml(tmp_path, monkeypatch) -> None:
     assert "anidada" in read_yaml(tmp_path, "x.yml", root=list).error
     (tmp_path / "x.yml").write_text("a: &a {x: 1}\nb: {<<: *a}\n", encoding="utf-8")
     assert "fusión" in read_yaml(tmp_path, "x.yml").error
+    # Los costes cuadráticos de carga también: el resolver del `SafeLoader` de Python puro es el
+    # mismo y sus eventos traen `style=None` en los escalares planos.
+    (tmp_path / "x.yml").write_text("x: " + "1:" * 600 + "1\n", encoding="utf-8")
+    assert "escalar numérico" in read_yaml(tmp_path, "x.yml").error
+    (tmp_path / "x.yml").write_text("".join(f"{i}: 1\n" for i in range(10_001)), encoding="utf-8")
+    assert "claves enteras" in read_yaml(tmp_path, "x.yml").error
     # Un carácter de control lanza `ReaderError` al construir el loader de Python puro: no
     # es un problema de anidamiento, la carga lo informa como YAML inválido.
     (tmp_path / "x.yml").write_text("x: \x01\n", encoding="utf-8")
@@ -386,6 +393,71 @@ def test_bomba_de_claves_de_fusion_no_cuelga_la_carga(corrida) -> None:
     assert len(filas) == len(CHECKS)
 
 
+# Dos costes cuadráticos que la guarda por eventos tampoco veía, porque no son de recursión sino
+# de carga (revisión de la fase 1 de PR-E): un entero sexagesimal plano (`x: 1:1:1:…`) se
+# construye con aritmética de enteros grandes, cuadrática en su longitud (400 KB ≈ 15 s), y N
+# claves enteras que colisionan en el hash (`i·(2⁶¹−1)` da hash 0 para todas) llenan el
+# diccionario en O(N²) (40 000 claves ≈ 16 s). El motor no escribe ninguno de los dos.
+_VECTORES_CUADRATICOS = [
+    pytest.param(
+        lambda: "x: " + "1:" * 200_000 + "1\n", "escalar numérico", id="sexagesimal-400KB"
+    ),
+    pytest.param(
+        lambda: "".join(f"{i * (2**61 - 1)}: 1\n" for i in range(40_000)),
+        "claves enteras",
+        id="40000-claves-enteras-colisionando",
+    ),
+]
+
+
+@pytest.mark.parametrize(("texto", "motivo"), _VECTORES_CUADRATICOS)
+def test_yaml_con_costes_cuadraticos_no_cuelga_la_carga(corrida, texto, motivo: str) -> None:
+    (corrida / "manifest.yml").write_text(texto(), encoding="utf-8")
+    inicio = time.monotonic()
+    filas = auditar_en_subproceso(corrida, timeout=10)
+    assert time.monotonic() - inicio < 10
+    assert filas["manifest"][0] == "FAIL"
+    assert motivo in filas["manifest"][1]
+    assert len(filas["manifest"][1]) < 500  # un motivo, no el valor hostil
+    assert [i for i, (_, detalle) in filas.items() if "error interno" in detalle] == []
+    assert len(filas) == len(CHECKS)
+
+
+def test_guarda_de_costes_cuadraticos_respeta_sus_limites(tmp_path) -> None:
+    def cargar(texto: str) -> Loaded:
+        (tmp_path / "x.yml").write_text(texto, encoding="utf-8")
+        return read_yaml(tmp_path, "x.yml")
+
+    def motivo(texto: str) -> str:
+        return cargar(texto).error or ""
+
+    def claves(n: int, sangria: str = "") -> str:
+        return "".join(f"{sangria}{i}: 1\n" for i in range(n))
+
+    # Escalares numéricos planos: hasta 1 000 caracteres pasan; con más se rechazan, sea cual sea
+    # su forma (decimal, sexagesimal, flotante) y también con la etiqueta explícita.
+    assert cargar("x: " + "9" * 1_000 + "\n").ok
+    assert "escalar numérico" in motivo("x: " + "9" * 1_001 + "\n")
+    assert "escalar numérico" in motivo("x: " + "1:" * 600 + "1\n")
+    assert "escalar numérico" in motivo("x: " + "9" * 1_001 + ".5\n")
+    assert "escalar numérico" in motivo('x: !!int "' + "9" * 1_001 + '"\n')
+    assert "escalar numérico" in motivo('x: !!float "' + "9" * 1_001 + '.5"\n')
+    # Lo que no se resolvería a int ni a float no se toca, por largo que sea.
+    assert cargar("x: " + "9" * 1_001 + "a\n").ok  # texto plano
+    assert cargar('x: "' + "9" * 5_000 + '"\n').ok  # entrecomillado: una cadena
+    assert cargar("x: !!str " + "9" * 5_000 + "\n").ok
+    assert cargar("x: |\n  " + "9" * 5_000 + "\n").ok  # bloque literal
+    # Claves enteras planas: hasta 10 000 pasan; con una más se rechaza el documento.
+    assert cargar(claves(10_000)).ok
+    assert "claves enteras" in motivo(claves(10_001))
+    # El límite es del documento, no de cada mapa: repartirlas en varios no lo esquiva.
+    dos_mapas = "a:\n" + claves(6_000, "  ") + "b:\n" + claves(6_000, "  ")
+    assert "claves enteras" in motivo(dos_mapas)
+    # Solo cuentan las claves: los valores enteros, las claves de texto y las entrecomilladas no.
+    assert cargar("".join(f"k{i}: {i}\n" for i in range(20_000))).ok
+    assert cargar("".join(f'"{i}": 1\n' for i in range(20_000))).ok
+
+
 def test_short_repr_acota_coste_y_longitud() -> None:
     assert short_repr("pipeline") == "'pipeline'"
     assert short_repr([1, 2]) == "[1, 2]"
@@ -401,6 +473,13 @@ def test_short_text_deja_las_cadenas_tal_cual_y_acota_el_resto() -> None:
     assert short_text("x" * 10_000) == "x" * 119 + "…"
     assert short_text([1, 2]) == "[1, 2]"
     assert len(short_text([[[[1] * 9] * 9] * 9] * 9)) <= 120
+
+
+def test_short_text_muestra_las_fechas_en_iso() -> None:
+    # PyYAML carga `executed: 2026-10-04` (sin comillas) como `datetime.date`, y su `repr`
+    # (`datetime.date(2026, 10, 4)`) no es una fecha que un revisor reconozca en el informe.
+    assert short_text(date(2026, 10, 4)) == "2026-10-04"
+    assert short_text(datetime(2026, 10, 4, 12, 30, tzinfo=UTC)) == "2026-10-04T12:30:00+00:00"
 
 
 @pytest.mark.parametrize(
@@ -466,6 +545,24 @@ def test_check_que_revienta_es_fail_y_el_resto_sigue(corrida, monkeypatch) -> No
     assert "no se considera verificada" in gold.detail
     assert len(report.checks) == len(CHECKS)
     assert fila(report, "final_gate").status == "PASS"
+
+
+def test_el_mensaje_de_la_excepcion_de_un_check_va_acotado(corrida, monkeypatch) -> None:
+    # El mensaje de una excepción puede traer un valor del artefacto hostil (un id de 50 000
+    # caracteres en un `KeyError`): no entra entero en el detalle.
+    def _roto(_ctx):
+        raise ValueError("x" * 50_000)
+
+    roto = tuple(
+        CheckSpec(s.check_id, s.item_ref, s.stage, _roto) if s.check_id == "gold" else s
+        for s in CHECKS
+    )
+    monkeypatch.setattr(audit_pkg, "CHECKS", roto)
+    gold = fila(auditar(corrida), "gold")
+    assert gold.status == "FAIL"
+    assert "error interno del auditor (ValueError)" in gold.detail
+    assert "no se considera verificada" in gold.detail
+    assert len(gold.detail) < 1_000
 
 
 def test_invariante_na_sin_fail_se_convierte_en_fail() -> None:

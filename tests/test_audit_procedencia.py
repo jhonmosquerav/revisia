@@ -56,6 +56,19 @@ def test_manifest_proveedor_real_pasa(corrida) -> None:
     assert "gemini:fake-a" in manifest.detail
 
 
+def test_manifest_con_miles_de_modelos_largos_se_acota(corrida) -> None:
+    # `models_used` de un manifiesto editado a mano: se listan los primeros y se cuenta el resto,
+    # y cada nombre va recortado (diez nombres de 120 caracteres ya pasaban de 1 000).
+    reetiquetar_llamadas(corrida, provider="gemini", deterministic=False)
+    modelos = [f"proveedor:modelo-{i}-" + "x" * 500 for i in range(2_000)]
+    edit_yaml(corrida / "manifest.yml", lambda m: m.update(models_used=modelos))
+    manifest = fila(auditar(corrida), "manifest")
+    assert manifest.status == "PASS"
+    assert "(+1990 más)" in manifest.detail
+    assert manifest.detail.count("proveedor:modelo-") == 10
+    assert len(manifest.detail) < 1_000
+
+
 # ── schemas y robustez ────────────────────────────────────────────────
 
 
@@ -129,6 +142,23 @@ def test_schemas_acota_el_detalle_ante_claves_hostiles(corrida) -> None:
     assert schemas.status == "FAIL"
     assert "05_extraction/extractions.json" in schemas.detail
     assert len(schemas.detail) < 1_000
+
+
+def test_schemas_distingue_errores_de_un_artefacto_y_artefactos_con_error(corrida) -> None:
+    # Dos "(+N más)" distintos en la misma fila (los errores que `format_validation` no lista de
+    # un artefacto y los artefactos que no caben en la fila) eran indistinguibles.
+    edit_json(
+        corrida / "05_extraction" / "extractions.json", lambda _e: {f"k{i}": {} for i in range(9)}
+    )
+    for rel in ARTEFACTOS_JSON[:7]:
+        if rel != "05_extraction/extractions.json":
+            (corrida / rel).write_text("{no es json", encoding="utf-8")
+    schemas = fila(auditar(corrida), "schemas")
+    assert schemas.status == "FAIL"
+    assert "errores más" in schemas.detail  # los de `extractions.json`: 9 errores, se listan 3
+    assert "(+2 artefactos más)" in schemas.detail  # 7 artefactos con error, se listan 5
+    assert "(+2 más)" not in schemas.detail
+    assert len(schemas.detail) < 1_500
 
 
 # ── ledger ─────────────────────────────────────────────────────────────

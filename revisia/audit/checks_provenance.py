@@ -23,6 +23,7 @@ from revisia.audit.artifacts import (
     Loaded,
     short_repr,
     short_text,
+    sufijo_mas,
 )
 from revisia.audit.model import Verdict
 from revisia.orchestration.run_context import PROVENANCE_PIPELINE
@@ -30,6 +31,7 @@ from revisia.schemas.artifacts import GATED_STAGES
 
 _MAX_ERRORES = 5
 _MAX_MODELOS = 10
+_LIMITE_MODELO = 60  # caracteres por modelo listado: diez de 120 ya pasaban de 1 000
 _LIMITE_ERROR = 300  # caracteres por artefacto con error: un `loc` hostil no llena el detalle
 
 
@@ -42,9 +44,8 @@ def _nombres(models: Any) -> str:
     """
     if not isinstance(models, list | tuple):
         return short_text(models)
-    names = ", ".join(short_text(m) for m in models[:_MAX_MODELOS])
-    more = len(models) - _MAX_MODELOS
-    return names + (f" (+{more} más)" if more > 0 else "")
+    names = ", ".join(short_text(m, limit=_LIMITE_MODELO) for m in models[:_MAX_MODELOS])
+    return names + sufijo_mas(len(models) - _MAX_MODELOS)
 
 
 def check_manifest(ctx: AuditContext) -> Verdict:
@@ -118,7 +119,7 @@ def check_schemas(ctx: AuditContext) -> Verdict:
     ]
     if errors:
         shown = "; ".join(errors[:_MAX_ERRORES])
-        more = f" (+{len(errors) - _MAX_ERRORES} más)" if len(errors) > _MAX_ERRORES else ""
+        more = sufijo_mas(len(errors) - _MAX_ERRORES, "artefactos")
         return "FAIL", (
             f"{len(errors)} artefacto(s) no cargan o no validan su modelo: {shown}{more}."
         )

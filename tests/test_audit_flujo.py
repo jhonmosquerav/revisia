@@ -299,8 +299,10 @@ def test_arithmetic_conteos_invalidos_son_no_verificables_y_acotados(corrida, co
 
 
 def test_arithmetic_conteo_enorme_valido_no_desborda_el_detalle(corrida) -> None:
-    # Un entero de 4 000 cifras sí valida (`int`), pero no puede aparecer entero en el detalle.
-    edit_yaml(corrida / "manifest.yml", lambda m: m["counts"].update(identified=10**4000))
+    # Un entero de 900 cifras sí valida (`int`) y pasa la guarda del YAML (los escalares
+    # numéricos de más de 1 000 caracteres ya no se cargan: ver `test_audit_infra.py`), pero no
+    # puede aparecer entero en el detalle.
+    edit_yaml(corrida / "manifest.yml", lambda m: m["counts"].update(identified=10**900))
     arithmetic = fila(auditar(corrida), "arithmetic")
     assert arithmetic.status == "FAIL"
     assert "error interno" not in arithmetic.detail

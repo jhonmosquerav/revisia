@@ -39,7 +39,7 @@ from revisia.audit import (
     checks_search,
     checks_timing,
 )
-from revisia.audit.artifacts import AuditContext, load_run
+from revisia.audit.artifacts import AuditContext, load_run, short_text
 from revisia.audit.model import AuditCheck, AuditReport, Verdict
 from revisia.audit.render import render_audit_md
 
@@ -104,8 +104,8 @@ def _run_one(spec: CheckSpec, ctx: AuditContext) -> AuditCheck:
             spec.check_id,
             spec.item_ref,
             "FAIL",
-            f"error interno del auditor ({type(exc).__name__}): {exc} — la corrida no se "
-            "considera verificada.",
+            f"error interno del auditor ({type(exc).__name__}): {short_text(str(exc))} — la "
+            "corrida no se considera verificada.",
         )
     return AuditCheck(spec.check_id, spec.item_ref, status, detail)
 

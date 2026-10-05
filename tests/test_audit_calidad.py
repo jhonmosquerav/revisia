@@ -158,14 +158,33 @@ def test_thresholds_kappa_min_no_medible_advierte_sin_lanzar(corrida, umbral: fl
     assert len(thresholds.detail) < 400
 
 
-def test_thresholds_recall_de_las_metricas_no_finito_o_fuera_de_rango_advierte(corrida) -> None:
-    base = metricas_validas(20, 5, 0, 5)
-    for recall in (math.nan, math.inf, 1.5, -0.2):
-        escribir_metricas(corrida, {**base, "recall": recall})
-        thresholds = fila(auditar(corrida), "thresholds")
-        assert thresholds.status == "WARN", recall
-        assert "no medible (recall o matriz de confusión fuera de rango" in thresholds.detail
-        assert "error interno" not in thresholds.detail
+def test_thresholds_decide_con_el_recall_de_la_matriz_y_no_con_el_guardado(corrida) -> None:
+    # Revisión de la fase 1 de PR-E: el IC de Wilson y los positivos ya salían de la matriz, pero
+    # la decisión usaba el `recall` de `metrics.json`: un 1.0 guardado con una matriz que da 0.25
+    # (tp=1, fn=3) pasaba el umbral sobre una cifra que el propio detalle desmentía.
+    escribir_metricas(corrida, {**metricas_validas(1, 0, 3, 10), "recall": 1.0})
+    report = auditar(corrida)
+    thresholds = fila(report, "thresholds")
+    assert thresholds.status == "FAIL"
+    assert "recall 0.25 [IC95 0.05–0.70] < 0.95 con 4 positivos" in thresholds.detail
+    assert "recall 1.00" not in thresholds.detail
+    assert fila(report, "arithmetic").status == "FAIL"  # la discrepancia la marca `arithmetic`
+    assert not report.publishable
+
+
+@pytest.mark.parametrize(
+    "recall", [math.nan, math.inf, 1.5, -0.2], ids=["nan", "inf", "1.5", "-0.2"]
+)
+def test_thresholds_con_un_recall_guardado_absurdo_decide_con_la_matriz(corrida, recall) -> None:
+    # El recall guardado ya no entra en la decisión: la matriz (20 positivos, recall 1.0) manda y
+    # `arithmetic` marca que `metrics.json` no cuadra consigo mismo.
+    escribir_metricas(corrida, {**metricas_validas(20, 5, 0, 5), "recall": recall})
+    report = auditar(corrida)
+    thresholds = fila(report, "thresholds")
+    assert thresholds.status == "PASS", thresholds.detail
+    assert thresholds.detail == "recall 1.00 [IC95 0.84–1.00] ≥ 0.95 con 20 positivos."
+    assert fila(report, "arithmetic").status == "FAIL"
+    assert not report.publishable
 
 
 def test_thresholds_matriz_con_celdas_negativas_advierte_sin_lanzar(corrida) -> None:
@@ -173,8 +192,49 @@ def test_thresholds_matriz_con_celdas_negativas_advierte_sin_lanzar(corrida) -> 
     escribir_metricas(corrida, {**metricas_validas(5, 0, 5, 10), "tp": -5})
     thresholds = fila(auditar(corrida), "thresholds")
     assert thresholds.status == "WARN"
-    assert "no medible (recall o matriz de confusión fuera de rango" in thresholds.detail
+    assert "no medible (matriz de confusión fuera de rango" in thresholds.detail
     assert "error interno" not in thresholds.detail
+
+
+@pytest.mark.parametrize("kappa", [1e308, 2.0, -1.5], ids=["1e308", "2", "menos-1.5"])
+def test_thresholds_kappa_fuera_de_su_rango_no_es_verificable(corrida, kappa: float) -> None:
+    # κ ∈ [-1, 1]: fuera de ese intervalo es un dato corrupto, no un PASS. Con 1e308, además,
+    # `:.2f` escribía 313 caracteres en el detalle.
+    editar_protocolo(
+        corrida, lambda p: p.update(thresholds={"recall_target": 0.95, "kappa_min": 0.6})
+    )
+    escribir_metricas(corrida, {**metricas_validas(20, 5, 0, 5), "cohen_kappa": kappa})
+    thresholds = fila(auditar(corrida), "thresholds")
+    assert thresholds.status == "WARN"
+    assert "κ" in thresholds.detail and "fuera de [-1, 1]: no verificable" in thresholds.detail
+    assert len(thresholds.detail) < 300
+
+
+def test_thresholds_kappa_en_el_limite_con_redondeo_no_se_marca_fuera_de_rango(corrida) -> None:
+    # Un MCC o un κ calculado en coma flotante puede salir 1.0000000000000002: no es un dato
+    # corrupto. La holgura es de 1e-9; `arithmetic` ya compara con esa misma tolerancia.
+    editar_protocolo(
+        corrida, lambda p: p.update(thresholds={"recall_target": 0.95, "kappa_min": 0.6})
+    )
+    escribir_metricas(corrida, {**metricas_validas(20, 5, 0, 5), "cohen_kappa": 1.0000000000000002})
+    thresholds = fila(auditar(corrida), "thresholds")
+    assert thresholds.status == "PASS", thresholds.detail
+    assert "κ 1.00 ≥ 0.60" in thresholds.detail
+
+
+def test_gold_con_cifras_enormes_o_fuera_de_rango_va_acotado(corrida) -> None:
+    # `fmt_metric` de 1e308 daba 313 caracteres por cifra.
+    escribir_metricas(corrida, {**metricas_validas(20, 5, 0, 5), "recall": 1e308})
+    gold = fila(auditar(corrida), "gold")
+    assert "e+308" in gold.detail
+    assert len(gold.detail) < 300
+    escribir_metricas(
+        corrida, {**metricas_validas(20, 5, 0, 5), "cohen_kappa": 1e308, "mcc": -1e308}
+    )
+    gold = fila(auditar(corrida), "gold")
+    assert gold.status == "WARN"
+    assert "kappa y MCC fuera de [-1, 1]: no verificable" in gold.detail
+    assert len(gold.detail) < 300
 
 
 def test_thresholds_kappa_no_finito_es_indefinido(corrida) -> None:
@@ -494,3 +554,38 @@ def test_registration_sin_registro_advierte(corrida) -> None:
     registration = fila(auditar(corrida), "registration")
     assert registration.status == "WARN"
     assert "Sin registro" in registration.detail
+
+
+def test_registration_con_miles_de_claves_se_acota(corrida) -> None:
+    # El detalle de un manifiesto editado a mano no puede crecer con el número de claves (2 000
+    # claves daban ~50 KB): se listan las primeras y se cuenta el resto.
+    registro = {f"registro{i}": f"valor{i}" for i in range(2_000)}
+    editar_protocolo(corrida, lambda p: p.update(registration=registro))
+    registration = fila(auditar(corrida), "registration")
+    assert registration.status == "PASS"
+    assert "(+1990 más)" in registration.detail
+    assert registration.detail.count("registro") == 10
+    assert len(registration.detail) < 1_000
+
+
+def test_registration_con_claves_y_valores_enormes_se_acota(corrida) -> None:
+    registro = {f"r{i}_" + "k" * 500: "v" * 500 for i in range(30)}
+    editar_protocolo(corrida, lambda p: p.update(registration=registro))
+    registration = fila(auditar(corrida), "registration")
+    assert registration.status == "PASS"
+    assert "(+20 más)" in registration.detail
+    assert len(registration.detail) < 1_000
+
+
+def test_search_window_con_una_fecha_yaml_sin_comillas_se_muestra_en_iso(corrida) -> None:
+    # PyYAML carga `executed: 2026-06-26` como `datetime.date`: sin `isoformat()` el detalle
+    # decía `executed: datetime.date(2026, 6, 26)`.
+    manifiesto = corrida / "manifest.yml"
+    texto = manifiesto.read_text(encoding="utf-8")
+    assert "executed: '2026-06-26'" in texto
+    manifiesto.write_text(
+        texto.replace("executed: '2026-06-26'", "executed: 2026-06-26"), encoding="utf-8"
+    )
+    window = fila(auditar(corrida), "search_window")
+    assert window.status == "WARN"
+    assert "fecha tecleada (`executed: 2026-06-26`)" in window.detail

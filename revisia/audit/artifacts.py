@@ -3,14 +3,16 @@
 Los loaders **nunca lanzan**: devuelven un :class:`Loaded` con el valor o con
 el error (``OSError``, ``UnicodeDecodeError``, JSON/YAML inválido, raíz de tipo
 inesperado, ``ValidationError``, ``RecursionError``, YAML demasiado anidado, YAML
-con claves de fusión y cualquier otra excepción del parser). Antes de la Ola 1 un
-``manifest.yml`` con raíz de lista reventaba el auditor con ``AttributeError``
-y una línea corrupta del ledger se descartaba en silencio (auditoría
-2026-09-03, A11/C3): un auditor que revienta o que ignora lo ilegible no
-verifica nada. «Nunca lanzan» incluye lo que ningún ``except`` atrapa: un YAML
-con miles de niveles de anidamiento desborda la pila nativa de ``CSafeLoader`` y
-mata el proceso sin informe, y una bomba de claves de fusión (``<<``) cuelga la
-carga misma; ambos se rechazan antes de cargar (revisiones de la Tarea 4).
+con claves de fusión o con costes cuadráticos de carga y cualquier otra excepción
+del parser). Antes de la Ola 1 un ``manifest.yml`` con raíz de lista reventaba el
+auditor con ``AttributeError`` y una línea corrupta del ledger se descartaba en
+silencio (auditoría 2026-09-03, A11/C3): un auditor que revienta o que ignora lo
+ilegible no verifica nada. «Nunca lanzan» incluye lo que ningún ``except`` atrapa: un
+YAML con miles de niveles de anidamiento desborda la pila nativa de ``CSafeLoader`` y
+mata el proceso sin informe, y una bomba de claves de fusión (``<<``), un entero
+sexagesimal de cientos de KB o decenas de miles de claves enteras que colisionan en
+el hash cuelgan la carga misma; todos se rechazan antes de cargar (revisiones de la
+Tarea 4 y de la fase 1 de PR-E).
 
 ``AuditContext`` reúne lo que los checks comparten (manifiesto, ledger,
 decisiones efectivas, estado, protocolo) y lo calcula una sola vez.
@@ -21,6 +23,7 @@ from __future__ import annotations
 import json
 import reprlib
 from dataclasses import dataclass
+from datetime import date
 from functools import cached_property
 from pathlib import Path
 from typing import Any, Generic, TypeVar
@@ -54,15 +57,27 @@ _YAML_LOADER: type = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 # Guarda contra el YAML hostil: UNA sola, por eventos del parser, SIEMPRE, antes de cargar.
 #
-# Dos vectores matan o cuelgan el proceso sin que ningún `except` lo atrape:
+# Cuatro vectores matan o cuelgan el proceso sin que ningún `except` lo atrape:
 # - Anidamiento: `CSafeLoader` compone los nodos con recursión nativa de C, que
-#   `sys.setrecursionlimit` no limita. Medido en Windows con Python 3.13, a ~2 690 niveles
-#   desborda la pila (0xC00000FD) y mata el proceso sin informe. Los manifiestos reales
-#   tienen profundidad < 20; el límite uniforme de 500 niveles queda ≈ 5× bajo el crash.
+#   `sys.setrecursionlimit` no limita. Medido en Windows con Python 3.13, a ~2 670 niveles
+#   (2 669-2 673 según la sintaxis) desborda la pila (0xC00000FD) y mata el proceso sin
+#   informe. Los manifiestos reales tienen profundidad < 20; el límite uniforme de 500
+#   niveles queda ≈ 5× bajo el crash.
 # - Claves de fusión (`<<`): `flatten_mapping` copia los pares de cada alias sin memoizar,
 #   así que `aN: &aN {<<: [*a(N-1) ×9]}` los multiplica ×9 por nivel (el nivel 8 ya tarda
 #   segundos; el 10, minutos y decenas de GB). El motor nunca escribe `<<`: se rechaza. Los
 #   alias normales (`*a`) comparten nodos y siguen permitidos.
+# - Enteros larguísimos: el resolver YAML 1.1 de PyYAML tiene los enteros sexagesimales
+#   (`1:1:1:…`) y su construcción hace aritmética de enteros grandes, cuadrática en la longitud
+#   (un escalar plano de 400 KB tarda ~15 s). El motor escribe números de unas pocas cifras:
+#   se rechaza todo escalar de más de `_YAML_MAX_ESCALAR_NUMERICO` (1 000) caracteres que el
+#   resolver del propio loader resolvería a `int` o `float` (o que lleve esa etiqueta explícita),
+#   sin construir su valor.
+# - Claves enteras que colisionan: `i·(2⁶¹−1)` da hash 0 para todo `i`, y N claves así llenan el
+#   diccionario en O(N²) (40 000 claves ≈ 16 s). Se rechaza el documento con más de
+#   `_YAML_MAX_CLAVES_ENTERAS` (10 000) claves de mapa planas que resuelvan a `int`; el límite
+#   es del documento y no de cada mapa, porque cien mapas de 9 999 claves costarían lo mismo que
+#   uno solo de un millón. Los valores enteros (`seed: 7`) y las claves de texto no cuentan.
 #
 # Se mide por **eventos** del parser, no con regex sobre el texto: el parser ya resolvió
 # comillas, escapes, comentarios, el BOM y los saltos de línea que libyaml reconoce (U+2028,
@@ -75,7 +90,14 @@ _YAML_LOADER: type = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 # Se aplica con el loader que luego carga (`CSafeLoader` si existe) y funciona igual con el
 # `SafeLoader` de Python puro, para que el veredicto no dependa de tener libyaml.
 _YAML_MAX_DEPTH = 500  # niveles de colección (mapas/listas), también el mapa raíz
+_YAML_MAX_ESCALAR_NUMERICO = 1_000  # caracteres de un escalar que resuelve a int o float
+_YAML_MAX_CLAVES_ENTERAS = 10_000  # claves de mapa planas que resuelven a int, por documento
 _YAML_MERGE_TAG = "tag:yaml.org,2002:merge"
+_YAML_INT_TAG = "tag:yaml.org,2002:int"
+_YAML_FLOAT_TAG = "tag:yaml.org,2002:float"
+# Con qué carácter puede empezar un entero plano (YAML 1.1: `+5`, `-5`, `0x1F`, `1_000`, `1:30`):
+# evita resolver cada clave de texto de un manifiesto de miles de llamadas.
+_YAML_INICIO_ENTERO = frozenset("+-0123456789")
 
 _YAML_ERR_DEPTH = (
     f"estructura YAML demasiado anidada (más de {_YAML_MAX_DEPTH} niveles de colecciones "
@@ -84,6 +106,15 @@ _YAML_ERR_DEPTH = (
 _YAML_ERR_MERGE = (
     "claves de fusión YAML (<<) no admitidas en artefactos del motor; no se carga para no "
     "multiplicar sus pares en memoria"
+)
+_YAML_ERR_NUMERO = (
+    f"escalar numérico de más de {_YAML_MAX_ESCALAR_NUMERICO} caracteres no admitido en "
+    "artefactos del motor; no se carga porque construirlo cuesta tiempo cuadrático"
+)
+_YAML_ERR_CLAVES = (
+    f"más de {_YAML_MAX_CLAVES_ENTERAS} claves enteras en el documento, no admitidas en "
+    "artefactos del motor; no se carga porque las que colisionan en el hash cuestan tiempo "
+    "cuadrático"
 )
 
 
@@ -162,11 +193,15 @@ def short_text(value: object, *, limit: int = 120) -> str:
     """Valor del manifiesto para un detalle: las cadenas tal cual (recortadas), lo demás acotado.
 
     Una cadena no puede ser una bomba de alias, y sin comillas el detalle se lee igual que
-    antes de acotarlo; todo lo demás (listas, mapas) pasa por :func:`short_repr`. El resultado
-    es siempre codificable en UTF-8 (:func:`_acotar`).
+    antes de acotarlo. Una fecha (``datetime.date`` o ``datetime.datetime``: PyYAML carga
+    ``executed: 2026-10-04`` sin comillas como ``date``) va en ISO-8601, no como el ``repr``
+    ``datetime.date(2026, 10, 4)``. Todo lo demás (listas, mapas) pasa por :func:`short_repr`.
+    El resultado es siempre codificable en UTF-8 (:func:`_acotar`).
     """
     if isinstance(value, str):
         return _acotar(value, limit)
+    if isinstance(value, date):
+        return _acotar(value.isoformat(), limit)
     return short_repr(value, limit=limit)
 
 
@@ -176,16 +211,26 @@ def short_text(value: object, *, limit: int = 120) -> str:
 NA_MANIFIESTO = "no aplica: el manifiesto no se pudo leer (ver `manifest`)."
 
 
+def sufijo_mas(resto: int, unidad: str = "") -> str:
+    """`` (+N más)`` de una lista acotada, o `` (+N <unidad> más)`` si hay que decir qué falta.
+
+    Una fila con dos listas acotadas (en ``schemas``, los errores de un artefacto y los
+    artefactos con error) no puede dar el mismo ``(+N más)`` para las dos: el lector no sabría
+    qué le falta por ver (revisión de la fase 1 de PR-E). ``""`` si no queda resto.
+    """
+    if resto <= 0:
+        return ""
+    return f" (+{resto} {unidad} más)" if unidad else f" (+{resto} más)"
+
+
 def format_validation(exc: ValidationError, *, limit: int = 3) -> str:
-    """``loc: msg; loc: msg (+k más)`` a partir de una ``ValidationError``."""
+    """``loc: msg; loc: msg (+k errores más)`` a partir de una ``ValidationError``."""
     errors = exc.errors()
     parts = [
         f"{'.'.join(str(p) for p in err['loc']) or '(raíz)'}: {err['msg']}"
         for err in errors[:limit]
     ]
-    if len(errors) > limit:
-        parts.append(f"+{len(errors) - limit} más")
-    return "; ".join(parts)
+    return "; ".join(parts) + sufijo_mas(len(errors) - limit, "errores")
 
 
 def read_text(run_dir: Path, rel: str) -> Loaded[str]:
@@ -235,7 +280,9 @@ def _yaml_guard(text: str) -> str | None:
 
     Recorre los eventos del parser (pila en el heap: aquí no hay la recursión nativa que
     sí tiene el compositor y que desborda) y rechaza el anidamiento por encima de
-    ``_YAML_MAX_DEPTH`` y cualquier clave de fusión. Ver el comentario de las constantes.
+    ``_YAML_MAX_DEPTH``, cualquier clave de fusión, los escalares numéricos de más de
+    ``_YAML_MAX_ESCALAR_NUMERICO`` caracteres y los documentos con más de
+    ``_YAML_MAX_CLAVES_ENTERAS`` claves enteras planas. Ver el comentario de las constantes.
 
     Un ``yaml.YAMLError`` (YAML mal formado; también el ``ReaderError`` por un carácter de
     control, que el loader de Python puro lanza al construirse) no es un problema de
@@ -245,30 +292,60 @@ def _yaml_guard(text: str) -> str | None:
     explícita ``!!merge``: la etiqueta, no el texto, es lo que activa ``flatten_mapping``
     (``!!merge "<<"`` y ``!!merge cualquier-cosa`` también fusionan). Un escalar plano trae
     ``style == ""`` con libyaml y ``None`` con Python puro: se mira con ``not style``.
+
+    Para saber si un escalar es una clave se lleva, por cada mapa abierto, cuántos nodos hijos
+    ha visto (los pares van clave, valor, clave, valor…); una secuencia no lleva cuenta.
     """
     loader = None
     try:
         loader = _YAML_LOADER(text)
-        depth = 0
+        abiertas: list[list[int] | None] = []  # una por colección abierta: `None` = secuencia
+        claves_enteras = 0
         while loader.check_event():
             event = loader.get_event()
+            es_clave = False
+            if isinstance(event, yaml.NodeEvent) and abiertas and abiertas[-1] is not None:
+                es_clave = abiertas[-1][0] % 2 == 0
+                abiertas[-1][0] += 1
             if isinstance(event, yaml.ScalarEvent):
                 if event.tag == _YAML_MERGE_TAG or (event.value == "<<" and not event.style):
                     return _YAML_ERR_MERGE
+                largo = len(event.value) > _YAML_MAX_ESCALAR_NUMERICO
+                if largo or (es_clave and (event.tag or event.value[:1] in _YAML_INICIO_ENTERO)):
+                    tag = _etiqueta_escalar(loader, event)
+                    if largo and tag in (_YAML_INT_TAG, _YAML_FLOAT_TAG):
+                        return _YAML_ERR_NUMERO
+                    if es_clave and tag == _YAML_INT_TAG:
+                        claves_enteras += 1
+                        if claves_enteras > _YAML_MAX_CLAVES_ENTERAS:
+                            return _YAML_ERR_CLAVES
             elif isinstance(event, yaml.SequenceStartEvent | yaml.MappingStartEvent):
                 if event.tag == _YAML_MERGE_TAG:
                     return _YAML_ERR_MERGE
-                depth += 1
-                if depth > _YAML_MAX_DEPTH:
+                abiertas.append(None if isinstance(event, yaml.SequenceStartEvent) else [0])
+                if len(abiertas) > _YAML_MAX_DEPTH:
                     return _YAML_ERR_DEPTH
             elif isinstance(event, yaml.SequenceEndEvent | yaml.MappingEndEvent):
-                depth -= 1
+                abiertas.pop()
         return None
     except yaml.YAMLError:
         return None
     finally:
         if loader is not None:
             loader.dispose()
+
+
+def _etiqueta_escalar(loader: Any, event: yaml.ScalarEvent) -> str | None:
+    """Etiqueta con la que se construiría el escalar, sin construir su valor.
+
+    Es la regla de ``compose_scalar_node`` con el ``Resolver`` del propio loader (YAML 1.1:
+    ``1:30`` es un entero sexagesimal y ``1_000`` un entero): una etiqueta explícita manda; sin
+    ella, o con la no específica ``!``, se resuelve por la forma del texto, y eso solo ocurre en
+    los escalares planos (``event.implicit[0]``).
+    """
+    if event.tag is None or event.tag == "!":
+        return loader.resolve(yaml.ScalarNode, event.value, event.implicit)
+    return event.tag
 
 
 def read_yaml(run_dir: Path, rel: str, *, root: type | tuple[type, ...] = dict) -> Loaded[Any]:

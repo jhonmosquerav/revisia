@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from revisia.audit.artifacts import AuditContext, short_text
+from revisia.audit.artifacts import AuditContext, short_text, sufijo_mas
 from revisia.audit.model import Verdict
 
+_MAX_REGISTROS = 10  # registros que se listan; el resto se cuenta
+_LIMITE_REGISTRO = 40  # caracteres de una clave o de un valor de `registration`
 _NA_PROTOCOLO = "no aplica: sin protocolo legible en el manifiesto (ver `manifest`)."
 
 
@@ -50,9 +52,15 @@ def check_registration(ctx: AuditContext) -> Verdict:
     registration = _protocol_section(ctx, "registration")
     if registration is None:
         return "N/A", _NA_PROTOCOLO
-    declared = {k: v for k, v in registration.items() if v}
+    declared = [(k, v) for k, v in registration.items() if v]
     if declared:
-        # Igual que arriba: la clave y el valor vienen del manifiesto, siempre acotados.
-        registro = ", ".join(f"{short_text(k)}={short_text(v)}" for k, v in declared.items())
-        return "PASS", f"Registro declarado: {registro}."
+        # Igual que arriba: la clave y el valor vienen del manifiesto, siempre acotados, y las
+        # entradas también: 2 000 claves daban un detalle de ~50 KB.
+        registro = ", ".join(
+            f"{short_text(k, limit=_LIMITE_REGISTRO)}={short_text(v, limit=_LIMITE_REGISTRO)}"
+            for k, v in declared[:_MAX_REGISTROS]
+        )
+        return "PASS", (
+            f"Registro declarado: {registro}{sufijo_mas(len(declared) - _MAX_REGISTROS)}."
+        )
     return "WARN", "Sin registro (PROSPERO/OSF): preregistra el protocolo antes de publicar."

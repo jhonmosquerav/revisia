@@ -31,7 +31,7 @@ from revisia.audit.checks_flow import TA, included_ids
 from revisia.audit.checks_hitl import _de_la_decision_efectiva
 from revisia.audit.model import Verdict
 from revisia.config import KNOWN_THRESHOLDS
-from revisia.metrics import ScreeningMetrics, fmt_metric, wilson_interval
+from revisia.metrics import ScreeningMetrics, wilson_interval
 from revisia.provenance.ledger import HUMAN_ACTOR_PREFIX
 
 METRICS = "03_screening/metrics.json"
@@ -42,6 +42,8 @@ _MAX_FANTASMAS = 3  # citas con id fuera de los incluidos que se listan
 _MAX_INDICES = 5  # índices de citas que se listan
 _MAX_ACTORES = 5  # actores que se listan
 _LIMITE_NUMERO = 40  # caracteres de un número (un entero puede tener 4 000 cifras)
+_LIMITE_DECIMAL = 1e15  # un float de módulo mayor deja la notación decimal (`_num`)
+_TOLERANCIA_RANGO = 1e-9  # holgura del redondeo de coma flotante en los límites de κ y MCC
 _LIMITE_ID = 60  # caracteres de un id de cita, una clave o un actor
 _BANDERA = re.compile(r"flag:([0-9]{1,9})", re.ASCII)  # objetivo de una `flag_review`
 
@@ -50,13 +52,28 @@ def _num(value: object, spec: str = ".3f") -> str:
     """Un número leído de un artefacto, para un detalle: acotado y sin lanzar.
 
     Un ``int`` de más de 4 300 cifras (el JSON lo carga, ``str`` ya no lo convierte) no
-    revienta el check: se muestra como valor fuera de rango.
+    revienta el check: se muestra como valor fuera de rango. Un ``float`` finito enorme
+    (``1e308`` con ``.3f`` ocupa 313 caracteres) o no finito se muestra en notación
+    científica: ``1.000e+308``, ``nan``, ``inf``.
     """
     try:
-        text = format(value, spec) if isinstance(value, float) else str(value)
+        if isinstance(value, float):
+            text = format(value, spec if abs(value) < _LIMITE_DECIMAL else ".3e")
+        else:
+            text = str(value)
     except ValueError:
         return "(valor fuera de rango)"
     return short_text(text, limit=_LIMITE_NUMERO)
+
+
+def _metrica(value: float | None, spec: str = ".3f") -> str:
+    """Una métrica leída de ``metrics.json``: ``no calculable`` si falta; si no, :func:`_num`."""
+    return "no calculable" if value is None else _num(value, spec)
+
+
+def _es_correlacion(value: float) -> bool:
+    """``value`` cabe en [-1, 1] (κ y MCC), con la holgura del redondeo de coma flotante."""
+    return -1 - _TOLERANCIA_RANGO <= value <= 1 + _TOLERANCIA_RANGO
 
 
 def _finito(value: float | None) -> float | None:
@@ -101,15 +118,26 @@ def check_gold(ctx: AuditContext) -> Verdict:
     ia_una_clase = m.tp + m.fp == 0 or m.fn + m.tn == 0
     # Un `nan`/`inf` no es una métrica informativa: se trata como indefinida.
     kappa, matthews = _finito(m.cohen_kappa), _finito(m.mcc)
+    # κ y MCC son coeficientes de correlación: fuera de [-1, 1] es un dato corrupto, no una métrica.
+    fuera = [
+        nombre
+        for nombre, valor in (("kappa", kappa), ("MCC", matthews))
+        if valor is not None and not _es_correlacion(valor)
+    ]
+    if fuera:
+        return "WARN", (
+            f"Métricas vs gold humano: recall={_metrica(m.recall)} · {' y '.join(fuera)} fuera "
+            "de [-1, 1]: no verificable (ver `arithmetic`)."
+        )
     if kappa is None or matthews is None or gold_una_clase or ia_una_clase:
         return "WARN", (
-            f"Métricas vs gold humano: recall={fmt_metric(m.recall)} · kappa/mcc no calculable: "
+            f"Métricas vs gold humano: recall={_metrica(m.recall)} · kappa/mcc no calculable: "
             "métricas indefinidas o no informativas (el gold o la IA asignaron una sola clase). "
             "Amplía el gold con registros relevantes e irrelevantes."
         )
     return "PASS", (
-        f"Métricas vs gold humano (n={_num(m.n)}): recall={fmt_metric(m.recall)} · "
-        f"kappa={fmt_metric(kappa)} · MCC={fmt_metric(matthews)} (accuracy omitida a propósito)."
+        f"Métricas vs gold humano (n={_num(m.n)}): recall={_metrica(m.recall)} · "
+        f"kappa={_metrica(kappa)} · MCC={_metrica(matthews)} (accuracy omitida a propósito)."
     )
 
 
@@ -157,16 +185,24 @@ def _recall(
     objetivo = f"{target:.2f}"
     if m is None:
         return "WARN", f"recall_target {objetivo} no medible ({why})"
-    if m.recall is None:
-        return "WARN", f"recall_target {objetivo} no medible (recall indefinido en metrics.json)"
-    if m.tp < 0 or m.fn < 0 or not math.isfinite(m.recall) or not 0 <= m.recall <= 1:
+    if m.tp < 0 or m.fn < 0:
         return "WARN", (
-            f"recall_target {objetivo} no medible (recall o matriz de confusión fuera de rango; "
+            f"recall_target {objetivo} no medible (matriz de confusión fuera de rango; "
             "ver `arithmetic`)"
         )
     positives = m.tp + m.fn
-    recall = f"recall {m.recall:.2f} {_ic(m.tp, positives)}"
-    if m.recall < target:
+    if positives == 0:
+        return "WARN", (
+            f"recall_target {objetivo} no medible (recall indefinido: la matriz de confusión no "
+            "tiene positivos)"
+        )
+    # El recall se recalcula de la matriz, la misma de la que salen el IC de Wilson y los
+    # positivos del detalle: decidir con el `recall` que guarda `metrics.json` (que `arithmetic`
+    # contrasta con la matriz) y mostrar el resto de la matriz era incoherente (revisión de la
+    # fase 1 de PR-E). `ScreeningMetrics` exige la matriz: sin ella `m` es `None` (arriba).
+    valor = m.tp / positives
+    recall = f"recall {valor:.2f} {_ic(m.tp, positives)}"
+    if valor < target:
         pending = ai_exclusions_without_label(ctx)
         quedan = "un número no verificable de" if pending is None else str(pending)
         return "FAIL", (
@@ -201,6 +237,11 @@ def _kappa(m: ScreeningMetrics | None, why: str, minimo: float) -> tuple[str, st
     kappa = _finito(m.cohen_kappa)
     if kappa is None:
         return "WARN", f"kappa_min {objetivo} no medible (κ indefinido)"
+    if not _es_correlacion(kappa):
+        return "WARN", (
+            f"kappa_min {objetivo} no medible (κ {_num(kappa)} fuera de [-1, 1]: no verificable; "
+            "ver `arithmetic`)"
+        )
     if kappa < minimo:
         return "WARN", (
             f"κ {kappa:.2f} < {objetivo}: desviación del protocolo, decláralo (PRISMA 24c)"
