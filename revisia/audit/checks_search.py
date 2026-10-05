@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from revisia.audit.artifacts import AuditContext, short_text, sufijo_mas
+from revisia.audit.artifacts import NA_PROTOCOLO, AuditContext, short_text, sufijo_mas
 from revisia.audit.model import Verdict
 
 _MAX_REGISTROS = 10  # registros que se listan; el resto se cuenta
 _LIMITE_REGISTRO = 40  # caracteres de una clave o de un valor de `registration`
-_NA_PROTOCOLO = "no aplica: sin protocolo legible en el manifiesto (ver `manifest`)."
 
 
 def _protocol_section(ctx: AuditContext, key: str) -> dict | None:
@@ -29,7 +28,7 @@ def check_search_window(ctx: AuditContext) -> Verdict:
     """
     window = _protocol_section(ctx, "search_window")
     if window is None:
-        return "N/A", _NA_PROTOCOLO
+        return "N/A", NA_PROTOCOLO
     warns: list[str] = []
     missing = [k for k in ("from", "to") if not window.get(k)]
     if missing:
@@ -51,7 +50,7 @@ def check_registration(ctx: AuditContext) -> Verdict:
     """PRISMA 24a: registro del protocolo."""
     registration = _protocol_section(ctx, "registration")
     if registration is None:
-        return "N/A", _NA_PROTOCOLO
+        return "N/A", NA_PROTOCOLO
     declared = [(k, v) for k, v in registration.items() if v]
     if declared:
         # Igual que arriba: la clave y el valor vienen del manifiesto, siempre acotados, y las

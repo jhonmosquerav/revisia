@@ -190,6 +190,40 @@ def test_timing_con_manifiesto_ilegible_el_limite_superior_no_es_verificable(cor
     assert "límite superior no verificable (manifiesto ilegible)" in timing.detail
 
 
+def test_timing_en_una_corrida_en_pausa_dice_que_el_manifiesto_aun_no_existe(
+    detener_corrida,
+) -> None:
+    # Una corrida real en pausa en `extraccion` todavía no escribió el manifiesto (spec §4.2):
+    # llamarlo «ilegible» culpaba a un fichero que no existe.
+    corrida = detener_corrida(aprobados=("screening_ta", "screening_ft"))
+    assert not (corrida / "manifest.yml").exists()
+    report = auditar(corrida)
+    assert report.state is not None and report.state.status == "paused"
+    timing = fila(report, "timing")
+    assert timing.status == "WARN"
+    assert (
+        "límite superior no verificable: manifiesto ausente (corrida sin decisión final)"
+        in timing.detail
+    )
+    assert "ilegible" not in timing.detail
+    assert fila(report, "final_gate").status == "FAIL"
+
+
+def test_timing_con_el_manifiesto_borrado_de_una_corrida_terminada_no_habla_de_pausa(
+    corrida,
+) -> None:
+    # Ausente, pero la corrida llegó al gate final: el manifiesto debería existir, y «sin
+    # decisión final» sería falso. La ausencia la marca `manifest`.
+    (corrida / "manifest.yml").unlink()
+    report = auditar(corrida)
+    timing = fila(report, "timing")
+    assert timing.status == "WARN"
+    assert "límite superior no verificable: manifiesto ausente" in timing.detail
+    assert "sin decisión final" not in timing.detail
+    assert "ilegible" not in timing.detail
+    assert fila(report, "manifest").status == "FAIL"
+
+
 def test_timing_con_todo_verificado_nombra_ambos_limites(corrida) -> None:
     timing = fila(auditar(corrida), "timing")
     assert timing.status == "PASS"

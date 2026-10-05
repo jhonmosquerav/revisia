@@ -108,6 +108,21 @@ def _limite_inferior(ctx: AuditContext) -> tuple[datetime | None, str | None, st
     )
 
 
+def _limite_superior_sin_manifiesto(ctx: AuditContext) -> str:
+    """Por qué no se puede comprobar el límite superior cuando no hay manifiesto utilizable.
+
+    Un manifiesto que existe pero no se puede leer es «ilegible». Uno que no existe es
+    «ausente»; y si la corrida no llegó al gate final es lo esperable, no un defecto: el
+    motor lo escribe al evaluar ese gate (spec §4.2), así que una corrida en pausa todavía no
+    lo tiene.
+    """
+    if ctx.manifest.present:
+        return "límite superior no verificable (manifiesto ilegible)"
+    if "reporte" in ctx.state.reached:
+        return "límite superior no verificable: manifiesto ausente"
+    return "límite superior no verificable: manifiesto ausente (corrida sin decisión final)"
+
+
 def _limitar(items: list[str], maximo: int = _MAX) -> str:
     more = len(items) - maximo
     return "; ".join(items[:maximo]) + (f" (+{more} más)" if more > 0 else "")
@@ -153,7 +168,7 @@ def check_timing(ctx: AuditContext) -> Verdict:
     fails += [lower_fail] if lower_fail else []
     upper = None
     if ctx.manifest_dict is None:
-        warns.append("límite superior no verificable (manifiesto ilegible)")
+        warns.append(_limite_superior_sin_manifiesto(ctx))
     elif "created_utc" not in ctx.manifest_dict:
         warns.append("límite superior no verificable (manifest.created_utc ausente)")
     else:

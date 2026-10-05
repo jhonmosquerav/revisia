@@ -1,15 +1,20 @@
 """Ayudas de los tests del auditor (spec 2026-10-04 §9.4).
 
-Contiene solo lo que el pipeline no puede producir: helpers de edición de una
-corrida (para romper una relación cada vez) y ``auditar``, que comprueba en
-cada llamada el invariante del auditor (**si hay algún N/A, hay al menos un
-FAIL**: un N/A nunca puede ocultar nada en una corrida publicable, §9.2) y que
-hay una sola fila por check.
+Contiene lo que el pipeline no puede producir ni los tests pueden pedirle:
 
-Los helpers de edición sirven tanto para las corridas de la fase 1 de PR-E
-(solo manifiesto) como para las de la Ola 1 (``llm_calls.jsonl``, diarios y
-``00_protocol/``): editan todas las copias de un dato a la vez, para romper
-solo la relación que el test quiere romper.
+- ``auditar`` y ``fila``: ``auditar`` comprueba en cada llamada el invariante del auditor
+  (**si hay algún N/A, hay al menos un FAIL**: un N/A nunca puede ocultar nada en una corrida
+  publicable, §9.2) y que hay una sola fila por check; ``auditar_en_subproceso`` corre el
+  auditor aparte para los vectores que lo cuelgan o lo matan.
+- Los helpers de edición de una corrida real (``edit_json``, ``edit_yaml``, ``edit_ledger``,
+  ``editar_protocolo``, ``editar_llamadas``…), para romper una relación cada vez. Sirven tanto
+  para las corridas de la fase 1 de PR-E (solo manifiesto) como para las de la Ola 1
+  (``llm_calls.jsonl``, diarios y ``00_protocol/``): editan todas las copias de un dato a la
+  vez, para romper solo la relación que el test quiere romper.
+- Los constructores de corridas que el motor ya no produce: la del motor v0.7
+  (``write_legacy_v07``) y la reconstrucción de la auditoría 2026-09-03
+  (``write_c3_reconstruction``).
+- ``metricas_validas``, ``escribir_metricas``, ``pausar_en_screening_ft`` y ``bomba_de_alias``.
 
 Uso (``tests/`` está en ``sys.path`` porque no es un paquete)::
 

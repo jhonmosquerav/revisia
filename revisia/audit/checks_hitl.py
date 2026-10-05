@@ -23,7 +23,7 @@ from revisia.provenance.ledger import (
     LEDGER_ACTIONS,
     DecisionEntry,
 )
-from revisia.schemas.artifacts import GATED_STAGES
+from revisia.schemas.artifacts import GATED_STAGES, GateSummary
 
 _NA_LEDGER = "no aplica: sin ledger legible (ver `ledger`)."
 _MAX_PROBLEMAS = 5
@@ -123,18 +123,21 @@ def _excluded_human(ctx: AuditContext) -> int | None:
     return copy.value.excluded_human if copy.ok else None
 
 
-def _de_la_decision_efectiva(ctx: AuditContext, label: DecisionEntry) -> bool:
-    """La ``label`` pertenece a la decisión efectiva de su etapa (misma que ``n_labels``).
+def de_la_decision_efectiva(ctx: AuditContext, entry: DecisionEntry) -> bool:
+    """La ``label`` o ``flag_review`` ``entry`` pertenece a la decisión efectiva de su etapa.
 
     Tras un fallo con el ``decision.yml`` cambiado, o tras un rechazo y una nueva
-    decisión (D14), el ledger conserva las ``label`` de las decisiones sustituidas:
-    cuentan solo las que llevan el ``decision_sha256`` y el ``request_sha256`` de la
-    aprobación efectiva. Sin decisión efectiva en la etapa, ninguna cuenta.
+    decisión (D14), el ledger conserva las entradas de las decisiones sustituidas: cuentan
+    solo las que llevan el ``decision_sha256`` **y** el ``request_sha256`` de la aprobación
+    efectiva. Es la regla de ``n_labels`` de ``summarize_gates`` (mismo ``decision_sha256``)
+    más una exigencia: ``summarize_gates`` no mira la solicitud y el auditor sí. Sin decisión
+    efectiva en la etapa, ninguna cuenta. Lo usan ``hitl`` (etiquetas por registro) y
+    ``grounding`` (adjudicaciones de citas), para que una sola regla evite que se contradigan.
     """
-    gate = ctx.gates.get(label.stage)
+    gate = ctx.gates.get(entry.stage)
     if gate is None:
         return False
-    decision = label.detail.get("decision_sha256")
+    decision = entry.detail.get("decision_sha256")
     if gate.decision_sha256 is None:
         # Ledger anterior a PR-D (fase 1): ni la aprobación ni las `label` llevan hashes y no
         # hay cómo distinguir decisiones, así que cuentan todas las de la etapa. Una `label`
@@ -142,7 +145,7 @@ def _de_la_decision_efectiva(ctx: AuditContext, label: DecisionEntry) -> bool:
         return decision is None
     return (
         decision == gate.decision_sha256
-        and label.detail.get("request_sha256") == gate.request_sha256
+        and entry.detail.get("request_sha256") == gate.request_sha256
     )
 
 
@@ -152,11 +155,16 @@ def _etiquetas_de_cribado(ctx: AuditContext) -> tuple[list[DecisionEntry], list[
     ajenas: list[DecisionEntry] = []
     for entry in ctx.ledger.decisions:
         if entry.action == "label" and entry.stage in _ETAPAS_DE_CRIBADO:
-            (propias if _de_la_decision_efectiva(ctx, entry) else ajenas).append(entry)
+            (propias if de_la_decision_efectiva(ctx, entry) else ajenas).append(entry)
     return propias, ajenas
 
 
 def _es_exclusion_humana(label: DecisionEntry) -> bool:
+    """La ``label`` excluye el registro y la puso un humano (``human:<nombre>``).
+
+    Solo estas respaldan el ``excluded_human`` de ``exclusions.json`` (C3): una ``label`` de un
+    agente o de ``auto-approve (demo)``, o una que incluye, no cuenta como exclusión humana.
+    """
     return label.detail.get("to") == "exclude" and label.actor.startswith(HUMAN_ACTOR_PREFIX)
 
 
@@ -193,7 +201,7 @@ def check_hitl(ctx: AuditContext) -> Verdict:
             "(D8: --auto-approve no es revisión humana)"
         )
 
-    humanas = []
+    humanas: list[GateSummary] = []
     for stage in JUDGMENT_STAGES:
         gate = ctx.gates.get(stage)
         if gate is None:

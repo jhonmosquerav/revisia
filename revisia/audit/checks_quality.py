@@ -22,13 +22,13 @@ from __future__ import annotations
 import math
 import re
 
-from revisia.audit.artifacts import AuditContext, short_repr, short_text
+from revisia.audit.artifacts import NA_PROTOCOLO, AuditContext, short_repr, short_text
 from revisia.audit.checks_flow import TA, included_ids
 
-# Función privada de `hitl` a propósito: la adjudicación de una cita (`flag_review`) y la
-# etiqueta de un registro (`label`) pertenecen a la decisión efectiva con el mismo criterio
-# (`decision_sha256` + `request_sha256`), y una sola regla evita que se contradigan.
-from revisia.audit.checks_hitl import _de_la_decision_efectiva
+# La adjudicación de una cita (`flag_review`) y la etiqueta de un registro (`label`) pertenecen
+# a la decisión efectiva con el mismo criterio (`decision_sha256` + `request_sha256`), y una sola
+# regla, la de `hitl`, evita que se contradigan.
+from revisia.audit.checks_hitl import de_la_decision_efectiva
 from revisia.audit.model import Verdict
 from revisia.config import KNOWN_THRESHOLDS
 from revisia.metrics import ScreeningMetrics, wilson_interval
@@ -252,7 +252,9 @@ def _kappa(m: ScreeningMetrics | None, why: str, minimo: float) -> tuple[str, st
 def check_thresholds(ctx: AuditContext) -> Verdict:
     """trAIce M9/R2 / PRISMA 8, 24c: umbrales del protocolo según lo que miden (D7)."""
     if ctx.protocol is None:
-        return "WARN", "umbrales no verificables: sin protocolo legible en el manifiesto."
+        # Sin protocolo no hay umbrales que contrastar: es un N/A como en `search_window` y
+        # `registration`, y el FAIL lo da la fila que explica por qué (`manifest` o `schemas`).
+        return "N/A", NA_PROTOCOLO
     thresholds = ctx.protocol.thresholds
     resultados: dict[str, list[str]] = {"FAIL": [], "WARN": [], "PASS": []}
 
@@ -306,7 +308,7 @@ def _adjudications(ctx: AuditContext) -> dict[int, list[str]]:
     for entry in ctx.ledger.decisions:
         if entry.stage != "reporte" or entry.action != "flag_review":
             continue
-        if not _de_la_decision_efectiva(ctx, entry):
+        if not de_la_decision_efectiva(ctx, entry):
             continue
         reason = entry.detail.get("reason")
         if entry.detail.get("verdict") != "false_positive":

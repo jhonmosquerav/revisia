@@ -8,12 +8,14 @@ saltado o una decisión humana sin su ``review_request.yml`` también.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from audit_fixtures import auditar, edit_json, edit_ledger, fila, pausar_en_screening_ft
 
-from revisia.provenance.ledger import AUTO_APPROVE_ACTOR
-from revisia.schemas.artifacts import GATED_STAGES
+from revisia.audit.checks_hitl import de_la_decision_efectiva
+from revisia.provenance.ledger import AUTO_APPROVE_ACTOR, DecisionEntry
+from revisia.schemas.artifacts import GATED_STAGES, GateSummary
 
 
 def _actor(stage: str, actor: str):
@@ -359,3 +361,70 @@ def test_linea_ilegible_tras_la_aprobacion_final_no_deja_pasar_el_gate_final(
     assert "1 línea(s) ilegible(s)" in final_gate.detail
     assert fila(report, "hitl").status == "FAIL"
     assert not report.publishable
+
+
+# ── de_la_decision_efectiva (pública: la usan hitl y grounding) ───────────
+
+
+def _contexto(**hashes: str | None) -> SimpleNamespace:
+    """Un contexto con la decisión efectiva de ``screening_ta`` (solo ``gates`` se consulta)."""
+    gate = GateSummary(
+        stage="screening_ta",
+        action="approve",
+        actor="human:ana",
+        autonomy="A1",
+        timestamp_utc="2026-10-04T12:00:00+00:00",
+        **hashes,
+    )
+    return SimpleNamespace(gates={"screening_ta": gate})
+
+
+def _label(stage: str = "screening_ta", **detalle: str) -> DecisionEntry:
+    return DecisionEntry(
+        stage=stage, actor="human:ana", autonomy="A1", action="label", target="r1", detail=detalle
+    )
+
+
+@pytest.mark.parametrize(
+    ("hashes", "detalle", "esperado"),
+    [
+        pytest.param(
+            {"decision_sha256": "d", "request_sha256": "r"},
+            {"decision_sha256": "d", "request_sha256": "r"},
+            True,
+            id="mismos-hashes",
+        ),
+        pytest.param(
+            {"decision_sha256": "d", "request_sha256": "r"},
+            {"decision_sha256": "otra", "request_sha256": "r"},
+            False,
+            id="otra-decision",
+        ),
+        # Exige también el `request_sha256`: no basta el `decision_sha256` (como `n_labels`).
+        pytest.param(
+            {"decision_sha256": "d", "request_sha256": "r"},
+            {"decision_sha256": "d", "request_sha256": "otra"},
+            False,
+            id="otra-solicitud",
+        ),
+        pytest.param(
+            {"decision_sha256": "d", "request_sha256": "r"},
+            {"decision_sha256": "d"},
+            False,
+            id="sin-solicitud",
+        ),
+        pytest.param({"decision_sha256": "d", "request_sha256": "r"}, {}, False, id="sin-hashes"),
+        # Ledger anterior a PR-D: ni la aprobación ni las `label` llevan hashes y cuentan todas...
+        pytest.param({}, {}, True, id="pre-PR-D-ambos-sin-hash"),
+        # ... pero una `label` con hash frente a una aprobación sin él es de otra decisión.
+        pytest.param({}, {"decision_sha256": "d"}, False, id="pre-PR-D-label-con-hash"),
+    ],
+)
+def test_de_la_decision_efectiva_compara_decision_y_solicitud(
+    hashes: dict, detalle: dict, esperado: bool
+) -> None:
+    assert de_la_decision_efectiva(_contexto(**hashes), _label(**detalle)) is esperado
+
+
+def test_de_la_decision_efectiva_de_una_etapa_sin_decision_es_falso() -> None:
+    assert de_la_decision_efectiva(_contexto(), _label(stage="rob")) is False

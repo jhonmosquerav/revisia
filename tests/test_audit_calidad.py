@@ -17,6 +17,7 @@ from audit_fixtures import (
     auditar,
     edit_json,
     edit_ledger,
+    edit_yaml,
     editar_protocolo,
     escribir_metricas,
     fila,
@@ -25,7 +26,7 @@ from audit_fixtures import (
 )
 
 from revisia.audit import checks_quality
-from revisia.audit.artifacts import AuditContext, load_run
+from revisia.audit.artifacts import NA_PROTOCOLO, AuditContext, load_run
 from revisia.audit.checks_quality import potencia_minima
 
 # ── thresholds (D7) ────────────────────────────────────────────────────
@@ -589,3 +590,45 @@ def test_search_window_con_una_fecha_yaml_sin_comillas_se_muestra_en_iso(corrida
     window = fila(auditar(corrida), "search_window")
     assert window.status == "WARN"
     assert "fecha tecleada (`executed: 2026-06-26`)" in window.detail
+
+
+# ── Sin protocolo legible: thresholds, search_window y registration no aplican ──
+
+
+def test_sin_manifiesto_legible_los_tres_checks_del_protocolo_no_aplican(corrida) -> None:
+    # `thresholds` daba WARN y los otros dos N/A ante la misma causa. El FAIL lo da `manifest`.
+    (corrida / "manifest.yml").write_text("{\n", encoding="utf-8")
+    report = auditar(corrida)
+    for check_id in ("thresholds", "search_window", "registration"):
+        assert fila(report, check_id).status == "N/A", check_id
+        assert fila(report, check_id).detail == NA_PROTOCOLO, check_id
+    assert fila(report, "manifest").status == "FAIL"
+    assert not report.publishable
+
+
+@pytest.mark.parametrize(
+    ("editar", "fila_que_falla"),
+    [
+        pytest.param(lambda m: m.update(protocol={"slug": 5}), "schemas", id="protocolo-invalido"),
+        pytest.param(lambda m: m.pop("protocol"), "arithmetic", id="protocolo-ausente"),
+    ],
+)
+def test_thresholds_sin_protocolo_en_un_manifiesto_legible_no_aplica_y_otra_fila_falla(
+    corrida, editar, fila_que_falla: str
+) -> None:
+    edit_yaml(corrida / "manifest.yml", editar)
+    report = auditar(corrida)
+    thresholds = fila(report, "thresholds")
+    assert thresholds.status == "N/A"
+    assert thresholds.detail == NA_PROTOCOLO
+    assert fila(report, fila_que_falla).status == "FAIL"
+    assert not report.publishable
+
+
+def test_thresholds_de_una_corrida_en_pausa_sin_manifiesto_no_aplica(detener_corrida) -> None:
+    # Pausada en `extraccion` el manifiesto aún no existe: el FAIL de la pausa lo da `final_gate`.
+    report = auditar(detener_corrida(aprobados=("screening_ta", "screening_ft")))
+    assert fila(report, "thresholds").status == "N/A"
+    assert fila(report, "thresholds").detail == NA_PROTOCOLO
+    assert fila(report, "final_gate").status == "FAIL"
+    assert not report.publishable

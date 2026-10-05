@@ -210,6 +210,11 @@ def short_text(value: object, *, limit: int = 120) -> str:
 # `response_overlap`.
 NA_MANIFIESTO = "no aplica: el manifiesto no se pudo leer (ver `manifest`)."
 
+# Ídem para los checks que leen el protocolo registrado en el manifiesto (``thresholds``,
+# ``search_window`` y ``registration``): sin manifiesto, o con ``protocol`` ausente o inválido, la
+# causa ya está en otra fila (``manifest`` o ``schemas``) y aquí es un N/A (§9.2).
+NA_PROTOCOLO = "no aplica: sin protocolo legible en el manifiesto (ver `manifest` y `schemas`)."
+
 
 def sufijo_mas(resto: int, unidad: str = "") -> str:
     """`` (+N más)`` de una lista acotada, o `` (+N <unidad> más)`` si hay que decir qué falta.
