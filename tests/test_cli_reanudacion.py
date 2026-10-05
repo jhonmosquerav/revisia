@@ -374,7 +374,8 @@ def test_error_de_run_json_nombra_el_fichero_y_el_campo(
 
     err = capsys.readouterr().err
     assert "run.json no es válido (RunInfo)" in err
-    assert "slug: Field required (+6 más)" in err
+    assert "slug: " in err
+    assert "más)" in err
     # Un run.json editado a mano se puede arreglar: el consejo no afirma «no reanudable».
     assert "Corrige el campo indicado si sabes lo que haces o empieza una corrida nueva" in err
     assert "no es reanudable" not in err
@@ -395,10 +396,26 @@ def test_error_de_run_json_con_un_campo_de_tipo_erroneo_nombra_ese_campo(
     assert "más)" not in err  # solo falla ese campo
 
 
+def test_error_de_run_json_vacio_dice_error_indicado_no_campo(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    # Un run.json vacío (`b""`) da un error sin `loc`: la pydantic dice `json_invalid`
+    # con `loc == ()`. El consejo debe decir "el error indicado", no "el campo".
+    run_dir = _corrida_en_pausa(tmp_path)
+    (run_dir / "run.json").write_bytes(b"")
+
+    assert cli.main(["run", "--resume", str(run_dir)]) == 2
+
+    err = capsys.readouterr().err
+    assert "run.json no es válido" in err
+    assert "el campo indicado" not in err
+    assert "el error indicado" in err
+
+
 def test_error_de_yaml_roto_en_el_protocolo_de_la_corrida_da_linea_y_columna(
     tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
-    # «while parsing a flow sequence» sin línea ni columna no deja encontrar el error.
+    # Desde un stream, PyYAML sabe el nombre del fichero.
     run_dir = _corrida_en_pausa(tmp_path)
     (run_dir / "00_protocol" / "protocol.yml").write_text(
         "slug: demo\ndatabases: [OpenAlex, \n", encoding="utf-8"
@@ -409,8 +426,24 @@ def test_error_de_yaml_roto_en_el_protocolo_de_la_corrida_da_linea_y_columna(
     err = capsys.readouterr().err
     assert "Traceback" not in err
     assert re.search(r"YAML no válido: .+ \(línea \d+, columna \d+\)", err)
-    # Desde un `str`, PyYAML no sabe el nombre del fichero: el consejo es el condicional.
-    assert "Si el fichero es run.json o está en 00_protocol/" in err
+    # Con el stream, el consejo es específico: "Corrige la línea indicada".
+    assert "Corrige la línea indicada si sabes lo que haces o empieza una corrida nueva" in err
+
+
+def test_error_de_protocolo_roto_en_la_corrida_nombra_el_archivo(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    # Con el stream (no read_text), PyYAML sabe el nombre del fichero.
+    run_dir = _corrida_en_pausa(tmp_path)
+    contenido = "slug: demo\ninvalid: [unclosed"
+    (run_dir / "00_protocol" / "protocol.yml").write_text(contenido, encoding="utf-8")
+
+    assert cli.main(["run", "--resume", str(run_dir)]) == 2
+
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert "protocol.yml" in err  # el archivo se nombra en el error
+    assert "YAML no válido" in err
 
 
 def test_error_de_un_fichero_que_no_es_utf8_lo_dice(

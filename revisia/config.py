@@ -161,9 +161,8 @@ def load_protocol(protocol_dir: str | Path, *, default_slug: str | None = None) 
     protocol_file = base / "protocol.yml"
     if not protocol_file.exists():
         raise FileNotFoundError(f"No se encontró {protocol_file}.")
-    raw = yaml.safe_load(protocol_file.read_text(encoding="utf-8"))
-    if raw is None:
-        raw = {}
+    with protocol_file.open(encoding="utf-8") as fh:
+        raw = yaml.safe_load(fh) or {}
     if isinstance(raw, dict):
         raw.setdefault("slug", default_slug or base.name)
     # Una lista o un escalar los rechaza `model_validate` con `ValidationError` (rc 2 en el

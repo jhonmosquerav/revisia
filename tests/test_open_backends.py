@@ -364,3 +364,16 @@ def test_helpers_year_y_doi() -> None:
     assert open_backends._doi("https://doi.org/10.1/ABC") == "10.1/abc"
     assert open_backends._doi("doi:10.1/x") == "10.1/x"
     assert open_backends._doi("https://example.org/no-doi") is None
+
+
+def test_redact_secrets_es_lineal_incluso_con_entrada_grande() -> None:
+    import time
+
+    # El regex lineal NO reemite la entrada sin cambios sobre 200k de 'a'.
+    texto = "a" * 200_000
+    inicio = time.perf_counter()
+    resultado = _http.redact_secrets(texto)
+    duracion = time.perf_counter() - inicio
+
+    assert resultado == texto  # sin secretos, devuelve idéntico
+    assert duracion < 1.0  # lineal O(n), no cuadrático O(n²)

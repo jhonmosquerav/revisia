@@ -222,10 +222,17 @@ def _damage_advice(exc: BaseException, fichero: str | None) -> str:
     ruta = Path(fichero)
     if ruta.name == "run.json" or "00_protocol" in ruta.parts:
         # Un `run.json` editado a mano con un campo mal se puede arreglar: no se afirma
-        # «no reanudable» de forma tajante.
-        indicado = "el campo" if isinstance(exc, ValidationError) else "la línea"
+        # «no reanudable» de forma tajante. Elige la palabra según el tipo de error y, en
+        # ValidationError, si hay un campo identificado.
+        if isinstance(exc, ValidationError):
+            errores = exc.errors()
+            primero = errores[0] if errores else {}
+            tiene_loc = bool(primero.get("loc"))
+            indicado = "el campo indicado" if tiene_loc else "el error indicado"
+        else:
+            indicado = "la línea indicada"
         return (
-            f"Corrige {indicado} indicado si sabes lo que haces o empieza una corrida nueva "
+            f"Corrige {indicado} si sabes lo que haces o empieza una corrida nueva "
             "con `revisia run <protocolo>`."
         )
     return "Revisa ese fichero."

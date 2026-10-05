@@ -39,12 +39,12 @@ _SECRET_PARAM_RE = re.compile(
 )
 
 
-# Cabeceras `x-api-key` / `authorization` y sus variantes con prefijo (`x-goog-api-key`,
-# `proxy-authorization`), en forma `clave: valor` o `'clave': 'valor'` (el repr de un dict
-# de cabeceras). El valor suelto puede llevar esquema (`Bearer sk-…`): se tapa entero, no
-# solo la palabra `Bearer`.
+# Cabeceras `x-api-key`, `x-goog-api-key`, `proxy-authorization`, `authorization`, etc.
+# en forma `clave: valor` o `'clave': 'valor'` (el repr de un dict de cabeceras).
+# La búsqueda sin anclar captura cualquier sufijo; el valor suelto puede llevar esquema
+# (`Bearer sk-…`): se tapa entero, no solo la palabra `Bearer`.
 _SECRET_HEADER_RE = re.compile(
-    r"(?i)([\w-]*(?:api-key|authorization)['\"]?\s*[:=]\s*)"
+    r"(?i)((?:api-key|authorization)['\"]?\s*[:=]\s*)"
     # valor entre comillas, o suelto (con esquema opcional) hasta un separador
     r"(?:(?P<q>['\"])[^'\"\r\n]*(?P=q)"
     r"|['\"]?(?:(?:bearer|basic|digest|token)\s+)?[^\s'\",;}&]+)"
