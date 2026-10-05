@@ -18,17 +18,24 @@ El ledger manda (Ola 1, spec 2026-10-04 §4.3): registrar es idempotente al
 reanudar y, sin ``decision.yml``, la decisión ya registrada para la solicitud
 vigente se reutiliza (``decision.yml`` es solo el canal de entrada). Las
 decisiones quedan en el ledger → reproducibilidad "a nivel decisión".
+
+Decisión por registro y por cita (Ola 1, PR-D; auditoría 2026-09-03, C1 y M5):
+en los gates de cribado el humano etiqueta registros (``records``) según una
+``RecordPolicy``; en el gate final, con citas marcadas por el verificador,
+adjudica cada una (``flags``) según una ``FlagPolicy``. Cada etiqueta y cada
+adjudicación quedan en el ledger, antes del ``approve`` al que pertenecen.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, StrictBool, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError, field_validator
 
 from revisia.orchestration.run_context import RunContext
 from revisia.provenance.ledger import AUTO_APPROVE_ACTOR, DecisionEntry, summarize_gates
@@ -40,6 +47,8 @@ GateStatus = Literal["approved", "paused", "rejected"]
 REQUEST_FILE = "review_request.yml"
 TEMPLATE_FILE = "decision.template.yml"
 DECISION_FILE = "decision.yml"
+# Ids o índices que lista, como mucho, un error de decisión incompleta.
+_MAX_LISTED = 20
 
 # Claves que review_gate pone él mismo en la solicitud (``request_sha256`` solo en el
 # fichero): un payload que las traiga las pisaría y cambiaría lo que se hashea.
@@ -50,7 +59,7 @@ _CLAVES_COMUNES = ("schema_version", "stage", "autonomy", "request_sha256")
 # espacio: la cadena vuelve distinta y el hash ya no se recalcula desde el fichero
 # (spec 2026-10-04, relación 15). U+2028/U+2029 sobreviven en PyYAML pero YAML 1.2 no
 # los trata como saltos: se escapan para que ningún lector los lea de otra forma.
-_SALTOS_NO_FIABLES = frozenset("\x85\u2028\u2029")
+_SALTOS_NO_FIABLES = frozenset("\x85  ")
 
 
 class _FielDumper(yaml.SafeDumper):
@@ -58,7 +67,7 @@ class _FielDumper(yaml.SafeDumper):
 
 
 def _represent_str(dumper: yaml.SafeDumper, data: str) -> yaml.ScalarNode:
-    # Entre comillas dobles esos caracteres salen escapados (``\x85``, ``\u2028``) y el
+    # Entre comillas dobles esos caracteres salen escapados (``\x85``, `` ``) y el
     # resto del texto (acentos, ñ…) sigue legible para el humano.
     style = '"' if _SALTOS_NO_FIABLES.intersection(data) else None
     return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=style)
@@ -78,6 +87,133 @@ def dump_yaml(data: dict) -> str:
     return yaml.dump(data, Dumper=_FielDumper, allow_unicode=True, sort_keys=False)
 
 
+class DecisionFileError(ValueError):
+    """``decision.yml`` ilegible o inválido: mensaje accionable, no traceback."""
+
+
+class RecordLabel(BaseModel):
+    """Etiqueta humana de un registro en ``decision.yml`` (``records``; D1, D4).
+
+    ``label: null`` cuenta como "no etiquetado", para que la plantilla pueda
+    listar todos los registros. ``reason`` es obligatoria al excluir en FT y al
+    rescatar un no recuperado.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: Literal["include", "exclude"] | None = None
+    reason: str | None = None
+
+
+class FlagReview(BaseModel):
+    """Adjudicación humana de una cita marcada por el verificador (``flags``; D8).
+
+    Solo existe el veredicto ``false_positive``: si una marca es una
+    alucinación real, el camino es rechazar (``approved: false``).
+    ``verdict: null`` cuenta como "sin adjudicar".
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    verdict: Literal["false_positive"] | None = None
+    reason: str | None = None
+
+
+class HumanDecision(BaseModel):
+    """Contenido validado de ``<stage>/decision.yml`` (auditoría 2026-09-03, C1).
+
+    ``request_sha256`` ata la decisión a la solicitud que el humano revisó
+    (D4): si la solicitud cambia, una decisión vieja no se aplica.
+    ``approved`` es un booleano YAML estricto: la cadena ``"false"`` ya no
+    aprueba (``bool("false")`` es ``True``). ``records`` (solo en cribado) y
+    ``flags`` (solo en ``reporte`` con citas marcadas) llevan las claves como
+    texto: un id ``2019`` sin comillas se lee como número y se convierte. Los
+    campos extra se conservan y viajan al ``detail`` del ledger.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    request_sha256: str
+    approved: StrictBool
+    actor: str = "human:desconocido"
+    reason: str | None = None
+    records: dict[str, RecordLabel] = Field(default_factory=dict)
+    flags: dict[str, FlagReview] = Field(default_factory=dict)
+
+    @field_validator("records", "flags", mode="before")
+    @classmethod
+    def _claves_como_texto(cls, value: object) -> object:
+        """Convierte a texto las claves escalares (``2019:`` llega como ``2019``).
+
+        Una clave que no es texto ni número (nula, binaria, una lista o un mapa) no
+        es un id: se rechaza con un error de validación, que ``_read_decision``
+        traduce a ``DecisionFileError``, en vez de volverla un texto sin sentido
+        (``str(["a"])``) que luego parecería "un id desconocido".
+        """
+        if not isinstance(value, dict):
+            return value
+        for key in value:
+            if not isinstance(key, str | int | float | date):
+                raise ValueError(
+                    f"la clave {key!r} ({type(key).__name__}) no es un id válido: las claves "
+                    "son texto o números, no listas, mapas ni nulos"
+                )
+        return {str(k): v for k, v in value.items()}
+
+
+@dataclass(frozen=True, slots=True)
+class RecordHint:
+    """Lo que la plantilla muestra de un registro (en comentarios saneados).
+
+    Attributes:
+        record_id: id del registro.
+        title: título.
+        proposal: etiqueta propuesta por la IA (``None`` si no hay: no recuperado).
+        note: resumen de la propuesta (votos, criterio, motivo del no recuperado).
+    """
+
+    record_id: str
+    title: str
+    proposal: str | None
+    note: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class RecordPolicy:
+    """Qué se puede y qué se debe etiquetar en un gate de cribado (D1, D2, D9).
+
+    Attributes:
+        hints: un ``RecordHint`` por registro de la solicitud (son los ids válidos).
+        must_label: ids que hay que etiquetar para aprobar (A0).
+        must_resolve: ids ``unclear`` de FT: solo los resuelve un humano.
+        rescue_ids: no recuperados; etiquetarlos es un rescate (razón obligatoria).
+        reason_on_exclude: excluir exige razón (FT: va a la lista 16b).
+    """
+
+    hints: tuple[RecordHint, ...]
+    must_label: frozenset[str] = frozenset()
+    must_resolve: frozenset[str] = frozenset()
+    rescue_ids: frozenset[str] = frozenset()
+    reason_on_exclude: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class FlaggedClaim:
+    """Una cita marcada por el verificador (``index`` = posición en ``checks``)."""
+
+    index: int
+    cited_id: str | None
+    claim: str
+    note: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FlagPolicy:
+    """Citas marcadas que el humano debe adjudicar para aprobar el reporte (D8)."""
+
+    flagged: tuple[FlaggedClaim, ...]
+
+
 @dataclass(slots=True)
 class GateResult:
     """Resultado de un gate.
@@ -87,34 +223,16 @@ class GateResult:
         message: texto para el humano (pausa: qué revisar y cómo reanudar).
         request_sha256: hash de la solicitud vigente.
         actor: quién decidió (``None`` en una pausa).
+        labels: etiquetas explícitas por registro de la decisión aprobada.
+        flag_reviews: adjudicaciones de citas marcadas de la decisión aprobada.
     """
 
     status: GateStatus
     message: str
     request_sha256: str | None = None
     actor: str | None = None
-
-
-class DecisionFileError(ValueError):
-    """``decision.yml`` ilegible o inválido: mensaje accionable, no traceback."""
-
-
-class HumanDecision(BaseModel):
-    """Contenido validado de ``<stage>/decision.yml`` (auditoría 2026-09-03, C1).
-
-    ``request_sha256`` ata la decisión a la solicitud que el humano revisó
-    (D4): si la solicitud cambia, una decisión vieja no se aplica.
-    ``approved`` es un booleano YAML estricto: la cadena ``"false"`` ya no
-    aprueba (``bool("false")`` es ``True``). Los campos extra se conservan y
-    viajan al ``detail`` del ledger.
-    """
-
-    model_config = ConfigDict(extra="allow")
-
-    request_sha256: str
-    approved: StrictBool
-    actor: str = "human:desconocido"
-    reason: str | None = None
+    labels: dict[str, RecordLabel] = field(default_factory=dict)
+    flag_reviews: dict[str, FlagReview] = field(default_factory=dict)
 
 
 def render_decision_template(*, stage: str, autonomy: str, request_sha256: str) -> str:
@@ -143,6 +261,91 @@ def render_decision_template(*, stage: str, autonomy: str, request_sha256: str) 
         "reason: null",
     ]
     return "\n".join(lines) + "\n"
+
+
+def _listed(items: list[str]) -> str:
+    """Hasta ``_MAX_LISTED`` elementos y el total, para un mensaje de error."""
+    shown = ", ".join(items[:_MAX_LISTED])
+    more = f" … y {len(items) - _MAX_LISTED} más" if len(items) > _MAX_LISTED else ""
+    return f"{shown}{more} ({len(items)} en total)"
+
+
+def _validate(
+    path: Path,
+    decision: HumanDecision,
+    *,
+    records: RecordPolicy | None,
+    flags: FlagPolicy | None,
+) -> None:
+    """Valida ``records`` y ``flags`` de una decisión cuyo hash coincide (spec §8).
+
+    Lo estructural se comprueba siempre (``records``/``flags`` en un gate que no
+    los admite). Con ``approved: false`` no se aplica ninguna etiqueta ni
+    adjudicación (nunca acompañan a un ``reject``), así que el resto solo se
+    comprueba al aprobar.
+
+    Raises:
+        DecisionFileError: con el motivo y los ids o índices afectados.
+    """
+    if decision.records and records is None:
+        raise DecisionFileError(
+            f"{path}: `records` solo vale en los gates de cribado (screening_ta, screening_ft); "
+            "este gate se aprueba o rechaza por etapa."
+        )
+    if decision.flags and flags is None:
+        raise DecisionFileError(
+            f"{path}: `flags` solo vale en el gate `reporte` con citas marcadas por el "
+            "verificador, y esta solicitud no tiene ninguna."
+        )
+    if not decision.approved:
+        return
+    if records is not None:
+        valid = {h.record_id for h in records.hints}
+        unknown = sorted(set(decision.records) - valid)
+        if unknown:
+            raise DecisionFileError(
+                f"{path}: `records` con ids que no están en la solicitud: {_listed(unknown)}."
+            )
+        for record_id, label in decision.records.items():
+            sin_razon = not (label.reason or "").strip()
+            if label.label == "exclude" and records.reason_on_exclude and sin_razon:
+                raise DecisionFileError(
+                    f"{path}: {record_id!r} se excluye sin `reason`; en este gate la razón es "
+                    "obligatoria (va a la lista de excluidos, PRISMA 2020 16b)."
+                )
+            if label.label is not None and record_id in records.rescue_ids and sin_razon:
+                raise DecisionFileError(
+                    f"{path}: {record_id!r} no se recuperó; etiquetarlo es un rescate y necesita "
+                    "`reason` (cómo se obtuvo el texto completo, D2)."
+                )
+    if flags is not None:
+        valid_index = {str(c.index) for c in flags.flagged}
+        unknown = sorted(set(decision.flags) - valid_index)
+        if unknown:
+            raise DecisionFileError(
+                f"{path}: `flags` con índices que no son citas marcadas: {_listed(unknown)}."
+            )
+    pending: list[str] = []
+    if records is not None:
+        labeled = {rid for rid, lab in decision.records.items() if lab.label is not None}
+        pending += sorted((records.must_label | records.must_resolve) - labeled)
+    if flags is not None:
+        for claim in flags.flagged:
+            review = decision.flags.get(str(claim.index))
+            done = (
+                review is not None
+                and review.verdict == "false_positive"
+                and bool((review.reason or "").strip())
+            )
+            if not done:
+                pending.append(f"cita {claim.index}")
+    if pending:
+        raise DecisionFileError(
+            f"{path}: para aprobar falta etiquetar o adjudicar: {_listed(pending)}. Cada registro "
+            "pendiente necesita `label` (include o exclude) y cada cita marcada `verdict: "
+            "false_positive` con `reason`; si alguna cita marcada es real, rechaza "
+            "(`approved: false`)."
+        )
 
 
 def _recorded(
@@ -177,8 +380,19 @@ def _register(
     decision: HumanDecision,
     request_sha256: str,
     decision_path: Path,
+    labels: dict[str, RecordLabel],
+    flag_reviews: dict[str, FlagReview],
+    records: RecordPolicy | None,
+    flags: FlagPolicy | None,
+    force_human: bool,
 ) -> None:
-    """Registra la decisión en el ledger, una sola vez (idempotente al reanudar)."""
+    """Registra la decisión en el ledger, una sola vez (idempotente al reanudar).
+
+    Con ``approve``, primero una ``label`` por etiqueta (en orden de id) y una
+    ``flag_review`` por adjudicación (en orden de índice), después el
+    ``approve`` (spec §4.3). Un ``reject`` va solo. Si la corrida cayó a medias,
+    al reanudar solo se escriben las entradas que faltan.
+    """
     decision_sha256 = canonical_sha256(decision.model_dump(mode="json"))
     action = "approve" if decision.approved else "reject"
     effective = summarize_gates(entries).get(stage)
@@ -210,18 +424,90 @@ def _register(
             "volver a ella, cambia `reason` en decision.yml (el ledger no repite una "
             "decisión idéntica)."
         )
+    hashes = {"request_sha256": request_sha256, "decision_sha256": decision_sha256}
+    pending: list[DecisionEntry] = []
+    proposals = {h.record_id: h.proposal for h in records.hints} if records else {}
+    for record_id in sorted(labels):
+        label = labels[record_id]
+        pending.append(
+            DecisionEntry(
+                stage=stage,
+                actor=decision.actor,
+                autonomy=autonomy,
+                action="label",
+                target=record_id,
+                detail={
+                    "from": proposals.get(record_id),
+                    "to": label.label,
+                    "reason": label.reason,
+                    "rescue": bool(records and record_id in records.rescue_ids),
+                    **hashes,
+                },
+            )
+        )
+    claims = {str(c.index): c for c in flags.flagged} if flags else {}
+    for index in sorted(flag_reviews, key=int):
+        review, claim = flag_reviews[index], claims[index]
+        pending.append(
+            DecisionEntry(
+                stage=stage,
+                actor=decision.actor,
+                autonomy=autonomy,
+                action="flag_review",
+                target=f"flag:{index}",
+                detail={
+                    "cited_id": claim.cited_id,
+                    "claim": claim.claim,
+                    "verdict": review.verdict,
+                    "reason": review.reason,
+                    **hashes,
+                },
+            )
+        )
+    for entry in pending:  # tras una caída a medias, solo las que faltan
+        if not _recorded(
+            entries,
+            stage=stage,
+            action=entry.action,
+            target=entry.target,
+            request_sha256=request_sha256,
+            decision_sha256=decision_sha256,
+        ):
+            run_ctx.ledger.append(entry)
     detail = {
-        **decision.model_dump(exclude={"approved", "actor", "request_sha256"}, exclude_none=True),
-        "request_sha256": request_sha256,
-        "decision_sha256": decision_sha256,
-        "n_labels": 0,
-        "forced_human": False,
+        **decision.model_dump(
+            exclude={"approved", "actor", "request_sha256", "records", "flags"},
+            exclude_none=True,
+        ),
+        **hashes,
+        "n_labels": len(labels),
+        "forced_human": force_human,
     }
     run_ctx.ledger.append(
         DecisionEntry(
             stage=stage, actor=decision.actor, autonomy=autonomy, action=action, detail=detail
         )
     )
+
+
+def _from_ledger(
+    entries: list[DecisionEntry], stage: str, decision_sha256: str | None
+) -> tuple[dict[str, RecordLabel], dict[str, FlagReview]]:
+    """Etiquetas y adjudicaciones de una decisión ya registrada (el ledger manda)."""
+    labels: dict[str, RecordLabel] = {}
+    reviews: dict[str, FlagReview] = {}
+    if decision_sha256 is None:
+        return labels, reviews
+    for e in entries:
+        if e.stage != stage or e.detail.get("decision_sha256") != decision_sha256:
+            continue
+        if e.action == "label" and e.target is not None:
+            labels[e.target] = RecordLabel(label=e.detail.get("to"), reason=e.detail.get("reason"))
+        elif e.action == "flag_review" and e.target is not None:
+            reviews[e.target.removeprefix("flag:")] = FlagReview(
+                verdict=e.detail.get("verdict"), reason=e.detail.get("reason")
+            )
+    return labels, reviews
 
 
 def review_gate(
@@ -231,6 +517,9 @@ def review_gate(
     run_ctx: RunContext,
     review_payload: dict,
     auto_approve: bool,
+    records: RecordPolicy | None = None,
+    flags: FlagPolicy | None = None,
+    force_human: bool = False,
 ) -> GateResult:
     """Aplica el checkpoint humano de una etapa según su autonomía.
 
@@ -241,6 +530,12 @@ def review_gate(
     A2/A3 no pausan (registran ``auto-proceed`` y continúan). A0/A1 requieren
     una decisión: ``decision.yml`` con el hash vigente, la ya registrada en el
     ledger para esa solicitud, o ``auto_approve``; si no hay ninguna, pausan.
+
+    ``records`` y ``flags`` habilitan la decisión por registro y por cita.
+    ``--auto-approve`` aprueba con las etiquetas de la IA, salvo que haya
+    registros que solo resuelve un humano (``must_resolve``): entonces pausa
+    (D9). Con ``force_human`` (citas marcadas, M5) se ignoran ``auto_approve`` y
+    una autonomía A2/A3, que pasa a A1 en la solicitud y el ledger.
 
     Raises:
         ValueError: si ``review_payload`` trae alguna clave común de la solicitud
@@ -256,6 +551,8 @@ def review_gate(
             "de la solicitud y pisarlas cambiaría en silencio lo que se hashea (error de "
             "programación)."
         )
+    if force_human and autonomy in {"A2", "A3"}:
+        autonomy = "A1"
     payload = {
         "schema_version": ARTIFACT_SCHEMA_VERSION,
         "stage": stage,
@@ -304,6 +601,7 @@ def review_gate(
     resume = f"Reanuda con: revisia run --resume {run_ctx.run_dir}"
 
     decision = _read_decision(decision_path)
+    from_file = decision is not None
     if decision is not None and decision.request_sha256 != request_sha256:
         return GateResult(
             "paused",
@@ -320,12 +618,37 @@ def review_gate(
         if effective is not None and effective.request_sha256 == request_sha256:
             # El ledger manda: la decisión de esta solicitud ya está registrada.
             approved = effective.action != "reject"
+            labels, reviews = _from_ledger(entries, stage, effective.decision_sha256)
             return GateResult(
                 "approved" if approved else "rejected",
                 f"{stage}: {'aprobado' if approved else 'rechazado'} por {effective.actor} "
                 "(decisión registrada en el ledger).",
                 request_sha256,
                 effective.actor,
+                labels,
+                reviews,
+            )
+        if auto_approve and force_human:
+            return GateResult(
+                "paused",
+                (
+                    f"Checkpoint humano en '{stage}': el verificador marcó citas y este gate "
+                    "exige una decisión humana (M5); --auto-approve no aplica aquí. Revisa "
+                    f"{request_path} y rellena {stage_dir / TEMPLATE_FILE} como "
+                    f"{decision_path}. {resume}"
+                ),
+                request_sha256,
+            )
+        if auto_approve and records is not None and records.must_resolve:
+            return GateResult(
+                "paused",
+                (
+                    f"Checkpoint humano en '{stage}': {len(records.must_resolve)} registro(s) "
+                    "`unclear` solo los resuelve un humano (D9): --auto-approve no adopta una "
+                    f"etiqueta que la IA no dio. Etiquétalos en {decision_path} (`records`, "
+                    f"desde {stage_dir / TEMPLATE_FILE}). {resume}"
+                ),
+                request_sha256,
             )
         if auto_approve:
             decision = HumanDecision(
@@ -342,6 +665,15 @@ def review_gate(
             request_sha256,
         )
 
+    if from_file:
+        # La sintética de --auto-approve no se valida: adopta las etiquetas de la
+        # IA y no exige la completitud de A0 (D9).
+        _validate(decision_path, decision, records=records, flags=flags)
+    labels: dict[str, RecordLabel] = {}
+    reviews: dict[str, FlagReview] = {}
+    if decision.approved:
+        labels = {rid: lab for rid, lab in decision.records.items() if lab.label is not None}
+        reviews = dict(decision.flags) if flags is not None else {}
     _register(
         run_ctx,
         entries,
@@ -350,10 +682,20 @@ def review_gate(
         decision=decision,
         request_sha256=request_sha256,
         decision_path=decision_path,
+        labels=labels,
+        flag_reviews=reviews,
+        records=records,
+        flags=flags,
+        force_human=force_human,
     )
     if decision.approved:
         return GateResult(
-            "approved", f"{stage}: aprobado por {decision.actor}.", request_sha256, decision.actor
+            "approved",
+            f"{stage}: aprobado por {decision.actor}.",
+            request_sha256,
+            decision.actor,
+            labels,
+            reviews,
         )
     return GateResult(
         "rejected", f"{stage}: rechazado por {decision.actor}.", request_sha256, decision.actor
@@ -372,8 +714,9 @@ def _read_decision(path: Path) -> HumanDecision | None:
 
     Raises:
         DecisionFileError: si el fichero está vacío, no es YAML válido, su raíz
-            no es un mapa, falta ``request_sha256`` o ``approved`` no es un
-            booleano.
+            no es un mapa, falta ``request_sha256``, ``approved`` no es un
+            booleano o ``records``/``flags`` traen campos desconocidos o claves
+            que no son un id.
     """
     if not path.exists():
         return None
