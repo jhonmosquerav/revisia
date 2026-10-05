@@ -226,7 +226,7 @@ def test_ledger_acota_los_textos_hostiles_de_las_entradas(corrida) -> None:
     edit_ledger(corrida, _hostil)
     report = auditar(corrida)
     assert fila(report, "ledger").status == "FAIL"
-    assert fila(report, "final_gate").status == "WARN"
+    assert fila(report, "final_gate").status == "FAIL"  # antes WARN: el actor no es humano (D8)
     for check_id in ("ledger", "hitl", "final_gate"):
         assert len(fila(report, check_id).detail) < 1_500, check_id
 

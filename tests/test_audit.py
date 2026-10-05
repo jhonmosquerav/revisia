@@ -44,11 +44,17 @@ def _sin_humanos(entries: list[dict]) -> None:
         entry["actor"] = "agent:screener"
 
 
-def test_audit_sin_decisiones_humanas_advierte_hitl(corrida) -> None:
+def test_audit_sin_decisiones_humanas_falla_hitl(corrida) -> None:
+    # Antes WARN y "APTA": una corrida sin ninguna decisión humana en las
+    # etapas de juicio no es publicable (auditoría 2026-09-03, C1/A11).
     edit_ledger(corrida, _sin_humanos)
-    hitl = fila(auditar(corrida), "hitl")
-    assert hitl.status == "WARN"
-    assert "NO publicable sin revisión humana" in hitl.detail
+    report = auditar(corrida)
+    hitl = fila(report, "hitl")
+    assert hitl.status == "FAIL"
+    assert "`screening_ta`: decisión efectiva de `agent:screener` (approve), no humana" in (
+        hitl.detail
+    )
+    assert report.publishable is False
 
 
 def test_audit_sin_gold_advierte(corrida) -> None:
@@ -118,7 +124,7 @@ def test_audit_sin_decision_de_reporte_falla_gate_final(corrida) -> None:
     report = auditar(corrida)
     final_gate = fila(report, "final_gate")
     assert final_gate.status == "FAIL"
-    assert "pausada o incompleta" in final_gate.detail
+    assert "en pausa en `reporte`" in final_gate.detail
     assert report.publishable is False
 
 
@@ -148,24 +154,24 @@ def test_audit_reporte_aprobado_pasa_gate_final(corrida) -> None:
     assert fila(auditar(corrida), "final_gate").status == "PASS"
 
 
-def test_audit_gate_final_auto_approve_no_es_humano_advierte(corrida) -> None:
+def test_audit_gate_final_auto_approve_no_es_humano_falla(corrida) -> None:
     # `--auto-approve` sin decision.yml deja actor "auto-approve (demo)": no es
-    # aprobación humana, así que no puede ser PASS (revisión final 2026-09-25).
+    # aprobación humana. Antes WARN; con D8 es FAIL y la corrida no es publicable.
     _set_ultima_decision_reporte(corrida, action="approve", actor="auto-approve (demo)")
     report = auditar(corrida)
     final_gate = fila(report, "final_gate")
-    assert final_gate.status == "WARN"
+    assert final_gate.status == "FAIL"
     assert "no lo aprobó un humano" in final_gate.detail
     assert "auto-approve (demo)" in final_gate.detail
-    assert report.publishable  # WARN no bloquea publicabilidad, a diferencia de FAIL
+    assert report.publishable is False
 
 
-def test_audit_gate_final_auto_proceed_advierte(corrida) -> None:
+def test_audit_gate_final_auto_proceed_falla(corrida) -> None:
     # `reporte` en A2/A3 se auto-ejecuta y notifica (agent:reporte): tampoco es
-    # una decisión humana.
+    # una decisión humana (D8).
     _set_ultima_decision_reporte(corrida, action="auto-proceed", actor="agent:reporte")
     final_gate = fila(auditar(corrida), "final_gate")
-    assert final_gate.status == "WARN"
+    assert final_gate.status == "FAIL"
     assert "no lo aprobó un humano" in final_gate.detail
     assert "agent:reporte" in final_gate.detail
 
