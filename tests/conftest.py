@@ -17,6 +17,7 @@ PR-B (D2) un registro sin texto en abierto ya no llega a extracción.
 from __future__ import annotations
 
 import shutil
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -153,3 +154,40 @@ def corrida(_corrida_auditoria: Path, tmp_path: Path) -> Path:
     destino = tmp_path / "runs" / _corrida_auditoria.name
     shutil.copytree(_corrida_auditoria, destino)
     return destino
+
+
+@pytest.fixture
+def correr_hasta(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..., Path]:
+    """Fábrica de corridas reales detenidas en un gate (pausadas o rechazadas).
+
+    ``correr_hasta(aprobados=("screening_ta", "screening_ft"))`` aprueba esos gates y deja la
+    corrida en pausa en el siguiente; con ``rechazar="extraccion"`` ese gate se rechaza. Es el
+    mismo pipeline y el mismo proveedor que ``corrida``, pero sin llegar al gate final: en esas
+    corridas el manifiesto y el entregable todavía no existen (spec 2026-10-04 §4.2), y lo que
+    el auditor exige de ellas no puede inventarse editando una corrida terminada.
+    """
+
+    def _correr(*, aprobados: Sequence[str], rechazar: str | None = None) -> Path:
+        protocol = load_protocol(DEMO)
+        timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        ctx = RunContext(protocol.slug, tmp_path / "detenida", timestamp)
+        for stage in aprobados:
+            (ctx.stage_dir(stage) / "decision.yml").write_text(DECISION_HUMANA, encoding="utf-8")
+        if rechazar is not None:
+            (ctx.stage_dir(rechazar) / "decision.yml").write_text(
+                "approved: false\nactor: human:revisora\nreason: sin respaldo\n", encoding="utf-8"
+            )
+        monkeypatch.setattr(pipeline_mod, "build_provider", proveedor_auditoria)
+        result = pipeline_mod.run_pipeline(
+            protocol,
+            DEMO,
+            ctx,
+            max_results=50,
+            search_fn=busqueda_auditoria,
+            fetch_fn=fetch_disponible,
+            gold_labels=GOLD_AUDITORIA,
+        )
+        assert result.status == ("rejected" if rechazar else "paused"), result.message
+        return ctx.run_dir
+
+    return _correr

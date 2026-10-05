@@ -419,6 +419,7 @@ COTA_LLAMADAS = "§9.3 · llamadas ≥ cota inferior de las decisiones"
 RESCATADOS = "v0.7 · fulltext_rescued == 0 (el motor v0.7 no rescata textos completos)"
 FICHERO_DOBLE = "§9.3 · 05_extraction/agreement.json de la doble extracción declarada"
 COPIA_DOBLE = "§9.3 · copia `extraction_agreement` del manifiesto"
+MODELOS_USADOS = "§9.3 · models_used == modelos de llm_calls"
 
 
 def _relaciones(run: Path) -> dict[str, tuple[bool | None, str]]:
@@ -629,6 +630,65 @@ def test_arithmetic_fulltext_rescued_no_baja_la_cota_de_llamadas(corrida) -> Non
     assert "23 llamadas < 24" in arithmetic.detail
 
 
+def test_arithmetic_manifiesto_sin_models_used_falla(corrida) -> None:
+    edit_yaml(corrida / "manifest.yml", _sin_clave("models_used"))
+    report = auditar(corrida)
+    assert fila(report, "arithmetic").status == "FAIL"
+    assert report.publishable is False
+    ok, detalle = _relaciones(corrida)[MODELOS_USADOS]
+    assert ok is False
+    assert detalle == "models_used ausente en el manifiesto (el motor siempre lo escribe)"
+    # La ausencia no la marca `schemas` (solo valida lo presente): no puede remitir a ella.
+    assert fila(report, "schemas").status == "PASS"
+    assert "schemas" not in detalle
+
+
+def test_arithmetic_models_used_de_otro_tipo_es_no_verificable_y_schemas_lo_marca(corrida) -> None:
+    edit_yaml(corrida / "manifest.yml", lambda m: m.update(models_used="fake:fake-1"))
+    report = auditar(corrida)
+    ok, detalle = _relaciones(corrida)[MODELOS_USADOS]
+    assert ok is None
+    assert "ver `schemas`" in detalle
+    assert fila(report, "schemas").status == "FAIL"  # la remisión es cierta
+
+
+@pytest.mark.parametrize(
+    ("clave", "ruta"),
+    [
+        pytest.param("exclusions", "03_screening/exclusions.json", id="exclusions"),
+        pytest.param("risk_of_bias", "07_rob/assessments.json", id="risk_of_bias"),
+        pytest.param("verification", "06_synthesis/verification.json", id="verification"),
+    ],
+)
+def test_arithmetic_fichero_y_copia_que_el_motor_siempre_escribe_ausentes_son_relacion_rota(
+    corrida, clave: str, ruta: str
+) -> None:
+    (corrida / ruta).unlink()
+    edit_yaml(corrida / "manifest.yml", _sin_clave(clave))
+    report = auditar(corrida)
+    assert fila(report, "arithmetic").status == "FAIL"
+    assert report.publishable is False
+    ok, detalle = _relaciones(corrida)[f"§9.3 · copia `{clave}` del manifiesto"]
+    assert ok is False
+    assert detalle == f"{ruta} y su copia ausentes (el motor siempre lo escribe)"
+
+
+@pytest.mark.parametrize(
+    ("clave", "ruta"),
+    [
+        pytest.param("screening_metrics", "03_screening/metrics.json", id="screening_metrics"),
+        pytest.param("meta_analysis", "08_meta/meta_analysis.json", id="meta_analysis"),
+    ],
+)
+def test_arithmetic_copia_opcional_sin_fichero_ni_copia_no_es_relacion(
+    corrida, clave: str, ruta: str
+) -> None:
+    # Sin gold no hay métricas y sin `effects.yml` no hay metaanálisis: son opcionales.
+    (corrida / ruta).unlink()
+    edit_yaml(corrida / "manifest.yml", _sin_clave(clave))
+    assert f"§9.3 · copia `{clave}` del manifiesto" not in _relaciones(corrida)
+
+
 # ── _limitar: el sufijo «(+k más)» de una relación sobrevive al recorte ──
 
 
@@ -651,6 +711,44 @@ def test_limitar_conserva_el_sufijo_de_ids_aunque_le_siga_mas_texto() -> None:
 def test_limitar_sigue_acotando_lo_que_no_lleva_sufijo() -> None:
     resultado = _limitar(["x" * 5_000, "corta"])
     assert resultado == "x" * 239 + "…; corta"
+
+
+def test_limitar_conserva_los_dos_sufijos_de_una_relacion_con_dos_listas() -> None:
+    ids = ", ".join(["r" * 58] * 3)
+    screeners = ", ".join(["s" * 55] * 3)
+    relacion = f"{VOTOS}: {ids} (+3 más) (screeners: {screeners} (+2 más))"
+    assert len(relacion) > 240
+    resultado = _limitar([relacion])
+    assert len(resultado) <= 240
+    assert "(+3 más)" in resultado
+    assert "(+2 más)" in resultado
+    assert "(screeners: " in resultado  # el recorte reparte el espacio: la 2.ª lista no desaparece
+    assert re.search(r"\(\+\d+(?!\d| más\))", resultado) is None, resultado
+
+
+def test_limitar_con_texto_hostil_lleno_de_sufijos_sigue_acotado() -> None:
+    resultado = _limitar(["a (+1 más) " * 500])
+    assert len(resultado) <= 240
+
+
+def test_arithmetic_voto_por_screener_conserva_el_sufijo_de_ids_y_el_de_screeners(corrida) -> None:
+    def _ids_largos(decisions: list[dict]) -> None:
+        for i, decision in enumerate(decisions[:5]):
+            decision["record_id"] = f"id-{i}-{'r' * 53}"  # 58 caracteres
+
+    def _cinco_screeners(protocolo: dict) -> None:
+        protocolo["ensemble_llm"]["screening_ta"] = [
+            {"provider": "fake", "model": f"modelo-{i}-{'m' * 40}", "seed": i} for i in range(5)
+        ]
+
+    edit_json(corrida / TA, _ids_largos)
+    editar_protocolo(corrida, _cinco_screeners)
+    arithmetic = fila(auditar(corrida), "arithmetic")
+    assert arithmetic.status == "FAIL"
+    assert VOTOS in arithmetic.detail
+    assert "(+3 más) (screeners: " in arithmetic.detail  # 6 decisiones con voto de más
+    assert "(+2 más))" in arithmetic.detail  # 5 screeners
+    assert re.search(r"\(\+\d+(?!\d| más\))", arithmetic.detail) is None, arithmetic.detail
 
 
 def test_arithmetic_ids_enormes_no_dejan_un_sufijo_cortado(corrida) -> None:
@@ -769,6 +867,58 @@ def test_exclusions_json_ilegible_se_informa_acotado(corrida) -> None:
     exclusions = fila(auditar(corrida), "exclusions")
     assert exclusions.status == "FAIL"
     assert len(exclusions.detail) < 1_000
+
+
+@pytest.mark.parametrize(
+    ("aprobados", "rechazar", "estado", "etapa"),
+    [
+        pytest.param(
+            ("screening_ta", "screening_ft"),
+            None,
+            "paused",
+            "extraccion",
+            id="pausada-en-extraccion",
+        ),
+        pytest.param(
+            ("screening_ta", "screening_ft", "extraccion"),
+            None,
+            "paused",
+            "rob",
+            id="pausada-en-rob",
+        ),
+        pytest.param(
+            ("screening_ta", "screening_ft"),
+            "extraccion",
+            "rejected",
+            "extraccion",
+            id="rechazada-en-extraccion",
+        ),
+    ],
+)
+def test_exclusions_corrida_detenida_antes_del_reporte_no_exige_el_manifiesto(
+    correr_hasta, aprobados, rechazar, estado: str, etapa: str
+) -> None:
+    # El motor escribe `manifest.yml` al evaluar el gate final: exigirle `counts` a una corrida
+    # detenida antes daba un FAIL falso (regresión de la revisión de la Tarea 7).
+    run = correr_hasta(aprobados=aprobados, rechazar=rechazar)
+    assert not (run / "manifest.yml").exists()
+    report = auditar(run)
+    assert (report.state.status, report.state.pending_stage) == (estado, etapa)
+    exclusions = fila(report, "exclusions")
+    assert exclusions.status == "PASS", exclusions.detail
+    assert "se verificarán al reanudar" in exclusions.detail  # el PASS no aparenta verlo todo
+    assert fila(report, "arithmetic").status == "N/A"
+    assert report.publishable is False  # la pausa sigue dejando `final_gate` en FAIL
+
+
+def test_exclusions_corrida_en_pausa_en_reporte_si_exige_el_manifiesto(correr_hasta) -> None:
+    # Desde `reporte` el manifiesto ya existe (se escribe con cualquier resultado del gate final).
+    run = correr_hasta(aprobados=("screening_ta", "screening_ft", "extraccion", "rob"))
+    assert fila(auditar(run), "exclusions").status == "PASS"
+    edit_yaml(run / "manifest.yml", _sin_clave("counts"))
+    exclusions = fila(auditar(run), "exclusions")
+    assert exclusions.status == "FAIL"
+    assert SIN_CONTEOS in exclusions.detail
 
 
 # ── deliverable ────────────────────────────────────────────────────────

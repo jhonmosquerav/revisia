@@ -20,11 +20,17 @@ excepción inesperada es una relación rota con su tipo, no un «error interno»
 
 El auditor es fail-closed (revisión de la Tarea 7): cada relación termina verificada, rota (FAIL)
 o no verificable (WARN), y ninguna se omite en silencio. Lo que el motor escribe siempre
-(``counts`` y ``protocol`` del manifiesto, las decisiones, extracciones y evaluaciones, el CSV
-PRISMA2020 legible, ``agreement.json`` cuando el protocolo declara un 2.º extractor y hay
-incluidos) y falta es manipulación, así que la relación queda rota; el WARN se reserva para lo
-que de verdad no se puede saber (un valor que no valida y marca ``schemas``, o un dato que
-manifiestos antiguos pudieron no traer, como ``excluded_ta_human/ai``).
+(``counts``, ``protocol``, ``models_used`` y las copias de exclusiones, RoB y verificación en el
+manifiesto, las decisiones, extracciones y evaluaciones, ``agreement.json`` cuando el protocolo
+declara un 2.º extractor y hay incluidos) y falta es manipulación, así que la relación queda rota;
+lo mismo un CSV PRISMA2020 que existe y no se lee. El WARN se reserva para lo que de verdad no se
+puede saber: un valor que no valida y marca ``schemas``, un dato que manifiestos antiguos
+pudieron no traer (``excluded_ta_human/ai``) y el CSV PRISMA2020 ausente, cuyo FAIL ya da la
+fila ``deliverable``.
+
+Lo que el motor aún no ha escrito no se exige (``state.py``): ``arithmetic`` y ``deliverable``
+solo corren con ``reporte`` alcanzado, y ``exclusions``, que corre desde ``screening_ft``,
+exige el manifiesto solo desde entonces (se escribe al evaluar el gate final).
 """
 
 from __future__ import annotations
@@ -42,10 +48,12 @@ from revisia.audit.artifacts import NA_MANIFIESTO, AuditContext, short_repr, sho
 from revisia.audit.model import Verdict
 from revisia.config import ReviewProtocol
 from revisia.exclusions import compute_exclusion_breakdown
+from revisia.exports import PrismaCounts
 from revisia.extraction_agreement import select_double_extraction_subset
 from revisia.llm.ensemble import recall_biased_label
 from revisia.metrics import kappa_from_matrix, mcc, wmcc
 from revisia.schemas.records import SearchRecord
+from revisia.schemas.screening import ScreeningDecision
 
 TA = "03_screening/decisions.json"
 FT = "04_fulltext/decisions.json"
@@ -87,6 +95,9 @@ MANIFEST_COPIES: dict[str, str] = {
     "extraction_agreement": AGREEMENT,
     "meta_analysis": "08_meta/meta_analysis.json",
 }
+# De esas copias, las que el motor escribe en toda corrida (el resto depende del gold, de la
+# doble extracción declarada o de que el protocolo aporte ``effects.yml``).
+COPIAS_SIEMPRE_ESCRITAS: tuple[str, ...] = ("exclusions", "risk_of_bias", "verification")
 
 DELIVERABLE_FILES: tuple[str, ...] = (
     "documento.md",
@@ -106,21 +117,46 @@ DELIVERABLE_FILES: tuple[str, ...] = (
 _SUFIJO_MAS = re.compile(r" \(\+\d+ más\)")
 
 
+def _repartir(largos: Sequence[int], total: int) -> list[int]:
+    """Reparte ``total`` caracteres entre tramos de esos ``largos``, por igual.
+
+    Cada tramo recibe lo que necesita hasta su parte igual; lo que no usan los cortos pasa a los
+    largos, así que ninguno se queda sin sitio mientras otro lo acapara.
+    """
+    cuotas = [0] * len(largos)
+    restante = total
+    orden = sorted(range(len(largos)), key=largos.__getitem__)
+    for puesto, i in enumerate(orden):
+        cuotas[i] = min(largos[i], restante // (len(orden) - puesto))
+        restante -= cuotas[i]
+    return cuotas
+
+
 def _acotar_item(item: str) -> str:
-    """``item`` recortado a ``_LIMITE_ITEM`` sin partir el ``(+k más)`` que ``_ids`` dejó dentro.
+    """``item`` recortado a ``_LIMITE_ITEM`` sin partir los ``(+k más)`` que ``_ids`` dejó dentro.
 
     Cortar a ciegas daba «…, rrr… (+4 …»: el lector no sabía cuántos ids faltaban (revisión de la
-    Tarea 7). Si el corte caería dentro de un sufijo (o antes de él), se recorta el contenido que
-    lo precede y el sufijo se añade entero.
+    Tarea 7). Una relación puede llevar varios sufijos (los ids con voto distinto y los screeners
+    configurados): se conservan todos enteros y solo se recortan los tramos de texto libre entre
+    ellos, repartiendo el espacio entre los tramos (un tramo largo no deja sin sitio a los demás).
     """
-    if len(item) > _LIMITE_ITEM:
-        for sufijo in _SUFIJO_MAS.finditer(item):
-            if sufijo.end() > _LIMITE_ITEM - 1:
-                cola = " …" if item[sufijo.end() :] else ""
-                reservado = len(sufijo.group()) + len(cola)
-                contenido = short_text(item[: sufijo.start()], limit=_LIMITE_ITEM - reservado)
-                return contenido + sufijo.group() + cola
-    return short_text(item, limit=_LIMITE_ITEM)
+    sufijos = list(_SUFIJO_MAS.finditer(item)) if len(item) > _LIMITE_ITEM else []
+    fijo = sum(len(s.group()) for s in sufijos)
+    if not sufijos or fijo > _LIMITE_ITEM // 2:  # sin sufijos (o texto hostil lleno de ellos)
+        return short_text(item, limit=_LIMITE_ITEM)
+    libres: list[str] = []
+    inicio = 0
+    for sufijo in sufijos:
+        libres.append(item[inicio : sufijo.start()])
+        inicio = sufijo.end()
+    libres.append(item[inicio:])
+    cuotas = _repartir([len(tramo) for tramo in libres], _LIMITE_ITEM - fijo)
+    partes: list[str] = []
+    for i, tramo in enumerate(libres):
+        partes.append(short_text(tramo, limit=cuotas[i]) if cuotas[i] > 0 else "")
+        if i < len(sufijos):
+            partes.append(sufijos[i].group())
+    return "".join(partes)
 
 
 def _limitar(items: list[str]) -> str:
@@ -147,7 +183,7 @@ def _n(value: object) -> str:
     return short_repr(value, limit=_LIMITE_NUMERO)
 
 
-def _ids_incluidos(ft: Sequence[Any]) -> list[str]:
+def _ids_incluidos(ft: Sequence[ScreeningDecision]) -> list[str]:
     """Ids incluidos en unas decisiones a texto completo ya cargadas (``include`` o ``unclear``)."""
     return [d.record_id for d in ft if d.final_label in {"include", "unclear"}]
 
@@ -380,7 +416,9 @@ def _funnel(ctx: AuditContext, rel: _Relations) -> None:
         rel.unverifiable("relaciones del texto completo", f"dependen de {TA} (ver arriba)")
 
 
-def _cribado_ta(ctx: AuditContext, rel: _Relations, counts: Any, ta: list[Any]) -> None:
+def _cribado_ta(
+    ctx: AuditContext, rel: _Relations, counts: PrismaCounts, ta: list[ScreeningDecision]
+) -> None:
     rel.eq(f"5 · len({TA}) == screened", len(ta), counts.screened)
     rel.eq(
         "6 · excluded_ta == #(final T/A == exclude)",
@@ -413,7 +451,12 @@ def _cribado_ta(ctx: AuditContext, rel: _Relations, counts: Any, ta: list[Any]) 
     rel.check(name_votos, not bad_votes, f"{_ids(bad_votes)} (screeners: {_ids(screeners)})")
 
 
-def _texto_completo(rel: _Relations, counts: Any, ta: list[Any], ft: list[Any]) -> None:
+def _texto_completo(
+    rel: _Relations,
+    counts: PrismaCounts,
+    ta: list[ScreeningDecision],
+    ft: list[ScreeningDecision],
+) -> None:
     passed = {d.record_id for d in ta if d.final_label in {"include", "unclear"}}
     in_ft = {d.record_id for d in ft}
     rel.check("7 · ids de 04_fulltext == pasan T/A", in_ft == passed, _ids(sorted(in_ft ^ passed)))
@@ -550,14 +593,21 @@ def _calls(ctx: AuditContext, rel: _Relations) -> None:
             models.add(f"{provider}:{model}")
         else:
             malformed += 1
-    declared = manifest.get("models_used")
-    if not (isinstance(declared, list) and all(isinstance(m, str) for m in declared)):
+    declared_section = ctx.manifest_section("models_used")
+    if not declared_section.present:
+        # El motor siempre escribe `models_used` (`RunContext.write_manifest`): sin él no hay
+        # nada que cotejar con las llamadas y la corrida no puede quedar publicable.
+        rel.ausente(name, "models_used ausente en el manifiesto")
+    elif not declared_section.ok:
+        # Presente pero de otro tipo: `schemas` valida `models_used` y marca FAIL.
         rel.unverifiable(name, "models_used no es una lista de cadenas (ver `schemas`)")
     elif malformed:
+        # Una llamada sin provider/model textuales no valida `RunMeta`: lo marca `schemas`.
         rel.unverifiable(
             name, f"{malformed} llamada(s) sin provider/model textuales (ver `schemas`)"
         )
     else:
+        declared: list[str] = declared_section.value
         rel.check(
             name,
             sorted(declared) == sorted(models),
@@ -637,9 +687,14 @@ def _copies(ctx: AuditContext, rel: _Relations) -> None:
     for key, path in MANIFEST_COPIES.items():
         loaded = ctx.art.json(path)
         if key not in manifest and not loaded.present:
-            if key == "extraction_agreement" and _requiere_doble_extraccion(ctx):
+            nombre = f"§9.3 · copia `{key}` del manifiesto"
+            if key in COPIAS_SIEMPRE_ESCRITAS:
+                # Ni el fichero ni su copia: el motor escribe ambos siempre (la ausencia del
+                # fichero la marca también `stage_artifacts`, pero esta relación no se omite).
+                rel.ausente(nombre, f"{path} y su copia ausentes")
+            elif key == "extraction_agreement" and _requiere_doble_extraccion(ctx):
                 rel.check(
-                    f"§9.3 · copia `{key}` del manifiesto",
+                    nombre,
                     False,
                     f"{path} y su copia ausentes (el protocolo declara un 2.º extractor)",
                 )
@@ -715,9 +770,16 @@ def check_exclusions(ctx: AuditContext) -> Verdict:
         if getattr(declared, field) != getattr(recomputed, field)
     ]
     unverifiable: list[str] = []
+    pendiente = ""
     counts = ctx.manifest_section("counts")
     if not counts.present:
-        diffs.append("counts ausente en el manifiesto (el motor siempre lo escribe)")
+        # El motor escribe el manifiesto al evaluar el gate final (spec §4.2): una corrida
+        # detenida antes (pausa, rechazo o interrupción en extracción o RoB) todavía no lo tiene
+        # y exigirlo daría un FAIL falso. Desde `reporte` es manipulación (`state.reached`).
+        if "reporte" in ctx.state.reached:
+            diffs.append("counts ausente en el manifiesto (el motor siempre lo escribe)")
+        else:
+            pendiente = " El manifiesto aún no existe: sus conteos se verificarán al reanudar."
     elif not counts.ok:
         unverifiable.append("manifest.counts inválido (ver `schemas`)")
     elif counts.value.excluded_ta_human is None and counts.value.excluded_ta_ai is None:
@@ -742,7 +804,7 @@ def check_exclusions(ctx: AuditContext) -> Verdict:
         )
     return "PASS", (
         f"coincide con el recálculo: {recomputed.total_excluded} exclusiones "
-        f"({recomputed.excluded_human} humanas, {recomputed.excluded_ai} IA)."
+        f"({recomputed.excluded_human} humanas, {recomputed.excluded_ai} IA).{pendiente}"
     )
 
 
