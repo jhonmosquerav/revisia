@@ -70,8 +70,10 @@ from revisia.meta_analysis import MetaAnalysisResult, meta_analyze
 from revisia.metrics import ScreeningMetrics, compute_screening_metrics
 from revisia.orchestration.gates import (
     apply_labels,
+    extraction_payload,
     ft_payload,
     ft_policy,
+    rob_payload,
     ta_payload,
     ta_policy,
 )
@@ -1281,12 +1283,21 @@ def _run_stages(
 
     run.stage = "extraccion"
     extractions, extraction_agreement = _extract(run, included, ft.texts)
-    extraction_gate = run.gate("extraccion", {"n_extraidos": len(extractions)})
+    # Extracción y RoB se aprueban por etapa (D1): la solicitud lleva la tabla
+    # completa por estudio y el hash del artefacto aprobado.
+    extraction_gate = run.gate(
+        "extraccion",
+        extraction_payload(
+            included=included, extractions=extractions, agreement=extraction_agreement
+        ),
+    )
     if (stop := run.stop(extraction_gate, "extraccion")) is not None:
         return stop
     run.stage = "rob"
     assessments = _assess_rob(run, included, extractions, ft.texts)
-    rob_gate = run.gate("rob", {"n_evaluados": len(assessments), "tool": protocol.rob_tool})
+    rob_gate = run.gate(
+        "rob", rob_payload(tool=protocol.rob_tool, included=included, assessments=assessments)
+    )
     if (stop := run.stop(rob_gate, "rob")) is not None:
         return stop
 

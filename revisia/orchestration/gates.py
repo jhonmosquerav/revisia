@@ -14,10 +14,14 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable, Mapping
 
+from revisia.extraction_agreement import ExtractionAgreement
 from revisia.metrics import ScreeningMetrics
 from revisia.orchestration.hitl import RecordHint, RecordLabel, RecordPolicy
+from revisia.provenance.runmeta import canonical_sha256
 from revisia.schemas.artifacts import TRANSIENT_FULLTEXT_REASONS, RetrievalOutcome
+from revisia.schemas.extraction import ExtractionRecord
 from revisia.schemas.records import SearchRecord
+from revisia.schemas.rob import RoBAssessment
 from revisia.schemas.screening import ScreeningDecision
 
 # Tope de la razón de cada miembro en la nota de la plantilla. La plantilla acota la nota
@@ -302,6 +306,90 @@ def ft_policy(
         rescue_ids=frozenset(rescuable),
         reason_on_exclude=True,
     )
+
+
+def extraction_payload(
+    *,
+    included: Iterable[SearchRecord],
+    extractions: Mapping[str, ExtractionRecord],
+    agreement: ExtractionAgreement | None,
+) -> dict:
+    """Solicitud del gate ``extraccion``: la tabla completa por estudio (D1).
+
+    Se aprueba por etapa; ``artifact_sha256`` ata la aprobación al contenido de
+    ``05_extraction/extractions.json`` (``canonical_sha256`` del JSON leído de vuelta).
+    """
+    included = list(included)
+    return {
+        "n_studies": len(included),
+        "studies": [
+            {
+                "record_id": r.record_id,
+                "title": r.title,
+                "fields": {
+                    key: {
+                        "value": f.value,
+                        "source_quote": f.source_quote,
+                        "status": f.status,
+                        "confidence": f.confidence,
+                    }
+                    for key, f in extractions[r.record_id].fields.items()
+                },
+            }
+            for r in included
+        ],
+        "second_extraction": (
+            None
+            if agreement is None
+            else {
+                "n_studies": agreement.n_studies,
+                "n_field_pairs": agreement.n_field_pairs,
+                "value_agreement": agreement.value_agreement,
+                "presence_kappa": agreement.presence_kappa,
+            }
+        ),
+        "artifact_sha256": canonical_sha256(
+            {k: v.model_dump(mode="json") for k, v in extractions.items()}
+        ),
+    }
+
+
+def rob_payload(
+    *,
+    tool: str,
+    included: Iterable[SearchRecord],
+    assessments: Mapping[str, RoBAssessment],
+) -> dict:
+    """Solicitud del gate ``rob``: dominios y juicio por estudio (D1).
+
+    ``artifact_sha256`` ata la aprobación al contenido de
+    ``07_rob/assessments.json`` (``canonical_sha256`` del JSON leído de vuelta).
+    """
+    included = list(included)
+    return {
+        "tool": tool,
+        "n_studies": len(included),
+        "studies": [
+            {
+                "record_id": r.record_id,
+                "title": r.title,
+                "overall": assessments[r.record_id].overall,
+                "domains": [
+                    {
+                        "domain": d.domain,
+                        "judgment": d.judgment,
+                        "rationale": d.rationale,
+                        "support_quote": d.support_quote,
+                    }
+                    for d in assessments[r.record_id].domains
+                ],
+            }
+            for r in included
+        ],
+        "artifact_sha256": canonical_sha256(
+            {k: v.model_dump(mode="json") for k, v in assessments.items()}
+        ),
+    }
 
 
 def apply_labels(

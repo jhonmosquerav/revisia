@@ -1522,3 +1522,201 @@ def test_ft_policy_avisa_de_que_un_no_recuperado_transitorio_se_reintenta(motivo
     assert "habrá que decidir de nuevo" in nota
     assert "sin red" in nota
     assert politica.rescue_ids == frozenset("b")  # se ofrece rescatar igualmente
+
+
+# ── Extracción y RoB: aprobación por etapa con la tabla completa (D1) ─────
+
+
+def test_extraccion_y_rob_payload_con_tabla_y_hash_del_artefacto(tmp_path: Path, proveedor) -> None:
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    kwargs = {"search_fn": _busqueda_ft, "fetch_fn": fetch_disponible}
+    correr_hasta(protocol, EXAMPLE, ctx, parar_en="extraccion", **kwargs)
+
+    solicitud = leer_solicitud(ctx.run_dir, "extraccion")
+    extracciones = _json(ctx, "05_extraction/extractions.json")
+    assert solicitud["n_studies"] == 2
+    assert [s["record_id"] for s in solicitud["studies"]] == ["rec-1", "rec-2"]
+    for estudio in solicitud["studies"]:
+        campos = extracciones[estudio["record_id"]]["fields"]
+        assert estudio["fields"] == {
+            k: {x: v[x] for x in ("value", "source_quote", "status", "confidence")}
+            for k, v in campos.items()
+        }
+    assert set(solicitud["second_extraction"]) == {
+        "n_studies",
+        "n_field_pairs",
+        "value_agreement",
+        "presence_kappa",
+    }
+    assert solicitud["artifact_sha256"] == canonical_sha256(extracciones)
+
+    correr_hasta(protocol, EXAMPLE, RunContext.open(ctx.run_dir), parar_en="rob", **kwargs)
+    solicitud = leer_solicitud(ctx.run_dir, "rob")
+    evaluaciones = _json(ctx, "07_rob/assessments.json")
+    assert (solicitud["tool"], solicitud["n_studies"]) == ("RoB2", 2)
+    rec1 = solicitud["studies"][0]
+    assert rec1["overall"] == evaluaciones["rec-1"]["overall"]
+    assert len(rec1["domains"]) == len(evaluaciones["rec-1"]["domains"])
+    assert solicitud["artifact_sha256"] == canonical_sha256(evaluaciones)
+
+
+class _ProveedorConTablas(ScriptedProvider):
+    """Rellena el formulario de extracción y los dominios de RoB (el guion base los deja vacíos).
+
+    Con ``ScriptedProvider`` a secas las tablas salen sin campos ni dominios y comprobarlas
+    sería vacuo. ``cita``, ``razon`` y ``apoyo`` son el texto libre que llega a la solicitud.
+    """
+
+    def __init__(self, *, cita: str = "cita", razon: str = "razón", apoyo: str = "apoyo") -> None:
+        super().__init__()
+        self.cita, self.razon, self.apoyo = cita, razon, apoyo
+
+    def structured(self, req, schema):
+        obj, meta = super().structured(req, schema)
+        if "fields" in schema.model_fields:  # extracción
+            obj = schema.model_validate(
+                {
+                    "fields": [
+                        {
+                            "key": "diseno",
+                            "value": "ensayo aleatorizado",
+                            "source_quote": self.cita,
+                            "found": True,
+                            "confidence": 0.9,
+                        },
+                        {"key": "metrica_recall", "value": None, "found": False},
+                    ]
+                }
+            )
+        elif "domains" in schema.model_fields:  # riesgo de sesgo
+            obj = schema.model_validate(
+                {
+                    "domains": [
+                        {
+                            "domain": "Proceso de aleatorización",
+                            "judgment": "low",
+                            "rationale": self.razon,
+                            "support_quote": self.apoyo,
+                        },
+                        {"domain": "Datos de resultado faltantes", "judgment": "some_concerns"},
+                    ],
+                    "overall": "some_concerns",
+                }
+            )
+        else:
+            return obj, meta
+        return obj, self._meta(req, obj.model_dump_json())
+
+
+def _correr_hasta_pausa(protocol, ctx: RunContext, parar_en: str) -> None:
+    kwargs = {"search_fn": _busqueda_ft, "fetch_fn": fetch_disponible}
+    resultado = correr_hasta(protocol, EXAMPLE, ctx, parar_en=parar_en, **kwargs)
+    assert (resultado.status, resultado.stage) == ("paused", parar_en)
+
+
+def test_extraccion_y_rob_payload_listan_campos_y_dominios_reales(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pipeline_mod, "build_provider", lambda _cfg: _ProveedorConTablas())
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    _correr_hasta_pausa(protocol, ctx, "extraccion")
+
+    solicitud = leer_solicitud(ctx.run_dir, "extraccion")
+    assert solicitud["studies"][0] == {
+        "record_id": "rec-1",
+        "title": "LLM screening",
+        "fields": {
+            "diseno": {
+                "value": "ensayo aleatorizado",
+                "source_quote": "cita",
+                "status": "needs_review",
+                "confidence": 0.9,
+            },
+            "metrica_recall": {
+                "value": None,
+                "source_quote": None,
+                "status": "not_found",
+                "confidence": 0.0,
+            },
+        },
+    }
+    acuerdo = _json(ctx, "05_extraction/agreement.json")
+    assert solicitud["second_extraction"] == {
+        k: acuerdo[k] for k in ("n_studies", "n_field_pairs", "value_agreement", "presence_kappa")
+    }
+
+    _correr_hasta_pausa(protocol, RunContext.open(ctx.run_dir), "rob")
+    solicitud = leer_solicitud(ctx.run_dir, "rob")
+    assert solicitud["studies"][1] == {
+        "record_id": "rec-2",
+        "title": "Active learning",
+        "overall": "some_concerns",
+        "domains": [
+            {
+                "domain": "Proceso de aleatorización",
+                "judgment": "low",
+                "rationale": "razón",
+                "support_quote": "apoyo",
+            },
+            {
+                "domain": "Datos de resultado faltantes",
+                "judgment": "some_concerns",
+                "rationale": "",
+                "support_quote": None,
+            },
+        ],
+    }
+
+
+def test_solicitudes_de_extraccion_y_rob_con_saltos_unicode_conservan_su_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Una cita con U+0085 (mojibake de «…») y U+2028 y una razón con U+2029 llegan al
+    # review_request.yml por `dump_yaml`: leído de vuelta, el fichero tiene que dar el mismo
+    # `request_sha256`, y `artifact_sha256` el hash del JSON que quedó en disco (no el de los
+    # objetos en memoria), o el auditor no podría verificar lo que el humano aprobó.
+    cita = f"se asignó{chr(0x85)} al azar{chr(0x2028)}por bloques"
+    razon = f"razón{chr(0x2029)}larga"
+    apoyo = f"apoyo{chr(0x85)}"
+    monkeypatch.setattr(
+        pipeline_mod,
+        "build_provider",
+        lambda _cfg: _ProveedorConTablas(cita=cita, razon=razon, apoyo=apoyo),
+    )
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+
+    for etapa, artefacto in (
+        ("extraccion", "05_extraction/extractions.json"),
+        ("rob", "07_rob/assessments.json"),
+    ):
+        _correr_hasta_pausa(
+            protocol, RunContext.open(ctx.run_dir) if etapa == "rob" else ctx, etapa
+        )
+        solicitud = leer_solicitud(ctx.run_dir, etapa)
+        sin_hash = {k: v for k, v in solicitud.items() if k != "request_sha256"}
+        assert canonical_sha256(sin_hash) == solicitud["request_sha256"], etapa
+        assert solicitud["artifact_sha256"] == canonical_sha256(_json(ctx, artefacto)), etapa
+        if etapa == "extraccion":
+            assert solicitud["studies"][0]["fields"]["diseno"]["source_quote"] == cita
+        else:
+            dominio = solicitud["studies"][0]["domains"][0]
+            assert (dominio["rationale"], dominio["support_quote"]) == (razon, apoyo)
+
+
+def test_records_en_extraccion_es_error(tmp_path: Path, proveedor) -> None:
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    correr_hasta(
+        protocol,
+        EXAMPLE,
+        ctx,
+        search_fn=_busqueda_ft,
+        fetch_fn=fetch_disponible,
+        parar_en="extraccion",
+    )
+    responder_gate(ctx.run_dir, "extraccion", records={"rec-1": {"label": "exclude"}})
+    with pytest.raises(DecisionFileError, match="`records` solo vale"):
+        run_pipeline(protocol, EXAMPLE, RunContext.open(ctx.run_dir), fetch_fn=fetch_disponible)
