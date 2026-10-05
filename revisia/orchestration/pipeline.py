@@ -1215,7 +1215,13 @@ def _run_stages(
     ta_autonomy = protocol.autonomy_for("screening_ta")
     ta_gate = run.gate(
         "screening_ta",
-        ta_payload(decisions=decisions, records=deduped, autonomy=ta_autonomy),
+        ta_payload(
+            decisions=decisions,
+            records=deduped,
+            autonomy=ta_autonomy,
+            metrics=run.metrics,
+            thresholds=protocol.thresholds,
+        ),
         records=ta_policy(decisions=decisions, records=deduped, autonomy=ta_autonomy),
     )
     if (stop := run.stop(ta_gate, "screening_ta")) is not None:

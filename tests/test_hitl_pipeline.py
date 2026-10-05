@@ -13,9 +13,10 @@ from fakes import ScriptedProvider, fetch_disponible
 from hitl_helpers import correr_hasta, leer_solicitud, responder_gate
 
 from revisia.config import load_protocol
+from revisia.metrics import compute_screening_metrics
 from revisia.orchestration import pipeline as pipeline_mod
 from revisia.orchestration.gates import apply_labels, ta_payload, ta_policy
-from revisia.orchestration.hitl import DecisionFileError, RecordLabel
+from revisia.orchestration.hitl import DecisionFileError, RecordLabel, render_decision_template
 from revisia.orchestration.pipeline import run_pipeline
 from revisia.orchestration.run_context import RunContext
 from revisia.provenance.ledger import AUTO_APPROVE_ACTOR
@@ -549,3 +550,182 @@ def test_ta_policy_sin_el_registro_usa_el_id_como_titulo() -> None:
     politica = ta_policy(decisions=[_decision("x", "include")], records=[], autonomy="A1")
 
     assert [(h.record_id, h.title) for h in politica.hints] == [("x", "x")]
+
+
+def test_ta_payload_sin_el_registro_usa_el_id_como_titulo_como_ta_policy() -> None:
+    # Una decisión cuyo registro falta no tumba la solicitud con un KeyError: ta_policy ya lo
+    # toleraba (título = id) y las dos tienen que ver el mismo corpus (revisión de la Tarea 22).
+    payload = ta_payload(decisions=[_decision("x", "include")], records=[], autonomy="A1")
+
+    (registro,) = payload["records"]
+    assert registro["record_id"] == "x"
+    assert (registro["title"], registro["year"], registro["doi"], registro["source_db"]) == (
+        "x",
+        None,
+        None,
+        None,
+    )
+    assert registro["proposal"] == "include"
+
+
+def test_ta_nota_muestra_el_voto_de_cada_miembro_antes_de_las_razones() -> None:
+    # Con el ensemble sesgado a recall, un solo `include` basta para pasar: ese voto
+    # discrepante es lo que el revisor tiene que ver aunque las razones sean largas. La
+    # plantilla acota la nota a 120 caracteres, así que las etiquetas van todas primero.
+    largo = "x" * 200
+    decision = ScreeningDecision(
+        record_id="a",
+        votes=[
+            ScreeningVote(model=f"m{i}", label=voto, confidence=0.8, rationale=f"{largo} {i}")
+            for i, voto in enumerate(("exclude", "include", "exclude"))
+        ],
+        ensemble_label="include",
+        final_label="include",
+    )
+
+    politica = ta_policy(decisions=[decision], records=_registros("a"), autonomy="A1")
+    plantilla = render_decision_template(
+        stage="screening_ta",
+        autonomy="A1",
+        request_sha256="0" * 64,
+        records=politica,
+        flags=None,
+    )
+
+    comentario = next(
+        linea for linea in plantilla.splitlines() if linea.startswith("  # propuesta IA")
+    )
+    for esperado in ("m0: exclude (0.80)", "m1: include (0.80)", "m2: exclude (0.80)"):
+        assert esperado in comentario
+    # Las razones siguen en la nota (acotadas), después de los votos.
+    assert politica.hints[0].note.index("m2: exclude") < politica.hints[0].note.index(largo[:20])
+    assert len(politica.hints[0].note) < 3 * len(largo)
+
+
+# ── `unclear` de T/A con etiqueta humana (D1, D5) ───────────────────────
+
+
+def _busqueda_con_dudoso(_query: str, n: int) -> list[SearchRecord]:
+    """rec-3 lleva "dudoso" en el título: el guion lo marca ``unclear`` en T/A."""
+    return [
+        SearchRecord(
+            record_id="rec-1",
+            title="LLM screening for systematic reviews",
+            abstract="We evaluate LLM screening.",
+            source_db="OpenAlex",
+        ),
+        SearchRecord(
+            record_id="rec-3",
+            title="Estudio dudoso sobre cribado",
+            abstract="No está claro si aplica.",
+            source_db="OpenAlex",
+        ),
+    ][:n]
+
+
+@pytest.mark.parametrize(
+    ("etiqueta", "llega_a_ft", "humana"),
+    [(None, True, None), ("exclude", False, "exclude"), ("include", True, "include")],
+    ids=["aprobar_en_bloque", "excluir_explicito", "incluir_explicito"],
+)
+def test_ta_unclear_con_etiqueta_humana_decide_si_llega_a_texto_completo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    etiqueta: str | None,
+    llega_a_ft: bool,
+    humana: str | None,
+) -> None:
+    # `unclear` pasa a texto completo (sesgo a recall) salvo que un humano lo excluya; solo
+    # una etiqueta explícita deja `human_label`: aprobar en bloque lo deja como "IA avalada".
+    guion = ScriptedProvider(palabras={"dudoso": "unclear"})
+    monkeypatch.setattr(pipeline_mod, "build_provider", lambda _cfg: guion)
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+
+    def decidir(stage: str, _solicitud: dict) -> dict | None:
+        if stage == "screening_ta" and etiqueta is not None:
+            return {"records": {"rec-3": {"label": etiqueta, "reason": "tras leer el resumen"}}}
+        return None
+
+    pausa = correr_hasta(
+        protocol,
+        EXAMPLE,
+        ctx,
+        search_fn=_busqueda_con_dudoso,
+        fetch_fn=fetch_disponible,
+        etiquetar=decidir,
+        parar_en="screening_ft",
+    )
+
+    assert pausa.stage == "screening_ft"
+    rec3 = _por_id(ctx, "03_screening/decisions.json")["rec-3"]
+    assert (rec3["ensemble_label"], rec3["human_label"]) == ("unclear", humana)
+    assert rec3["final_label"] == (humana or "unclear")
+    llegados = [r["record_id"] for r in _json(ctx, "04_fulltext/retrieval.json")]
+    assert ("rec-3" in llegados) is llega_a_ft
+    assert "rec-1" in llegados
+
+
+# ── Calidad de la propuesta IA (D6, D7) ──────────────────────────────────
+
+
+def _proto_con_gold(tmp_path: Path) -> Path:
+    proto = tmp_path / "proto"
+    shutil.copytree(EXAMPLE, proto)  # el demo declara recall_target: 0.95
+    (proto / "gold.yml").write_text('gold:\n  "rec-1": true\n  "rec-2": true\n', "utf-8")
+    return proto
+
+
+def test_metricas_miden_la_propuesta_ia(tmp_path: Path, proveedor) -> None:
+    # D6: un rescate humano no mejora el recall de la IA.
+    rescatada = ScreeningDecision(
+        record_id="x", ensemble_label="exclude", human_label="include", final_label="include"
+    )
+    metricas = compute_screening_metrics([rescatada], {"x": True})
+    assert (metricas.tp, metricas.fn, metricas.recall) == (0, 1, 0.0)
+
+    proto = _proto_con_gold(tmp_path)
+    protocol = load_protocol(proto)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+
+    def rescatar(stage: str, _solicitud: dict) -> dict | None:
+        if stage == "screening_ta":
+            return {"records": {"rec-2": {"label": "include", "reason": "relevante"}}}
+        return None
+
+    correr_hasta(
+        protocol,
+        proto,
+        ctx,
+        search_fn=_busqueda,
+        fetch_fn=fetch_disponible,
+        etiquetar=rescatar,
+        parar_en="screening_ft",
+    )
+    assert _json(ctx, "03_screening/metrics.json")["recall"] == 0.5
+
+
+def test_review_request_ta_informa_recall_y_exclusiones_ia(tmp_path: Path, proveedor) -> None:
+    proto = _proto_con_gold(tmp_path)
+    protocol = load_protocol(proto)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+    run_pipeline(protocol, proto, ctx, search_fn=_busqueda)
+
+    solicitud = leer_solicitud(ctx.run_dir, "screening_ta")
+    assert solicitud["quality"] == {
+        "recall": 0.5,
+        "recall_target": 0.95,
+        "kappa": 0.0,
+        "kappa_min": None,
+        "gold_positives": 2,
+        "recall_meets_target": False,
+    }
+    assert solicitud["ai_excluded"] == ["rec-2"]
+
+
+def test_review_request_ta_sin_gold_no_informa_calidad(tmp_path: Path, proveedor) -> None:
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    run_pipeline(protocol, EXAMPLE, ctx, search_fn=_busqueda)
+    solicitud = leer_solicitud(ctx.run_dir, "screening_ta")
+    assert (solicitud["quality"], solicitud["ai_excluded"]) == (None, ["rec-2"])

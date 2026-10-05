@@ -13,9 +13,15 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 
+from revisia.metrics import ScreeningMetrics
 from revisia.orchestration.hitl import RecordHint, RecordLabel, RecordPolicy
 from revisia.schemas.records import SearchRecord
 from revisia.schemas.screening import ScreeningDecision
+
+# Tope de la razón de cada miembro en la nota de la plantilla. La plantilla acota la nota
+# entera (``_MAX_NOTA``, hitl.py): lo que pasa de ahí no se lee, y una razón de miles de
+# caracteres no tiene por qué viajar en la política.
+_MAX_RAZON = 160
 
 
 def _mode(autonomy: str) -> str:
@@ -37,12 +43,58 @@ def _votes(decision: ScreeningDecision) -> list[dict]:
 
 
 def _note(decision: ScreeningDecision) -> str:
-    """Resumen de los votos para la plantilla (se sanea al escribirla)."""
-    parts = []
+    """Resumen de los votos para la plantilla (se sanea al escribirla).
+
+    Primero el ``modelo: etiqueta (confianza)`` de TODOS los miembros y, detrás, sus
+    razones (acotadas a ``_MAX_RAZON``). La plantilla corta la nota a 120 caracteres: con
+    el ensemble sesgado a recall el voto que decide suele ser el discrepante, y si la
+    razón del primer miembro iba delante el corte se lo comía (revisión de la Tarea 22).
+    """
+    votes = [f"{v.model}: {v.label} ({v.confidence:.2f})" for v in decision.votes]
+    reasons = []
     for v in decision.votes:
+        rationale = v.rationale
+        if len(rationale) > _MAX_RAZON:
+            rationale = rationale[: _MAX_RAZON - 1] + "…"
         criteria = f" [{', '.join(v.criteria_violated)}]" if v.criteria_violated else ""
-        parts.append(f"{v.model}: {v.label} ({v.confidence:.2f}) «{v.rationale}»{criteria}")
-    return " | ".join(parts)
+        reasons.append(f"{v.model}: «{rationale}»{criteria}")
+    if not votes:
+        return ""
+    return f"{' | '.join(votes)} · {' | '.join(reasons)}"
+
+
+def _record_fields(record: SearchRecord | None, record_id: str) -> dict:
+    """Título, año, DOI y base de un registro; sin registro, el id de título y el resto ``None``.
+
+    Como ``ta_policy`` (``titles.get(..., record_id)``): una decisión cuyo registro falta no
+    tumba la solicitud, y las dos ven el mismo corpus.
+    """
+    if record is None:
+        return {"title": record_id, "year": None, "doi": None, "source_db": None}
+    return {
+        "title": record.title,
+        "year": record.year,
+        "doi": record.doi,
+        "source_db": record.source_db,
+    }
+
+
+def _quality(metrics: ScreeningMetrics | None, thresholds: Mapping[str, float]) -> dict | None:
+    """Calidad de la propuesta IA frente al gold y los umbrales del protocolo (D7)."""
+    if metrics is None:
+        return None
+    recall_target = thresholds.get("recall_target")
+    meets = None
+    if metrics.recall is not None and recall_target is not None:
+        meets = metrics.recall >= recall_target
+    return {
+        "recall": metrics.recall,
+        "recall_target": recall_target,
+        "kappa": metrics.cohen_kappa,
+        "kappa_min": thresholds.get("kappa_min"),
+        "gold_positives": metrics.tp + metrics.fn,
+        "recall_meets_target": meets,
+    }
 
 
 def ta_payload(
@@ -50,11 +102,16 @@ def ta_payload(
     decisions: Iterable[ScreeningDecision],
     records: Iterable[SearchRecord],
     autonomy: str,
+    metrics: ScreeningMetrics | None = None,
+    thresholds: Mapping[str, float] | None = None,
 ) -> dict:
     """Solicitud del gate ``screening_ta`` (spec §4.3).
 
     ``records`` ordenados por id, cada uno con la propuesta del ensemble y el
     voto de cada miembro; en A0 (``label_all``) todos van a ``must_label``.
+    ``quality`` (``None`` sin gold) y ``ai_excluded`` le dicen al revisor, antes
+    de aprobar, si un recall bajo umbral bloqueará la publicación y qué
+    exclusiones de la IA tendría que etiquetar para evitarlo (D7).
     """
     decisions = sorted(decisions, key=lambda d: d.record_id)
     by_id = {r.record_id: r for r in records}
@@ -66,16 +123,15 @@ def ta_payload(
         "records": [
             {
                 "record_id": d.record_id,
-                "title": by_id[d.record_id].title,
-                "year": by_id[d.record_id].year,
-                "doi": by_id[d.record_id].doi,
-                "source_db": by_id[d.record_id].source_db,
+                **_record_fields(by_id.get(d.record_id), d.record_id),
                 "proposal": d.ensemble_label,
                 "votes": _votes(d),
             }
             for d in decisions
         ],
         "must_label": [d.record_id for d in decisions] if autonomy == "A0" else [],
+        "quality": _quality(metrics, thresholds or {}),
+        "ai_excluded": [d.record_id for d in decisions if d.ensemble_label == "exclude"],
     }
 
 
