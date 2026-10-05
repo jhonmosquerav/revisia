@@ -56,6 +56,30 @@ def responder_gate(
     return path
 
 
+def aceptar_lo_obligatorio(stage: str, solicitud: dict) -> dict | None:
+    """Etiqueta lo obligatorio de un gate de cribado con la propuesta de la IA.
+
+    Responde como una revisora que revisa cada registro de ``must_label`` y
+    ``must_resolve`` y coincide con la IA; un ``unclear`` (o un registro sin
+    propuesta) lo incluye. Sin nada obligatorio, ``None`` (aprobar sin más).
+    """
+    obligatorios = sorted(
+        set(solicitud.get("must_label", [])) | set(solicitud.get("must_resolve", []))
+    )
+    if not obligatorios:
+        return None
+    propuestas = {r["record_id"]: r.get("proposal") for r in solicitud.get("records", [])}
+    return {
+        "records": {
+            rid: {
+                "label": p if (p := propuestas.get(rid)) in ("include", "exclude") else "include",
+                "reason": "revisado: de acuerdo con la propuesta",
+            }
+            for rid in obligatorios
+        }
+    }
+
+
 def correr_hasta(
     protocol: ReviewProtocol,
     protocol_dir: Path,
@@ -72,9 +96,11 @@ def correr_hasta(
     En cada pausa (salvo en ``parar_en``, donde devuelve el resultado) escribe
     ``decision.yml`` con ``responder_gate``. ``etiquetar(stage, solicitud)``
     devuelve los argumentos extra de ``responder_gate`` para ese gate
-    (``{"records": …}``, ``{"approved": False, "reason": …}``…) o ``None`` para
-    aprobar sin más. La primera vuelta usa ``ctx``; las siguientes reabren la
-    carpeta con ``RunContext.open``, como ``revisia run --resume``.
+    (``{"records": …}``, ``{"approved": False, "reason": …}``…) o ``None``; con
+    ``None`` (o sin ``etiquetar``) se responde con ``aceptar_lo_obligatorio``,
+    que etiqueta lo que el gate exige y, si no exige nada, aprueba sin más. La
+    primera vuelta usa ``ctx``; las siguientes reabren la carpeta con
+    ``RunContext.open``, como ``revisia run --resume``.
 
     Raises:
         AssertionError: si la corrida no termina en ``max_vueltas``.
@@ -86,11 +112,10 @@ def correr_hasta(
         )
         if result.status != "paused" or result.stage == parar_en:
             return result
-        extra = (
-            etiquetar(result.stage, leer_solicitud(ctx.run_dir, result.stage))
-            if etiquetar
-            else None
-        )
+        solicitud = leer_solicitud(ctx.run_dir, result.stage)
+        extra = etiquetar(result.stage, solicitud) if etiquetar else None
+        if extra is None:
+            extra = aceptar_lo_obligatorio(result.stage, solicitud)
         responder_gate(ctx.run_dir, result.stage, **(extra or {}))
         contexto = RunContext.open(ctx.run_dir)
     raise AssertionError(f"la corrida no terminó en {max_vueltas} vueltas")

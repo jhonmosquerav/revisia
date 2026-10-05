@@ -68,7 +68,13 @@ from revisia.llm.preflight import PreflightError, preflight
 from revisia.llm.registry import ProviderConfig, build_provider
 from revisia.meta_analysis import MetaAnalysisResult, meta_analyze
 from revisia.metrics import ScreeningMetrics, compute_screening_metrics
-from revisia.orchestration.gates import apply_labels, ta_payload, ta_policy
+from revisia.orchestration.gates import (
+    apply_labels,
+    ft_payload,
+    ft_policy,
+    ta_payload,
+    ta_policy,
+)
 from revisia.orchestration.hitl import (
     DecisionFileError,
     FlagPolicy,
@@ -101,6 +107,7 @@ from revisia.provenance.runmeta import RunMeta, canonical_sha256, sha256_text, u
 from revisia.rag.embed import Embedder, HashEmbedder
 from revisia.schemas.artifacts import (
     GATED_STAGES,
+    TRANSIENT_FULLTEXT_REASONS,
     DedupReport,
     ExcludedReport,
     JournalEntry,
@@ -331,7 +338,7 @@ class _FullTextStage:
 
     decisions: list[ScreeningDecision]
     texts: dict[str, str]
-    not_retrieved: int
+    retrieval: dict[str, RetrievalOutcome]
 
 
 def _search(run: _Run, *, max_results: int, search_fn: SearchFn | None) -> list[SearchRecord]:
@@ -455,15 +462,6 @@ def _screen_ta(
 # (`agents/fulltext.py`): entran en el `input_sha256` de su diario.
 _RETRIEVAL_EXTRA: tuple[str, ...] = ("fulltext_url", "oa_url", "pmcid", "pmid")
 
-# Motivos de fallo que NO se escriben en el diario de la recuperación: un error de red
-# (`error_http`) o la falta de `httpx` (`sin_httpx`) no es una respuesta definitiva sobre
-# el informe, así que congelarla haría que reanudar nunca lo reintentara y que "informes
-# no recuperados" contara fallos que ya se habrían resuelto (auditoría 2026-09-03, A9:
-# un fallo transitorio se resuelve reanudando). Se usan en esta invocación y en
-# `retrieval.json` y se piden otra vez al reanudar. Los motivos permanentes
-# (`sin_url_oa`, `texto_vacio`, `no_disponible`) y los éxitos sí se escriben.
-_TRANSIENT_FULLTEXT_REASONS: frozenset[str] = frozenset({"error_http", "sin_httpx"})
-
 
 def _write_bytes_durably(path: Path, data: bytes) -> None:
     """Escribe ``data`` en ``path`` de forma atómica y duradera.
@@ -544,7 +542,7 @@ def _retrieve(
 
     Al reanudar no se vuelve a descargar nada de lo que ya tiene respuesta
     definitiva: el resultado sale del diario y el texto, de la caché. Los fallos
-    transitorios (``_TRANSIENT_FULLTEXT_REASONS``) no se escriben en el diario y se
+    transitorios (``TRANSIENT_FULLTEXT_REASONS``) no se escriben en el diario y se
     reintentan al reanudar; el diario conserva así su invariante (misma clave,
     misma salida). Escribe ``04_fulltext/retrieval.json`` en el orden de
     ``passed_ta``.
@@ -567,12 +565,12 @@ def _retrieve(
             outcome = entry_output(entry, RetrievalOutcome, source=journal.path)
         else:
             # No usa `journaled`, que escribe siempre la salida de `compute`: aquí los
-            # motivos transitorios (`_TRANSIENT_FULLTEXT_REASONS`) no se escriben, para
+            # motivos transitorios (`TRANSIENT_FULLTEXT_REASONS`) no se escriben, para
             # reintentarlos al reanudar, y el texto se cachea antes del `append` (una
             # caída entre medias deja un texto huérfano, inocuo, nunca una entrada sin
             # texto).
             outcome = _fetch_one(run, fetch, record)
-            if outcome.reason not in _TRANSIENT_FULLTEXT_REASONS:
+            if outcome.reason not in TRANSIENT_FULLTEXT_REASONS:
                 journal.append(
                     JournalEntry(
                         stage="fulltext_retrieval",
@@ -621,7 +619,10 @@ def _fulltext(run: _Run, passed_ta: list[SearchRecord], fetch_fn: FetchFn | None
     PRISMA estricto (D2; auditoría 2026-09-03, M11): un informe sin texto
     completo NO se criba con IA (antes se cribaba con el abstract y contaba
     como evaluado). Queda como "no recuperado", con su motivo en
-    04_fulltext/retrieval.json, y no llega a extracción.
+    04_fulltext/retrieval.json, y no llega a extracción salvo que un humano lo rescate
+    en el gate (D2). Las decisiones salen con la propuesta de la IA, sin etiquetas
+    humanas: ``_run_stages`` las aplica tras el gate. El resultado lleva la recuperación
+    de cada registro (``retrieval``) para la solicitud del gate.
     """
     outcomes, fulltexts = _retrieve(run, passed_ta, fetch_fn)
     ft_cfg = run.protocol.provider_for("screening_ft")
@@ -667,8 +668,7 @@ def _fulltext(run: _Run, passed_ta: list[SearchRecord], fetch_fn: FetchFn | None
         decision.final_label = decision.human_label or decision.ensemble_label
         ft_decisions.append(decision)
     run.ctx.write_json("04_fulltext/decisions.json", [d.model_dump() for d in ft_decisions])
-    not_retrieved = sum(1 for d in ft_decisions if d.fulltext_status == "not_retrieved")
-    return _FullTextStage(ft_decisions, fulltexts, not_retrieved)
+    return _FullTextStage(ft_decisions, fulltexts, outcomes)
 
 
 def _extraction_inputs(
@@ -976,13 +976,19 @@ def _build_counts(
     excluded_ta: int,
     ta_breakdown: ExclusionBreakdown,
     passed_ta: list[SearchRecord],
-    ft: _FullTextStage,
+    ft_decisions: list[ScreeningDecision],
     excluded_ft: int,
     excluded_reports: list[ExcludedReport],
     ft_exclusion_reasons: dict[str, int],
     included: list[SearchRecord],
 ) -> PrismaCounts:
-    """Conteos PRISMA 2020 de la corrida (diagrama, tabla, CSV y manifiesto)."""
+    """Conteos PRISMA 2020 de la corrida (diagrama, tabla, CSV y manifiesto).
+
+    Un no recuperado que el humano rescató (D2) cuenta como evaluado; uno sin
+    rescate, como no recuperado (spec §4.4, relación 8).
+    """
+    not_retrieved = [d for d in ft_decisions if d.fulltext_status == "not_retrieved"]
+    unrescued = sum(1 for d in not_retrieved if d.human_label is None)
     identified_by_source: dict[str, int] = {}
     for r in raw_records:
         identified_by_source[r.source_db] = identified_by_source.get(r.source_db, 0) + 1
@@ -995,9 +1001,9 @@ def _build_counts(
         excluded_ta_human=ta_breakdown.excluded_human,
         excluded_ta_ai=ta_breakdown.excluded_ai,
         fulltext_sought=len(passed_ta),
-        fulltext_not_retrieved=ft.not_retrieved,
-        fulltext_rescued=0,  # los rescates humanos llegan con el HITL por registro (PR-D)
-        fulltext_assessed=len(passed_ta) - ft.not_retrieved,
+        fulltext_not_retrieved=unrescued,
+        fulltext_rescued=len(not_retrieved) - unrescued,
+        fulltext_assessed=len(passed_ta) - unrescued,
         excluded_ft=excluded_ft,
         excluded_ft_human=sum(1 for r in excluded_reports if r.reason_source == "human"),
         excluded_ft_ai=sum(1 for r in excluded_reports if r.reason_source == "ai"),
@@ -1237,28 +1243,39 @@ def _run_stages(
     passed_ta = [r for r in deduped if r.record_id in passed]
     run.stage = "screening_ft"
     ft = _fulltext(run, passed_ta, fetch_fn)
-    # Hasta PR-D un `unclear` de FT sigue pasando (lo resolverá un humano, D1).
-    included_ids = {d.record_id for d in ft.decisions if d.final_label in {"include", "unclear"}}
-    excluded_ft = sum(1 for d in ft.decisions if d.final_label == "exclude")
-    ft_payload = {
-        "n_buscados": len(passed_ta),
-        "n_no_recuperados": ft.not_retrieved,
-        "n_evaluados": len(passed_ta) - ft.not_retrieved,
-        "n_incluidos": len(included_ids),
-        "n_excluidos": excluded_ft,
-    }
-    if (stop := run.stop(run.gate("screening_ft", ft_payload), "screening_ft")) is not None:
+    ft_autonomy = protocol.autonomy_for("screening_ft")
+    # La decisión (y un rescate, D2) queda atada al `request_sha256` de lo que el humano vio.
+    # Un no recuperado transitorio (`TRANSIENT_FULLTEXT_REASONS`) se reintenta al reanudar: si
+    # entonces llega el texto, el informe pasa a recuperado y con propuesta IA, la solicitud
+    # cambia y el gate vuelve a pausar con la nueva; el rescate viejo no se aplica ni se
+    # registra (el humano decide de nuevo, ya con el texto).
+    ft_gate = run.gate(
+        "screening_ft",
+        ft_payload(
+            decisions=ft.decisions, records=passed_ta, retrieval=ft.retrieval, autonomy=ft_autonomy
+        ),
+        records=ft_policy(
+            decisions=ft.decisions, records=passed_ta, retrieval=ft.retrieval, autonomy=ft_autonomy
+        ),
+    )
+    if (stop := run.stop(ft_gate, "screening_ft")) is not None:
         return stop
+    # Un `unclear` nunca pasa sin etiqueta humana (D1, D9) y un rescate entra como evaluado
+    # por un humano (D2): solo `include` llega a extracción.
+    ft_decisions = apply_labels(ft.decisions, ft_gate.labels, ft_gate.actor)
+    run.ctx.write_json("04_fulltext/decisions.json", [d.model_dump() for d in ft_decisions])
+    included_ids = {d.record_id for d in ft_decisions if d.final_label == "include"}
+    excluded_ft = sum(1 for d in ft_decisions if d.final_label == "exclude")
     included = [r for r in passed_ta if r.record_id in included_ids]
 
     # Desglose de exclusiones humano vs IA (PRISMA-trAIce) sobre ambas fases; el
     # de solo T/A alimenta la nota ** del flow diagram oficial (trAIce R1).
-    exclusion_breakdown = compute_exclusion_breakdown(decisions + ft.decisions)
+    exclusion_breakdown = compute_exclusion_breakdown(decisions + ft_decisions)
     run.ctx.write_json("03_screening/exclusions.json", exclusion_breakdown.model_dump())
     ta_breakdown = compute_exclusion_breakdown(decisions)
     # Informes excluidos en elegibilidad (16b) y sus razones (cajas "Reason 1..n"
     # del flow oficial): una sola lista para el diagrama, la tabla y el auditor.
-    excluded_reports = compute_ft_excluded(ft.decisions, passed_ta)
+    excluded_reports = compute_ft_excluded(ft_decisions, passed_ta)
     run.ctx.write_json("04_fulltext/excluded.json", [r.model_dump() for r in excluded_reports])
     ft_exclusion_reasons = dict(Counter(r.reason for r in excluded_reports))
 
@@ -1284,7 +1301,7 @@ def _run_stages(
         excluded_ta=excluded_ta,
         ta_breakdown=ta_breakdown,
         passed_ta=passed_ta,
-        ft=ft,
+        ft_decisions=ft_decisions,
         excluded_ft=excluded_ft,
         excluded_reports=excluded_reports,
         ft_exclusion_reasons=ft_exclusion_reasons,

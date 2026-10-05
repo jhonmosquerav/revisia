@@ -16,6 +16,7 @@ from collections.abc import Iterable, Mapping
 
 from revisia.metrics import ScreeningMetrics
 from revisia.orchestration.hitl import RecordHint, RecordLabel, RecordPolicy
+from revisia.schemas.artifacts import TRANSIENT_FULLTEXT_REASONS, RetrievalOutcome
 from revisia.schemas.records import SearchRecord
 from revisia.schemas.screening import ScreeningDecision
 
@@ -184,6 +185,123 @@ def ta_policy(
     )
     must_label = frozenset(d.record_id for d in decisions) if autonomy == "A0" else frozenset()
     return RecordPolicy(hints=hints, must_label=must_label)
+
+
+def _ft_requirements(
+    decisions: list[ScreeningDecision], autonomy: str
+) -> tuple[list[str], list[str], list[str]]:
+    """``(must_label, must_resolve, rescuable)`` del gate de texto completo (D1, D2)."""
+    retrieved = [d.record_id for d in decisions if d.fulltext_status == "retrieved"]
+    unclear = [d.record_id for d in decisions if d.ensemble_label == "unclear"]
+    rescuable = [d.record_id for d in decisions if d.fulltext_status == "not_retrieved"]
+    must_label = retrieved if autonomy == "A0" else unclear
+    return must_label, unclear, rescuable
+
+
+def ft_payload(
+    *,
+    decisions: Iterable[ScreeningDecision],
+    records: Iterable[SearchRecord],
+    retrieval: Mapping[str, RetrievalOutcome],
+    autonomy: str,
+) -> dict:
+    """Solicitud del gate ``screening_ft`` (spec §4.3).
+
+    Un registro por informe buscado, recuperado o no. ``must_label`` son todos
+    los recuperados en A0 y solo los ``unclear`` en A1; ``must_resolve``, los
+    ``unclear`` (nunca pasan sin humano); ``rescuable``, los no recuperados, que
+    el humano puede evaluar si consiguió el texto por otra vía (D2).
+
+    Lleva la recuperación de cada informe (``fulltext``, ``fulltext_reason``,
+    ``fulltext_source_url``): si un fallo transitorio se resuelve al reanudar, la
+    solicitud cambia y una decisión escrita contra la anterior no se aplica.
+    """
+    decisions = sorted(decisions, key=lambda d: d.record_id)
+    by_id = {r.record_id: r for r in records}
+    must_label, must_resolve, rescuable = _ft_requirements(decisions, autonomy)
+    rows = []
+    for d in decisions:
+        vote = d.votes[0] if d.votes else None
+        outcome = retrieval.get(d.record_id)
+        fields = _record_fields(by_id.get(d.record_id), d.record_id)
+        rows.append(
+            {
+                "record_id": d.record_id,
+                "title": fields["title"],
+                "year": fields["year"],
+                "doi": fields["doi"],
+                "fulltext": d.fulltext_status,
+                "fulltext_reason": outcome.reason if outcome else None,
+                "fulltext_source_url": outcome.source_url if outcome else None,
+                "proposal": d.ensemble_label,
+                "confidence": vote.confidence if vote else None,
+                "rationale": vote.rationale if vote else None,
+                "criteria_violated": list(vote.criteria_violated) if vote else [],
+            }
+        )
+    return {
+        "mode": _mode(autonomy),
+        "n_sought": len(decisions),
+        "n_retrieved": sum(1 for d in decisions if d.fulltext_status == "retrieved"),
+        "n_not_retrieved": len(rescuable),
+        "records": rows,
+        "must_label": must_label,
+        "must_resolve": must_resolve,
+        "rescuable": rescuable,
+    }
+
+
+def _not_retrieved_note(outcome: RetrievalOutcome) -> str:
+    """Nota de un informe no recuperado: su motivo y, si es transitorio, qué pasará.
+
+    Un fallo transitorio (``TRANSIENT_FULLTEXT_REASONS``) no se congela en el diario: se
+    reintenta al reanudar. El humano puede rescatarlo igualmente (quizá tiene el PDF), pero
+    si en la reanudación el texto llega, el informe pasa a recuperado y con propuesta IA, la
+    solicitud cambia y su rescate, atado a la solicitud anterior, no se aplica: tendrá que
+    decidir de nuevo. El aviso va delante del detalle (que puede ser largo) porque la
+    plantilla corta la nota entera.
+    """
+    detail = outcome.detail or "sin detalle"
+    if outcome.reason in TRANSIENT_FULLTEXT_REASONS:
+        return (
+            f"no recuperado: {outcome.reason} · transitorio: se reintenta al reanudar y, si el "
+            f"texto llega, esta solicitud cambia y habrá que decidir de nuevo · {detail}"
+        )
+    return f"no recuperado: {outcome.reason} ({detail})"
+
+
+def ft_policy(
+    *,
+    decisions: Iterable[ScreeningDecision],
+    records: Iterable[SearchRecord],
+    retrieval: Mapping[str, RetrievalOutcome],
+    autonomy: str,
+) -> RecordPolicy:
+    """Qué puede y debe etiquetar el humano en FT (D1, D2, D9).
+
+    Excluir exige razón (va a la lista 16b) y etiquetar un no recuperado es un
+    rescate, también con razón. Un no recuperado transitorio también es rescatable,
+    pero su nota avisa de que se reintentará al reanudar (``_not_retrieved_note``).
+    """
+    decisions = sorted(decisions, key=lambda d: d.record_id)
+    titles = {r.record_id: r.title for r in records}
+    must_label, must_resolve, rescuable = _ft_requirements(decisions, autonomy)
+    hints = []
+    for d in decisions:
+        note = _note(d)
+        outcome = retrieval.get(d.record_id)
+        if d.fulltext_status == "not_retrieved" and outcome is not None:
+            note = _not_retrieved_note(outcome)
+        hints.append(
+            RecordHint(d.record_id, titles.get(d.record_id, d.record_id), d.ensemble_label, note)
+        )
+    return RecordPolicy(
+        hints=tuple(hints),
+        must_label=frozenset(must_label),
+        must_resolve=frozenset(must_resolve),
+        rescue_ids=frozenset(rescuable),
+        reason_on_exclude=True,
+    )
 
 
 def apply_labels(

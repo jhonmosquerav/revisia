@@ -10,13 +10,14 @@ from pathlib import Path
 
 import pytest
 import yaml
-from fakes import ScriptedProvider, fetch_disponible
+from fakes import ScriptedProvider, fetch_disponible, fetch_no_disponible
 from hitl_helpers import correr_hasta, leer_solicitud, responder_gate
 
+from revisia.agents.fulltext import FullText
 from revisia.config import load_protocol
 from revisia.metrics import ScreeningMetrics, compute_screening_metrics
 from revisia.orchestration import pipeline as pipeline_mod
-from revisia.orchestration.gates import apply_labels, ta_payload, ta_policy
+from revisia.orchestration.gates import apply_labels, ft_payload, ft_policy, ta_payload, ta_policy
 from revisia.orchestration.hitl import (
     _MAX_COMENTARIO,
     DecisionFileError,
@@ -27,6 +28,7 @@ from revisia.orchestration.pipeline import run_pipeline
 from revisia.orchestration.run_context import RunContext
 from revisia.provenance.ledger import AUTO_APPROVE_ACTOR
 from revisia.provenance.runmeta import canonical_sha256
+from revisia.schemas.artifacts import RetrievalOutcome
 from revisia.schemas.records import SearchRecord
 from revisia.schemas.screening import ScreeningDecision, ScreeningVote
 
@@ -431,7 +433,11 @@ def test_ta_etiquetas_explicitas_sobreviven_a_reanudar_sin_decision_yml(
         "human:revisora",
     )
     assert decisiones["rec-1"]["human_label"] is None
-    assert [e.target for e in ctx.ledger.read_all() if e.action == "label"] == ["rec-2"]
+    # En T/A (A1), solo la etiqueta explícita de rec-2: la de FT (A0) la pone `correr_hasta`.
+    etiquetas_ta = [
+        e.target for e in ctx.ledger.read_all() if e.action == "label" and e.stage == "screening_ta"
+    ]
+    assert etiquetas_ta == ["rec-2"]
     # El rescate cuenta: nada se excluyó en T/A y rec-2 llegó a texto completo.
     desglose = _json(ctx, "03_screening/exclusions.json")
     assert desglose["overridden_to_include"] == 1
@@ -890,3 +896,629 @@ def test_review_request_ta_con_umbral_no_finito_pausa_y_lo_deja_en_none(
     # Sin umbral finito no se compara; el otro umbral sigue valiendo.
     esperado = None if clave == "recall_target" else False
     assert calidad["recall_meets_target"] is esperado
+
+
+# ── Cribado a texto completo (C1, D1, D2, D9) ────────────────────────────
+
+
+def _busqueda_ft(query: str, n: int) -> list[SearchRecord]:
+    """Dos registros que pasan T/A; lo que decide FT lo pone el texto completo."""
+    return [
+        SearchRecord(record_id="rec-1", title="LLM screening", source_db="OpenAlex"),
+        SearchRecord(record_id="rec-2", title="Active learning", source_db="OpenAlex"),
+    ][:n]
+
+
+def _texto(**extra: str):
+    """``fetch_fn`` que añade texto al de ``fetch_disponible`` (p. ej. "dudoso")."""
+
+    def fetch(record: SearchRecord):
+        ft = fetch_disponible(record)
+        ft.text += " " + extra.get(record.record_id.replace("-", "_"), "")
+        return ft
+
+    return fetch
+
+
+def _proto(tmp_path: Path, **autonomy: str) -> Path:
+    proto = tmp_path / "proto"
+    shutil.copytree(EXAMPLE, proto)
+    raw = yaml.safe_load((proto / "protocol.yml").read_text(encoding="utf-8"))
+    raw["autonomy"].update(autonomy)
+    (proto / "protocol.yml").write_text(yaml.safe_dump(raw, allow_unicode=True), "utf-8")
+    return proto
+
+
+def _ft(ctx: RunContext) -> dict[str, dict]:
+    return _por_id(ctx, "04_fulltext/decisions.json")
+
+
+def test_ft_unclear_sin_resolver_impide_aprobar(tmp_path: Path, proveedor) -> None:
+    # C1: hasta la Ola 1 un `unclear` de FT entraba en extracción y en los incluidos.
+    proto = _proto(tmp_path, screening_ft="A1")
+    protocol = load_protocol(proto)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+    fetch = _texto(rec_1="Resultado dudoso.")
+    correr_hasta(
+        protocol, proto, ctx, search_fn=_busqueda_ft, fetch_fn=fetch, parar_en="screening_ft"
+    )
+    solicitud = leer_solicitud(ctx.run_dir, "screening_ft")
+    assert (solicitud["must_resolve"], solicitud["must_label"]) == (["rec-1"], ["rec-1"])
+
+    # En A1 una aprobación en bloque basta para lo demás, pero no para un `unclear`: la
+    # validación la rechaza y nada llega a extracción.
+    responder_gate(ctx.run_dir, "screening_ft")  # aprueba sin resolver el unclear
+    with pytest.raises(DecisionFileError, match=r"rec-1 \(1 en total\)"):
+        run_pipeline(protocol, proto, RunContext.open(ctx.run_dir), fetch_fn=fetch)
+    assert not (ctx.run_dir / "05_extraction").exists()
+
+    responder_gate(
+        ctx.run_dir, "screening_ft", records={"rec-1": {"label": "include", "reason": "cumple"}}
+    )
+    result = run_pipeline(protocol, proto, RunContext.open(ctx.run_dir), fetch_fn=fetch)
+    assert result.stage == "extraccion"
+    assert _ft(ctx)["rec-1"]["final_label"] == "include"
+
+
+def test_auto_approve_no_resuelve_unclear_ft(tmp_path: Path, proveedor) -> None:
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    result = run_pipeline(
+        protocol,
+        EXAMPLE,
+        ctx,
+        auto_approve=True,
+        search_fn=_busqueda_ft,
+        fetch_fn=_texto(rec_2="Caso dudoso."),
+    )
+    assert (result.status, result.stage) == ("paused", "screening_ft")
+    assert "`unclear` solo los resuelve un humano" in result.message
+    assert not (ctx.run_dir / "05_extraction").exists()  # el unclear no pasa en silencio
+
+
+def test_ft_a0_pipeline_exige_etiquetar_los_recuperados(tmp_path: Path, proveedor) -> None:
+    protocol = load_protocol(EXAMPLE)  # FT en A0 por defecto
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    fetch = fetch_no_disponible(["rec-2"])
+    correr_hasta(
+        protocol, EXAMPLE, ctx, search_fn=_busqueda_ft, fetch_fn=fetch, parar_en="screening_ft"
+    )
+    solicitud = leer_solicitud(ctx.run_dir, "screening_ft")
+    assert (solicitud["mode"], solicitud["must_label"], solicitud["rescuable"]) == (
+        "label_all",
+        ["rec-1"],
+        ["rec-2"],
+    )
+    assert (solicitud["n_sought"], solicitud["n_retrieved"], solicitud["n_not_retrieved"]) == (
+        2,
+        1,
+        1,
+    )
+    no_recuperado = solicitud["records"][1]
+    assert (no_recuperado["fulltext"], no_recuperado["fulltext_reason"]) == (
+        "not_retrieved",
+        "no_disponible",
+    )
+    assert no_recuperado["proposal"] is None and no_recuperado["confidence"] is None
+
+    responder_gate(ctx.run_dir, "screening_ft")
+    with pytest.raises(DecisionFileError, match=r"rec-1 \(1 en total\)"):
+        run_pipeline(protocol, EXAMPLE, RunContext.open(ctx.run_dir), fetch_fn=fetch)
+
+
+def test_ft_a0_exclusion_humana_en_todos(tmp_path: Path, proveedor) -> None:
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+
+    def etiquetar(stage: str, _solicitud: dict) -> dict | None:
+        if stage == "screening_ft":
+            return {
+                "records": {
+                    "rec-1": {"label": "include", "reason": "cumple"},
+                    "rec-2": {"label": "exclude", "reason": "población no elegible"},
+                }
+            }
+        return None
+
+    result = correr_hasta(
+        protocol,
+        EXAMPLE,
+        ctx,
+        search_fn=_busqueda_ft,
+        fetch_fn=fetch_disponible,
+        etiquetar=etiquetar,
+    )
+
+    assert result.status == "completed"
+    c = result.counts
+    assert (c.excluded_ft, c.excluded_ft_human, c.excluded_ft_ai, c.included) == (1, 1, 0, 1)
+    assert all(d["human_label"] for d in _ft(ctx).values())  # A0: todo recuperado etiquetado
+    assert _ft(ctx)["rec-2"]["human_actor"] == "human:revisora"
+
+
+def test_rescate_de_no_recuperado_cuenta_como_evaluado(tmp_path: Path, proveedor) -> None:
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+
+    def rescatar(stage: str, _solicitud: dict) -> dict | None:
+        if stage == "screening_ft":
+            return {
+                "records": {
+                    "rec-1": {"label": "include", "reason": "cumple"},
+                    "rec-2": {"label": "include", "reason": "PDF por préstamo interbibliotecario"},
+                }
+            }
+        return None
+
+    result = correr_hasta(
+        protocol,
+        EXAMPLE,
+        ctx,
+        search_fn=_busqueda_ft,
+        fetch_fn=fetch_no_disponible(["rec-2"]),
+        etiquetar=rescatar,
+    )
+
+    c = result.counts
+    assert (c.fulltext_sought, c.fulltext_not_retrieved, c.fulltext_rescued) == (2, 0, 1)
+    assert (c.fulltext_assessed, c.included) == (2, 2)
+    rec2 = _ft(ctx)["rec-2"]
+    assert (rec2["fulltext_status"], rec2["votes"], rec2["final_label"]) == (
+        "not_retrieved",
+        [],
+        "include",
+    )
+    rescate = next(e for e in ctx.ledger.read_all() if e.target == "rec-2")
+    assert (rescate.action, rescate.detail["rescue"], rescate.detail["from"]) == (
+        "label",
+        True,
+        None,
+    )
+
+
+def test_no_recuperado_sin_rescate_permite_aprobar(tmp_path: Path, proveedor) -> None:
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    result = correr_hasta(
+        protocol,
+        EXAMPLE,
+        ctx,
+        search_fn=_busqueda_ft,
+        fetch_fn=fetch_no_disponible(["rec-2"]),
+    )
+    c = result.counts
+    assert result.status == "completed"
+    assert (c.fulltext_not_retrieved, c.fulltext_rescued, c.fulltext_assessed) == (1, 0, 1)
+    assert c.included == 1
+    assert _ft(ctx)["rec-2"]["final_label"] is None
+
+
+def test_16b_razon_humana(tmp_path: Path, proveedor) -> None:
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+
+    def excluir(stage: str, _solicitud: dict) -> dict | None:
+        if stage == "screening_ft":
+            return {
+                "records": {
+                    "rec-1": {"label": "include", "reason": "cumple"},
+                    "rec-2": {"label": "exclude", "reason": "diseño no elegible"},
+                }
+            }
+        return None
+
+    result = correr_hasta(
+        protocol,
+        EXAMPLE,
+        ctx,
+        search_fn=_busqueda_ft,
+        fetch_fn=fetch_disponible,
+        etiquetar=excluir,
+    )
+    assert result.counts.ft_exclusion_reasons == {"diseño no elegible": 1}
+    (excluido,) = _json(ctx, "04_fulltext/excluded.json")
+    assert (excluido["record_id"], excluido["reason_source"]) == ("rec-2", "human")
+    md = (ctx.run_dir / "deliverable" / "excluidos_texto_completo.md").read_text("utf-8")
+    assert "diseño no elegible | humano |" in md
+
+
+def test_ft_unclear_resuelto_como_exclude_va_a_16b_y_no_a_extraccion(
+    tmp_path: Path, proveedor
+) -> None:
+    proto = _proto(tmp_path, screening_ft="A1")
+    protocol = load_protocol(proto)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+
+    def resolver(stage: str, _solicitud: dict) -> dict | None:
+        if stage == "screening_ft":
+            return {"records": {"rec-1": {"label": "exclude", "reason": "no es un estudio"}}}
+        return None
+
+    result = correr_hasta(
+        protocol,
+        proto,
+        ctx,
+        search_fn=_busqueda_ft,
+        fetch_fn=_texto(rec_1="Resultado dudoso."),
+        etiquetar=resolver,
+    )
+
+    c = result.counts
+    assert result.status == "completed"
+    assert (c.excluded_ft, c.excluded_ft_human, c.excluded_ft_ai, c.included) == (1, 1, 0, 1)
+    assert [r.record_id for r in result.included] == ["rec-2"]  # solo `include` llega a extracción
+    assert set(_json(ctx, "05_extraction/extractions.json")) == {"rec-2"}
+    # El `unclear` de la IA quedó como propuesta; la decisión final es la humana.
+    rec1 = _ft(ctx)["rec-1"]
+    assert (rec1["ensemble_label"], rec1["human_label"], rec1["final_label"]) == (
+        "unclear",
+        "exclude",
+        "exclude",
+    )
+    assert c.ft_exclusion_reasons == {"no es un estudio": 1}
+
+
+def test_rescate_etiquetado_exclude_va_a_16b_con_razon_humana(tmp_path: Path, proveedor) -> None:
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+
+    def rescatar_y_excluir(stage: str, _solicitud: dict) -> dict | None:
+        if stage == "screening_ft":
+            return {
+                "records": {
+                    "rec-1": {"label": "include", "reason": "cumple"},
+                    "rec-2": {"label": "exclude", "reason": "el PDF muestra otra población"},
+                }
+            }
+        return None
+
+    result = correr_hasta(
+        protocol,
+        EXAMPLE,
+        ctx,
+        search_fn=_busqueda_ft,
+        fetch_fn=fetch_no_disponible(["rec-2"]),
+        etiquetar=rescatar_y_excluir,
+    )
+
+    c = result.counts
+    # Rescatado = evaluado: ya no es "no recuperado" aunque la decisión sea excluirlo.
+    assert (c.fulltext_sought, c.fulltext_not_retrieved, c.fulltext_rescued) == (2, 0, 1)
+    assert (c.fulltext_assessed, c.excluded_ft, c.included) == (2, 1, 1)
+    assert (c.excluded_ft_human, c.excluded_ft_ai) == (1, 0)
+    (excluido,) = _json(ctx, "04_fulltext/excluded.json")
+    assert (excluido["record_id"], excluido["reason_source"]) == ("rec-2", "human")
+    assert excluido["reason"] == "el PDF muestra otra población"
+    assert c.ft_exclusion_reasons == {"el PDF muestra otra población": 1}
+    md = (ctx.run_dir / "deliverable" / "excluidos_texto_completo.md").read_text("utf-8")
+    assert "el PDF muestra otra población | humano |" in md
+    rec2 = _ft(ctx)["rec-2"]
+    assert (rec2["fulltext_status"], rec2["human_label"], rec2["final_label"]) == (
+        "not_retrieved",
+        "exclude",
+        "exclude",
+    )
+
+
+def _busqueda_ft3(query: str, n: int) -> list[SearchRecord]:
+    return [
+        *_busqueda_ft(query, n),
+        SearchRecord(record_id="rec-3", title="Otro estudio", source_db="OpenAlex"),
+    ][:n]
+
+
+def test_conteos_ft_cumplen_la_relacion_8(tmp_path: Path, proveedor) -> None:
+    # Spec §4.4, relación 8: `fulltext_assessed = fulltext_sought − fulltext_not_retrieved`,
+    # y cada no recuperado está rescatado o sin rescatar, nunca en los dos.
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+
+    def rescatar_uno(stage: str, _solicitud: dict) -> dict | None:
+        if stage == "screening_ft":
+            return {
+                "records": {
+                    "rec-1": {"label": "include", "reason": "cumple"},
+                    "rec-2": {"label": "include", "reason": "PDF por préstamo"},
+                }
+            }
+        return None
+
+    result = correr_hasta(
+        protocol,
+        EXAMPLE,
+        ctx,
+        search_fn=_busqueda_ft3,
+        fetch_fn=fetch_no_disponible(["rec-2", "rec-3"]),
+        etiquetar=rescatar_uno,
+    )
+
+    c = result.counts
+    assert (c.fulltext_sought, c.fulltext_not_retrieved, c.fulltext_rescued) == (3, 1, 1)
+    assert c.fulltext_assessed == c.fulltext_sought - c.fulltext_not_retrieved == 2
+    n_no_recuperados = sum(1 for d in _ft(ctx).values() if d["fulltext_status"] == "not_retrieved")
+    assert c.fulltext_rescued + c.fulltext_not_retrieved == n_no_recuperados == 2
+    # Los evaluados son exactamente los que acabaron incluidos o excluidos.
+    assert c.fulltext_assessed == c.included + c.excluded_ft
+    assert _ft(ctx)["rec-3"]["final_label"] is None  # sin rescate: nunca llega a extracción
+    assert set(_json(ctx, "05_extraction/extractions.json")) == {"rec-1", "rec-2"}
+
+
+def test_rescate_sin_razon_se_rechaza(tmp_path: Path, proveedor) -> None:
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    fetch = fetch_no_disponible(["rec-2"])
+    correr_hasta(
+        protocol, EXAMPLE, ctx, search_fn=_busqueda_ft, fetch_fn=fetch, parar_en="screening_ft"
+    )
+    responder_gate(
+        ctx.run_dir,
+        "screening_ft",
+        records={"rec-1": {"label": "include", "reason": "cumple"}, "rec-2": {"label": "include"}},
+    )
+    with pytest.raises(DecisionFileError, match=r"'rec-2' no se recuperó.*rescate.*`reason`"):
+        run_pipeline(protocol, EXAMPLE, RunContext.open(ctx.run_dir), fetch_fn=fetch)
+
+
+def _fetch_transitorio(record_id: str, *, fallos: int):
+    """``fetch_fn`` que falla con ``error_http`` las primeras ``fallos`` veces de ``record_id``."""
+    llamadas: dict[str, int] = {}
+
+    def fetch(record: SearchRecord) -> FullText:
+        llamadas[record.record_id] = llamadas.get(record.record_id, 0) + 1
+        if record.record_id == record_id and llamadas[record_id] <= fallos:
+            return FullText(text="", available=False, reason="error_http", detail="sin red")
+        return fetch_disponible(record)
+
+    return fetch
+
+
+def test_rescate_de_un_no_recuperado_transitorio_cuenta_como_evaluado(
+    tmp_path: Path, proveedor
+) -> None:
+    # Un `error_http` no se congela en el diario (se reintenta al reanudar), pero el humano
+    # puede tener el PDF: se ofrece como rescatable, con un aviso de que es transitorio.
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    vista: dict = {}
+
+    def rescatar(stage: str, solicitud: dict) -> dict | None:
+        if stage != "screening_ft":
+            return None
+        vista["solicitud"] = solicitud
+        vista["plantilla"] = (ctx.run_dir / stage / "decision.template.yml").read_text("utf-8")
+        return {
+            "records": {
+                "rec-1": {"label": "include", "reason": "cumple"},
+                "rec-2": {"label": "include", "reason": "PDF por préstamo interbibliotecario"},
+            }
+        }
+
+    result = correr_hasta(
+        protocol,
+        EXAMPLE,
+        ctx,
+        search_fn=_busqueda_ft,
+        fetch_fn=_fetch_transitorio("rec-2", fallos=99),
+        etiquetar=rescatar,
+    )
+
+    assert vista["solicitud"]["rescuable"] == ["rec-2"]
+    assert vista["solicitud"]["records"][1]["fulltext_reason"] == "error_http"
+    (linea,) = [ln for ln in vista["plantilla"].splitlines() if "no recuperado: error_http" in ln]
+    assert "transitorio" in linea and "se reintenta al reanudar" in linea
+    assert "sin red" in linea  # y el detalle del fallo
+    # El fallo transitorio no está en el diario de recuperación...
+    diario = (ctx.run_dir / "04_fulltext" / "retrieval.jsonl").read_text("utf-8")
+    assert [json.loads(ln)["record_id"] for ln in diario.splitlines() if ln.strip()] == ["rec-1"]
+    # ...pero el rescate lo cuenta como evaluado y llega a la decisión humana de FT.
+    c = result.counts
+    assert (c.fulltext_sought, c.fulltext_not_retrieved, c.fulltext_rescued) == (2, 0, 1)
+    assert (c.fulltext_assessed, c.included) == (2, 2)
+    rec2 = _ft(ctx)["rec-2"]
+    assert (rec2["fulltext_status"], rec2["human_label"], rec2["final_label"]) == (
+        "not_retrieved",
+        "include",
+        "include",
+    )
+
+
+def test_el_rescate_de_un_transitorio_no_vale_si_al_reanudar_llega_el_texto(
+    tmp_path: Path, proveedor
+) -> None:
+    # El rescate quedó atado al `request_sha256` de cuando rec-2 era «no recuperado». Si al
+    # reanudar el texto llega, la solicitud cambia (rec-2 pasa a recuperado y tiene propuesta
+    # IA): la decisión vieja no se aplica y el gate vuelve a pausar con la solicitud nueva.
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    fetch = _fetch_transitorio("rec-2", fallos=1)  # falla la primera vez, luego responde
+    correr_hasta(
+        protocol, EXAMPLE, ctx, search_fn=_busqueda_ft, fetch_fn=fetch, parar_en="screening_ft"
+    )
+    antes = leer_solicitud(ctx.run_dir, "screening_ft")
+    assert antes["rescuable"] == ["rec-2"]
+    responder_gate(
+        ctx.run_dir,
+        "screening_ft",
+        records={
+            "rec-1": {"label": "include", "reason": "cumple"},
+            "rec-2": {"label": "include", "reason": "PDF por préstamo interbibliotecario"},
+        },
+    )
+
+    pausa = run_pipeline(protocol, EXAMPLE, RunContext.open(ctx.run_dir), fetch_fn=fetch)
+
+    assert (pausa.status, pausa.stage) == ("paused", "screening_ft")
+    assert "otra solicitud" in pausa.message
+    despues = leer_solicitud(ctx.run_dir, "screening_ft")
+    assert despues["request_sha256"] != antes["request_sha256"]
+    assert (despues["rescuable"], despues["must_label"]) == ([], ["rec-1", "rec-2"])
+    assert despues["records"][1]["proposal"] == "include"  # ahora tiene voto de la IA
+    # No se registró ni se aplicó nada del rescate viejo.
+    assert [e for e in ctx.ledger.read_all() if e.stage == "screening_ft"] == []
+    assert not (ctx.run_dir / "05_extraction").exists()
+
+    # La revisora decide de nuevo, ya con el texto: rec-2 deja de ser un rescate.
+    result = correr_hasta(
+        protocol, EXAMPLE, RunContext.open(ctx.run_dir), search_fn=_busqueda_ft, fetch_fn=fetch
+    )
+    assert result.status == "completed"
+    c = result.counts
+    assert (c.fulltext_not_retrieved, c.fulltext_rescued, c.fulltext_assessed) == (0, 0, 2)
+    rec2 = _ft(ctx)["rec-2"]
+    assert (rec2["fulltext_status"], rec2["human_label"], len(rec2["votes"])) == (
+        "retrieved",
+        "include",
+        1,
+    )
+    etiqueta = next(e for e in ctx.ledger.read_all() if e.target == "rec-2")
+    assert etiqueta.detail["rescue"] is False
+
+
+# ── Funciones puras de FT (gates.py) ────────────────────────────────────
+
+
+def _decision_ft(
+    record_id: str, etiqueta: str | None, *, recuperado: bool = True
+) -> ScreeningDecision:
+    """Decisión de FT como la deja ``_fulltext``: un voto, o ninguno si no se recuperó."""
+    if not recuperado:
+        return ScreeningDecision(
+            record_id=record_id, phase="fulltext", fulltext_status="not_retrieved"
+        )
+    return ScreeningDecision(
+        record_id=record_id,
+        phase="fulltext",
+        fulltext_status="retrieved",
+        votes=[
+            ScreeningVote(
+                model="m0",
+                label=etiqueta,
+                confidence=0.8,
+                rationale="razón",
+                criteria_violated=["población"] if etiqueta == "exclude" else [],
+            )
+        ],
+        ensemble_label=etiqueta,
+        final_label=etiqueta,
+    )
+
+
+def _escenario_ft(motivo: str = "no_disponible", detalle: str | None = "sin PDF en abierto"):
+    """``(decisiones, registros, recuperación)``: a propone incluir, b no se recuperó, c es
+    ``unclear`` y d propone excluir."""
+    decisiones = [
+        _decision_ft("c", "unclear"),
+        _decision_ft("a", "include"),
+        _decision_ft("b", None, recuperado=False),
+        _decision_ft("d", "exclude"),
+    ]
+    recuperacion = {
+        "a": RetrievalOutcome(available=True, source_url="https://example.org/a"),
+        "b": RetrievalOutcome(available=False, reason=motivo, detail=detalle),
+        "c": RetrievalOutcome(available=True),
+        "d": RetrievalOutcome(available=True),
+    }
+    return decisiones, _registros("a", "b", "c", "d"), recuperacion
+
+
+def test_ft_payload_a0_pide_etiquetar_cada_recuperado_y_ofrece_los_no_recuperados() -> None:
+    decisiones, registros, recuperacion = _escenario_ft()
+
+    payload = ft_payload(
+        decisions=decisiones, records=registros, retrieval=recuperacion, autonomy="A0"
+    )
+
+    assert payload["mode"] == "label_all"
+    assert (payload["n_sought"], payload["n_retrieved"], payload["n_not_retrieved"]) == (4, 3, 1)
+    assert payload["must_label"] == ["a", "c", "d"]  # todos los recuperados, no el no recuperado
+    assert payload["must_resolve"] == ["c"]
+    assert payload["rescuable"] == ["b"]
+    assert [r["record_id"] for r in payload["records"]] == ["a", "b", "c", "d"]
+    assert payload["records"][1] == {
+        "record_id": "b",
+        "title": "Título b",
+        "year": 2020,
+        "doi": "10.1/b",
+        "fulltext": "not_retrieved",
+        "fulltext_reason": "no_disponible",
+        "fulltext_source_url": None,
+        "proposal": None,
+        "confidence": None,
+        "rationale": None,
+        "criteria_violated": [],
+    }
+    d = payload["records"][3]
+    assert (d["proposal"], d["confidence"], d["rationale"], d["criteria_violated"]) == (
+        "exclude",
+        0.8,
+        "razón",
+        ["población"],
+    )
+    assert payload["records"][0]["fulltext_source_url"] == "https://example.org/a"
+
+
+def test_ft_payload_a1_solo_obliga_a_resolver_los_unclear() -> None:
+    decisiones, registros, recuperacion = _escenario_ft()
+
+    payload = ft_payload(
+        decisions=decisiones, records=registros, retrieval=recuperacion, autonomy="A1"
+    )
+
+    assert payload["mode"] == "exceptions"
+    assert (payload["must_label"], payload["must_resolve"]) == (["c"], ["c"])
+    assert payload["rescuable"] == ["b"]
+
+
+def test_ft_payload_sin_el_registro_ni_la_recuperacion_no_rompe() -> None:
+    fila = ft_payload(
+        decisions=[_decision_ft("a", "include")], records=[], retrieval={}, autonomy="A0"
+    )["records"][0]
+
+    assert (fila["title"], fila["year"], fila["doi"]) == ("a", None, None)
+    assert (fila["fulltext_reason"], fila["fulltext_source_url"]) == (None, None)
+
+
+def test_ft_policy_a1_obliga_a_los_unclear_y_ofrece_rescatar_con_razon() -> None:
+    decisiones, registros, recuperacion = _escenario_ft()
+
+    politica = ft_policy(
+        decisions=decisiones, records=registros, retrieval=recuperacion, autonomy="A1"
+    )
+
+    assert (politica.must_label, politica.must_resolve) == (frozenset("c"), frozenset("c"))
+    assert politica.rescue_ids == frozenset("b")
+    assert politica.reason_on_exclude is True
+    assert [h.record_id for h in politica.hints] == ["a", "b", "c", "d"]
+    hints = {h.record_id: h for h in politica.hints}
+    assert (hints["b"].proposal, hints["b"].title) == (None, "Título b")
+    # Un motivo permanente: el fallo se cuenta tal cual, sin prometer reintentos.
+    assert hints["b"].note == "no recuperado: no_disponible (sin PDF en abierto)"
+    assert hints["c"].proposal == "unclear"
+    assert "m0: unclear (0.80)" in hints["c"].note
+
+
+def test_ft_policy_a0_obliga_a_etiquetar_cada_recuperado() -> None:
+    decisiones, registros, recuperacion = _escenario_ft()
+
+    politica = ft_policy(
+        decisions=decisiones, records=registros, retrieval=recuperacion, autonomy="A0"
+    )
+
+    assert politica.must_label == frozenset("acd")
+    assert politica.must_resolve == frozenset("c")
+
+
+@pytest.mark.parametrize("motivo", ["error_http", "sin_httpx"])
+def test_ft_policy_avisa_de_que_un_no_recuperado_transitorio_se_reintenta(motivo: str) -> None:
+    decisiones, registros, recuperacion = _escenario_ft(motivo, "sin red")
+
+    politica = ft_policy(
+        decisions=decisiones, records=registros, retrieval=recuperacion, autonomy="A0"
+    )
+
+    nota = next(h.note for h in politica.hints if h.record_id == "b")
+    assert nota.startswith(f"no recuperado: {motivo}")
+    assert "transitorio" in nota and "se reintenta al reanudar" in nota
+    assert "habrá que decidir de nuevo" in nota
+    assert "sin red" in nota
+    assert politica.rescue_ids == frozenset("b")  # se ofrece rescatar igualmente
