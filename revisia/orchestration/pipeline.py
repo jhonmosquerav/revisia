@@ -68,7 +68,14 @@ from revisia.llm.preflight import PreflightError, preflight
 from revisia.llm.registry import ProviderConfig, build_provider
 from revisia.meta_analysis import MetaAnalysisResult, meta_analyze
 from revisia.metrics import ScreeningMetrics, compute_screening_metrics
-from revisia.orchestration.hitl import DecisionFileError, GateResult, review_gate
+from revisia.orchestration.gates import apply_labels, ta_payload, ta_policy
+from revisia.orchestration.hitl import (
+    DecisionFileError,
+    FlagPolicy,
+    GateResult,
+    RecordPolicy,
+    review_gate,
+)
 from revisia.orchestration.journal import JournalError, StageJournal, entry_output, journaled
 from revisia.orchestration.run_context import (
     LegacyRunError,
@@ -282,8 +289,20 @@ class _Run:
                 self.ctx.run_dir, info.model_copy(update={"status": status, "stage": stage})
             )
 
-    def gate(self, stage: str, payload: dict) -> GateResult:
-        """Checkpoint humano de ``stage`` con la autonomía que fija el protocolo."""
+    def gate(
+        self,
+        stage: str,
+        payload: dict,
+        *,
+        records: RecordPolicy | None = None,
+        flags: FlagPolicy | None = None,
+        force_human: bool = False,
+    ) -> GateResult:
+        """Checkpoint humano de ``stage`` con la autonomía que fija el protocolo.
+
+        ``records`` habilita la decisión por registro (cribado), ``flags`` la
+        adjudicación de citas marcadas y ``force_human`` exige humano (M5).
+        """
         self.stage = stage
         return review_gate(
             stage=stage,
@@ -291,6 +310,9 @@ class _Run:
             run_ctx=self.ctx,
             review_payload=payload,
             auto_approve=self.auto_approve,
+            records=records,
+            flags=flags,
+            force_human=force_human,
         )
 
     def stop(self, gate: GateResult, stage: str) -> PipelineResult | None:
@@ -1190,16 +1212,21 @@ def _run_stages(
     deduped, discarded = _dedup(run, raw_records)
     run.stage = "screening_ta"
     decisions = _screen_ta(run, deduped, _load_gold(run, gold_labels))
+    ta_autonomy = protocol.autonomy_for("screening_ta")
+    ta_gate = run.gate(
+        "screening_ta",
+        ta_payload(decisions=decisions, records=deduped, autonomy=ta_autonomy),
+        records=ta_policy(decisions=decisions, records=deduped, autonomy=ta_autonomy),
+    )
+    if (stop := run.stop(ta_gate, "screening_ta")) is not None:
+        return stop
+    # D5: solo las etiquetas explícitas pasan a human_label; decisions.json se
+    # reescribe con ellas (spec §4.2). Una aprobación en bloque o --auto-approve
+    # no trae ninguna: la exclusión sigue siendo "IA avalada" (trAIce R1).
+    decisions = apply_labels(decisions, ta_gate.labels, ta_gate.actor)
+    run.ctx.write_json("03_screening/decisions.json", [d.model_dump() for d in decisions])
     passed = {d.record_id for d in decisions if d.final_label in {"include", "unclear"}}
     excluded_ta = sum(1 for d in decisions if d.final_label == "exclude")
-    ta_payload = {
-        "n_screened": len(deduped),
-        "n_pass": len(passed),
-        "n_excluded": excluded_ta,
-        "pass_ids": sorted(passed),
-    }
-    if (stop := run.stop(run.gate("screening_ta", ta_payload), "screening_ta")) is not None:
-        return stop
 
     passed_ta = [r for r in deduped if r.record_id in passed]
     run.stage = "screening_ft"
