@@ -18,6 +18,7 @@ from revisia.exports.checklist import (
     label_databases,
 )
 from revisia.metrics import fmt_metric
+from revisia.orchestration.hitl import effective_autonomy
 
 if TYPE_CHECKING:
     from revisia.config import ReviewProtocol
@@ -63,14 +64,21 @@ def render_methods(
     Quién decidió cada fase sale de ``gates`` (``summarize_gates`` del ledger) y
     de la autonomía efectiva, no de un texto fijo: si un gate de juicio no lo
     resolvió un humano, el método lo dice (M13). Sin ``gates`` no se afirma
-    ninguna decisión: cada fase figura pendiente.
+    ninguna decisión: cada fase figura pendiente. Es la sección que se pega en un
+    manuscrito: cada frase tiene que ser cierta, sin imperativos ni paréntesis
+    dobles, y no atribuye a la IA lo que no hizo (revisión de la Tarea 27).
     """
     gates = gates or {}
     autonomy = dict(autonomy_effective or {})
 
     def decision(stage: str) -> str:
         level = autonomy.get(stage) or protocol.autonomy_for(stage)
-        return f"{describe_gate(stage, gates.get(stage))} (autonomía {level})"
+        if stage == "reporte":
+            # Sin `autonomy_effective` (o con una inconsistente), el gate final forzado por
+            # citas marcadas no se aplica en la declarada (A2 «exige decisión humana» se
+            # contradice): la regla es la misma que aplica el gate (`effective_autonomy`).
+            level = effective_autonomy(level, forced_human=forced_human)
+        return describe_gate(stage, gates.get(stage), autonomy=level, inline_autonomy=True)
 
     q = protocol.question
     components = "; ".join(f"{k}={v}" for k, v in q.components.items()) or "(no detallados)"
@@ -91,6 +99,14 @@ def render_methods(
         else "narrativa siguiendo SWiM (Synthesis Without Meta-analysis)"
     )
     ia_models = ", ".join(models or []) or "(ninguno registrado)"
+    # El ensemble es solo de título/abstract y solo si el protocolo lo declara: el cribado a
+    # texto completo pasa un único miembro (`_fulltext`).
+    n_ta = protocol.n_screeners_for("screening_ta")
+    cribado_ta = (
+        f"ensemble multi-modelo sesgado a recall ({n_ta} modelos)"
+        if n_ta > 1
+        else "un solo modelo (sin ensemble)"
+    )
 
     lines = [
         "## Método",
@@ -122,9 +138,9 @@ def render_methods(
     lines += [
         "",
         "### Selección (screening)",
-        "Dos fases (título/abstract y texto completo) con ensemble multi-modelo sesgado a "
-        f"recall. Título/abstract: {decision('screening_ta')}. Texto completo: "
-        f"{decision('screening_ft')}. Acuerdo: {kappa}.",
+        f"Dos fases (título/abstract y texto completo): {cribado_ta} en título/abstract y un "
+        f"solo modelo en texto completo. Título/abstract: {decision('screening_ta')}. Texto "
+        f"completo: {decision('screening_ft')}. Acuerdo: {kappa}.",
         f"Flujo PRISMA: identificados={counts.identified} · duplicados={counts.duplicates_removed} "
         f"· cribados={counts.screened} · buscados a texto completo={counts.fulltext_sought} "
         f"· no recuperados={counts.fulltext_not_retrieved} "
@@ -134,12 +150,14 @@ def render_methods(
     ]
     if counts.fulltext_rescued:
         # Revisión de la Tarea 24: un rescate cuenta como evaluado, pero la IA no vio ese texto.
+        # Solo se nombran RoB y verificación, que sí usan el texto completo cuando existe: la
+        # extracción usa título y abstract para todos y se declara en «### Extracción».
         lines.append(
             f"Informes rescatados por el revisor: {counts.fulltext_rescued} que el motor no "
             "recuperó y un humano evaluó con el texto completo obtenido fuera de él (cuentan "
             "como evaluados, no como no recuperados). Limitación: la IA no tuvo ese texto, así "
-            "que la extracción, el riesgo de sesgo y la verificación de las citas de los que se "
-            "incluyeron se hicieron solo con título/abstract."
+            "que el riesgo de sesgo y la verificación de las citas de los que se incluyeron se "
+            "hicieron solo con título/abstract."
         )
 
     if exclusions is not None:
@@ -153,9 +171,11 @@ def render_methods(
     lines += [
         "",
         "### Extracción",
-        "Formulario configurable (extraction_form.yml) con cita textual de origen por "
-        "campo (anti-alucinación). La tabla de extracción se aprueba por etapa: "
-        f"{decision('extraccion')}.",
+        "Formulario configurable (extraction_form.yml). La IA extrae a partir del título y el "
+        "abstract; el texto completo no entra en la extracción (limitación conocida). Se "
+        "solicita al modelo una cita textual de origen por campo y se registra junto al "
+        "valor; no se verifica automáticamente contra el texto. La tabla de extracción se "
+        f"aprueba por etapa: {decision('extraccion')}.",
     ]
     if extraction_agreement is not None and extraction_agreement.n_studies:
         ea = extraction_agreement

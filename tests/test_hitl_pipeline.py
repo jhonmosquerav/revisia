@@ -2540,7 +2540,9 @@ def test_human_validation_summary_distingue_humano_demo_y_sin_decisiones() -> No
     resumen = human_validation_summary(demo)
     assert resumen.startswith("⚠ gates de juicio sin decisión humana: extraccion (")
     assert "extraccion (auto-approve (demo))." in resumen
-    assert resumen.endswith("decláralo.")
+    # Va al entregable (se pega en un manuscrito): forma impersonal, no un imperativo.
+    assert resumen.endswith("debe declararse.")
+    assert "decláralo" not in resumen
     assert "screening_ta" not in resumen  # solo nombra los que no resolvió un humano
 
 
@@ -2577,7 +2579,9 @@ def test_render_traice_checklist_sin_gates_no_afirma_ninguna_validacion_humana()
     assert "checkpoints HITL registrados" not in md
     assert "- Validación humana: ningún gate de juicio tiene todavía una decisión" in md
     assert "- rob (A0): pendiente (sin decisión registrada)" in md
-    assert "- reporte (A2): pendiente de la decisión final" in md
+    # Una A2 sin citas marcadas no espera ninguna decisión humana: seguirá sola.
+    assert "- reporte (A2): auto-proceed previsto (A2): sin revisión humana" in md
+    assert "pendiente de la decisión final" not in md
     assert "exige decisión humana" not in md
     # Solo lista los gates de los que se informa la autonomía.
     solo_rob = render_traice_checklist([], {"rob": "A0"})
@@ -2601,16 +2605,20 @@ def test_render_methods_dice_quien_decidio_cada_fase() -> None:
         forced_human=True,
     )
 
-    assert "Título/abstract: aprobado por humano (human:ana) (autonomía A1)." in md
+    # La autonomía va en el mismo paréntesis que el actor, no en un segundo (se pega en un
+    # manuscrito): «(human:ana; autonomía A1)», no «(human:ana) (autonomía A1)».
+    assert "Título/abstract: aprobado por humano (human:ana; autonomía A1)." in md
     assert (
-        "Texto completo: aprobado por humano (human:ana) · 2 etiqueta(s) por registro "
-        "(autonomía A0)." in md
+        "Texto completo: aprobado por humano (human:ana; autonomía A0) · 2 etiqueta(s) por "
+        "registro." in md
     )
     assert (
         "La tabla de extracción se aprueba por etapa: aprobado por auto-approve (demo): NO es "
         "una validación humana (autonomía A0)." in md
     )
-    assert "Decisión: pendiente (sin decisión registrada) (autonomía A0)." in md
+    assert "Decisión: pendiente (sin decisión registrada; autonomía A0)." in md
+    assert "(human:ana) (autonomía" not in md
+    assert "(sin decisión registrada) (autonomía" not in md
     assert "Validación humana: ⚠ gates de juicio sin decisión humana: extraccion" in md
     assert (
         "Reporte final: pendiente de la decisión final (autonomía A1) — exige decisión humana: "
@@ -2623,8 +2631,8 @@ def test_render_methods_sin_gates_usa_la_autonomia_declarada_y_no_afirma_validac
 
     md = render_methods(protocol=protocol, counts=PrismaCounts())
 
-    assert "Título/abstract: pendiente (sin decisión registrada) (autonomía A1)." in md
-    assert "Texto completo: pendiente (sin decisión registrada) (autonomía A0)." in md
+    assert "Título/abstract: pendiente (sin decisión registrada; autonomía A1)." in md
+    assert "Texto completo: pendiente (sin decisión registrada; autonomía A0)." in md
     assert "ningún gate de juicio tiene todavía una decisión registrada." in md
     assert "Reporte final: pendiente de la decisión final (autonomía A1)." in md
     assert "exige decisión humana" not in md
@@ -2650,8 +2658,10 @@ def test_metricas_de_cribado_dicen_que_miden_la_propuesta_de_la_ia_d6() -> None:
 
 def test_methods_declara_los_informes_rescatados_y_su_limite_de_texto() -> None:
     # Revisión de la Tarea 24: un no recuperado que el revisor evaluó con un PDF de fuera cuenta
-    # como evaluado, y la IA no vio ese texto: extracción, RoB y verificación, solo con
-    # título/abstract. Sin rescates no se dice nada de esto.
+    # como evaluado, y la IA no vio ese texto: RoB y verificación (que sí usan el texto completo
+    # cuando existe), solo con título/abstract. La extracción no se nombra aquí: usa título y
+    # abstract para todos, rescatados o no (revisión de la Tarea 27). Sin rescates no se dice
+    # nada de esto.
     protocol = load_protocol(EXAMPLE)
     con = PrismaCounts(
         fulltext_sought=3,
@@ -2669,10 +2679,10 @@ def test_methods_declara_los_informes_rescatados_y_su_limite_de_texto() -> None:
         "recuperados)." in md
     )
     assert (
-        "Limitación: la IA no tuvo ese texto, así que la extracción, el riesgo de sesgo y la "
-        "verificación de las citas de los que se incluyeron se hicieron solo con título/abstract."
-        in md
+        "Limitación: la IA no tuvo ese texto, así que el riesgo de sesgo y la verificación de "
+        "las citas de los que se incluyeron se hicieron solo con título/abstract." in md
     )
+    assert "la extracción, el riesgo de sesgo" not in md
     sin = render_methods(protocol=protocol, counts=PrismaCounts(fulltext_sought=3, included=3))
     assert "rescatados por el revisor" not in sin
     assert "solo con título/abstract" not in sin
@@ -2706,3 +2716,156 @@ def test_metodologia_de_una_corrida_con_rescate_lo_declara(tmp_path: Path, prove
     assert "Informes rescatados por el revisor: 1 que el motor no recuperó" in metodos
     assert "solo con título/abstract" in metodos
     assert "evaluados para elegibilidad=2" in metodos  # el rescate cuenta como evaluado
+
+
+# ── metodologia.md no atribuye a la IA lo que no hizo (revisión de la Tarea 27) ──
+
+
+def test_methods_dice_que_la_extraccion_usa_titulo_y_abstract_para_todos() -> None:
+    # `extract_record` manda solo título y abstract, hubiera o no texto completo (M14 es de la
+    # Ola 2): la frase va siempre, no solo cuando hay rescates, que sugerían lo contrario.
+    protocol = load_protocol(EXAMPLE)
+    sin_rescates = PrismaCounts(fulltext_sought=3, included=3)
+    con_rescates = PrismaCounts(fulltext_sought=3, fulltext_rescued=1, fulltext_assessed=3)
+    frase = (
+        "La IA extrae a partir del título y el abstract; el texto completo no entra en la "
+        "extracción (limitación conocida)."
+    )
+
+    for counts in (sin_rescates, con_rescates, PrismaCounts()):
+        md = render_methods(protocol=protocol, counts=counts)
+        assert frase in md
+        assert md.index("### Extracción") < md.index(frase) < md.index("### Evaluación de calidad")
+
+
+def test_methods_distingue_el_ensemble_de_ta_del_modelo_unico_de_ft() -> None:
+    # `_fulltext` pasa un único miembro a `screen_fulltext`: el ensemble es solo de T/A, y solo
+    # si el protocolo lo declara (el demo trae 2 miembros).
+    protocol = load_protocol(EXAMPLE)
+    assert len(protocol.screeners_for("screening_ta")) == 2
+
+    md = render_methods(protocol=protocol, counts=PrismaCounts())
+
+    assert (
+        "ensemble multi-modelo sesgado a recall (2 modelos) en título/abstract y un solo modelo "
+        "en texto completo" in md
+    )
+    assert "con ensemble multi-modelo sesgado a recall." not in md  # el texto de antes
+
+    sin_ensemble = protocol.model_copy(update={"ensemble": [], "ensemble_llm": {}})
+    md = render_methods(protocol=sin_ensemble, counts=PrismaCounts())
+    assert (
+        "un solo modelo (sin ensemble) en título/abstract y un solo modelo en texto completo" in md
+    )
+    assert "ensemble multi-modelo" not in md
+
+
+def test_methods_no_atribuye_verificacion_a_la_cita_de_origen_por_campo() -> None:
+    # La `source_quote` se pide al LLM y se guarda, pero nada la contrasta con el texto: no es
+    # una defensa «anti-alucinación» (revisión de la Tarea 27).
+    md = render_methods(protocol=load_protocol(EXAMPLE), counts=PrismaCounts())
+
+    assert (
+        "Se solicita al modelo una cita textual de origen por campo y se registra junto al "
+        "valor; no se verifica automáticamente contra el texto." in md
+    )
+    assert "anti-alucinación" not in md
+
+
+@pytest.mark.parametrize("declarada", ["A2", "A3"])
+def test_reporte_a2_a3_sin_citas_marcadas_figura_como_auto_proceed_previsto(
+    declarada: str,
+) -> None:
+    # Sin citas marcadas el gate final seguirá solo: no llegará ninguna decisión humana, así que
+    # «pendiente de la decisión final» daba a entender lo contrario.
+    protocol = load_protocol(EXAMPLE)
+    efectiva = _efectiva(reporte=declarada)
+    previsto = f"auto-proceed previsto ({declarada}): sin revisión humana"
+
+    traice = render_traice_checklist([], efectiva)
+    metodos = render_methods(protocol=protocol, counts=PrismaCounts(), autonomy_effective=efectiva)
+
+    assert f"- reporte ({declarada}): {previsto}" in traice
+    assert f"Reporte final: {previsto}." in metodos
+    assert "pendiente de la decisión final" not in traice + metodos
+    # En A0/A1 sí espera a un humano.
+    assert "- reporte (A1): pendiente de la decisión final" in render_traice_checklist(
+        [], _efectiva(reporte="A1")
+    )
+
+
+def test_reporte_forzado_no_figura_como_auto_proceed_aunque_se_declare_a2() -> None:
+    # Con citas marcadas el gate exige humano y la autonomía efectiva es A1. Si un llamador
+    # pasara A2 con `forced_human`, el aviso de la decisión humana manda sobre el auto-proceed.
+    traice = render_traice_checklist([], _efectiva(reporte="A2"), forced_human=True)
+
+    assert "- reporte (A2): pendiente de la decisión final · exige decisión humana" in traice
+    assert "auto-proceed previsto" not in traice
+
+
+def test_render_methods_sin_autonomy_effective_degrada_reporte_si_esta_forzado() -> None:
+    # Sin `autonomy_effective` pero con `forced_human`, la autonomía de `reporte` no es la
+    # declarada (A2 «exige decisión humana» se contradice): sale de `effective_autonomy`.
+    protocol = load_protocol(EXAMPLE)
+    protocol = protocol.model_copy(update={"autonomy": {**protocol.autonomy, "reporte": "A2"}})
+
+    md = render_methods(protocol=protocol, counts=PrismaCounts(), forced_human=True)
+
+    assert (
+        "Reporte final: pendiente de la decisión final (autonomía A1) — exige decisión humana: "
+        "el verificador marcó citas." in md
+    )
+    assert "autonomía A2" not in md
+    # Sin forzar, la declarada (A2) manda: seguirá sola.
+    sin_forzar = render_methods(protocol=protocol, counts=PrismaCounts())
+    assert "Reporte final: auto-proceed previsto (A2): sin revisión humana." in sin_forzar
+
+
+def test_describe_gate_con_autonomia_la_mete_en_el_mismo_parentesis() -> None:
+    # `inline_autonomy`: para la prosa de metodologia.md, sin un segundo paréntesis pegado.
+    def frase(stage: str, resumen: GateSummary | None, nivel: str) -> str:
+        return describe_gate(stage, resumen, autonomy=nivel, inline_autonomy=True)
+
+    assert frase("screening_ta", _gate(), "A1") == "aprobado por humano (human:ana; autonomía A1)"
+    assert (
+        frase("screening_ft", _gate("screening_ft", autonomy="A0", n_labels=2), "A0")
+        == "aprobado por humano (human:ana; autonomía A0) · 2 etiqueta(s) por registro"
+    )
+    assert (
+        frase("extraccion", _gate("extraccion", actor="ana"), "A0")
+        == "aprobado por ana (no humano; autonomía A0)"
+    )
+    assert frase("rob", None, "A0") == "pendiente (sin decisión registrada; autonomía A0)"
+    assert frase("reporte", None, "A1") == "pendiente de la decisión final (autonomía A1)"
+    assert frase("reporte", None, "A2") == "auto-proceed previsto (A2): sin revisión humana"
+    # Los que ya cierran con una frase propia conservan la autonomía como sufijo.
+    assert (
+        frase("rob", _gate("rob", actor=AUTO_APPROVE_ACTOR, autonomy="A0"), "A0")
+        == "aprobado por auto-approve (demo): NO es una validación humana (autonomía A0)"
+    )
+    # Sin `inline_autonomy` la frase no cambia (el checklist ya pone la autonomía delante).
+    assert describe_gate("screening_ta", _gate(), autonomy="A1") == (
+        "aprobado por humano (human:ana)"
+    )
+    assert describe_gate("reporte", None, autonomy="A2") == (
+        "auto-proceed previsto (A2): sin revisión humana"
+    )
+
+
+def test_corrida_con_reporte_a2_sin_citas_marcadas_dice_auto_proceed_previsto(
+    tmp_path: Path, proveedor
+) -> None:
+    proto = _proto(tmp_path, reporte="A2")
+    protocol = load_protocol(proto)
+    ctx = RunContext(protocol.slug, tmp_path / "runs", "T")
+
+    result = run_pipeline(
+        protocol, proto, ctx, auto_approve=True, search_fn=_busqueda_ft, fetch_fn=fetch_disponible
+    )
+
+    assert result.status == "completed"
+    traice = _entregable(ctx, "checklist_traice.md")
+    metodos = _entregable(ctx, "metodologia.md")
+    assert "- reporte (A2): auto-proceed previsto (A2): sin revisión humana" in traice
+    assert "Reporte final: auto-proceed previsto (A2): sin revisión humana." in metodos
+    assert "pendiente de la decisión final" not in traice + metodos

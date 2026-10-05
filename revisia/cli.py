@@ -408,7 +408,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         recall = "n/d" if m.recall is None else f"{m.recall:.2f}"
         lost = "n/d" if m.lost_evidence is None else f"{m.lost_evidence:.2f}"
         print(
-            f"  Métricas (vs gold n={m.n}): recall={recall} · lost-evidence={lost} "
+            f"  Métricas (propuesta de la IA frente al gold humano, n={m.n}): "
+            f"recall={recall} · lost-evidence={lost} "
             f"· MCC={fmt_metric(m.mcc, '.2f')} · WMCC={fmt_metric(m.wmcc, '.2f')} "
             f"· kappa={fmt_metric(m.cohen_kappa, '.2f')}"
         )

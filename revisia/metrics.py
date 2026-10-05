@@ -10,9 +10,12 @@ accuracy" puede perder >60% de la evidencia relevante. Por eso este módulo
 - **MCC**: coeficiente de correlación de Matthews, robusto al desbalance.
 - **WMCC**: MCC con el falso negativo ponderado (coste FN ≫ FP, w=10 por
   defecto). Variante pragmática que penaliza perder evidencia.
-- **Cohen's kappa**: acuerdo humano-IA (umbral ≥0.60 del documento canónico).
+- **Cohen's kappa**: acuerdo de la propuesta de la IA con el gold humano (umbral ≥0.60
+  del documento canónico).
 
-Todas se calculan contra un *gold standard* humano (subconjunto etiquetado).
+Todas se calculan contra un *gold standard* humano (subconjunto etiquetado) y miden la
+propuesta de la IA (``ensemble_label``) frente a él, no la decisión final con las
+correcciones humanas (D6).
 """
 
 from __future__ import annotations

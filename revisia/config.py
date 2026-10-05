@@ -133,6 +133,17 @@ class ReviewProtocol(BaseModel):
             f"No hay proveedor LLM para la etapa {stage!r} ni un 'default' en protocol.yml."
         )
 
+    def n_screeners_for(self, stage: str) -> int:
+        """Cuántos modelos criban una etapa, sin exigir que haya proveedor configurado.
+
+        Es el recuento que ``screeners_for`` devolvería (1 si no hay ensemble), pero no
+        lanza ``KeyError`` cuando falta el proveedor: lo usa ``metodologia.md``, que
+        también se rinde sobre protocolos incompletos (tests, plantillas).
+        """
+        if stage in self.ensemble and self.ensemble_llm.get(stage):
+            return len(self.ensemble_llm[stage])
+        return 1
+
     def screeners_for(self, stage: str) -> list[ProviderConfig]:
         """Proveedores que cribán una etapa.
 

@@ -355,23 +355,51 @@ def render_prisma_abstracts_checklist(
     return "\n".join(lines)
 
 
-def describe_gate(stage: str, summary: GateSummary | None) -> str:
+def describe_gate(
+    stage: str,
+    summary: GateSummary | None,
+    *,
+    autonomy: str | None = None,
+    inline_autonomy: bool = False,
+) -> str:
     """Quién decidió de verdad un gate, en una frase (M13).
 
     Sale del ledger reducido por ``summarize_gates`` (el mismo reductor que usa
     el auditor, D12): nunca se afirma una validación humana que no ocurrió.
+
+    Args:
+        stage: etapa del gate.
+        summary: su decisión efectiva, o ``None`` si todavía no hay ninguna.
+        autonomy: autonomía efectiva con la que se aplica el gate. Un ``reporte``
+            pendiente en A2/A3 (sin citas marcadas: con ellas ya habría pasado a A1)
+            no esperará ninguna decisión humana, y la frase lo dice («auto-proceed
+            previsto») en vez de «pendiente de la decisión final».
+        inline_autonomy: para la prosa de ``metodologia.md``, que se pega en un
+            manuscrito: mete la autonomía en la frase, en el mismo paréntesis que el
+            actor («human:ana; autonomía A1»), en vez de dejar que el llamador añada
+            un segundo paréntesis detrás. El checklist ya la pone delante de la frase.
     """
+    nivel = f"autonomía {autonomy}" if inline_autonomy and autonomy else None
+
+    def entre_parentesis(detalle: str) -> str:
+        return f"({detalle}; {nivel})" if nivel else f"({detalle})"
+
+    def con_sufijo(frase: str) -> str:
+        return f"{frase} ({nivel})" if nivel else frase
+
     if summary is None:
         if stage == "reporte":
-            return "pendiente de la decisión final"
-        return "pendiente (sin decisión registrada)"
+            if autonomy in {"A2", "A3"}:
+                return f"auto-proceed previsto ({autonomy}): sin revisión humana"
+            return con_sufijo("pendiente de la decisión final")
+        return f"pendiente {entre_parentesis('sin decisión registrada')}"
     if summary.action == "auto-proceed":
         return f"auto-proceed ({summary.actor}, autonomía {summary.autonomy}): sin revisión humana"
     if summary.actor == AUTO_APPROVE_ACTOR:
-        return "aprobado por auto-approve (demo): NO es una validación humana"
+        return con_sufijo("aprobado por auto-approve (demo): NO es una validación humana")
     verb = "aprobado" if summary.action == "approve" else "rechazado"
     if not summary.actor.startswith(HUMAN_ACTOR_PREFIX):
-        return f"{verb} por {summary.actor} (no humano)"
+        return f"{verb} por {summary.actor} {entre_parentesis('no humano')}"
     extras = []
     if summary.n_labels:
         extras.append(f"{summary.n_labels} etiqueta(s) por registro")
@@ -379,7 +407,9 @@ def describe_gate(stage: str, summary: GateSummary | None) -> str:
         extras.append(f"{summary.n_flag_reviews} cita(s) marcada(s) adjudicada(s)")
     if summary.forced_human:
         extras.append("forzado a humano por citas marcadas")
-    return f"{verb} por humano ({summary.actor})" + "".join(f" · {e}" for e in extras)
+    return f"{verb} por humano {entre_parentesis(summary.actor)}" + "".join(
+        f" · {e}" for e in extras
+    )
 
 
 def human_validation_summary(gates: Mapping[str, GateSummary]) -> str:
@@ -392,7 +422,7 @@ def human_validation_summary(gates: Mapping[str, GateSummary]) -> str:
         detail = ", ".join(f"{s} ({gates[s].actor})" for s in without_human)
         return (
             f"⚠ gates de juicio sin decisión humana: {detail}. Sin revisión humana la "
-            "corrida no es evidencia publicable; decláralo."
+            "corrida no es evidencia publicable; debe declararse."
         )
     return f"un humano resolvió todos los gates de juicio con decisión ({', '.join(reached)})."
 
@@ -414,7 +444,9 @@ def render_traice_checklist(
         autonomy_effective: autonomía con la que se aplica cada gate (la
             declarada, o A1 en ``reporte`` si el gate quedó forzado a humano).
         gates: decisión efectiva por gate (``summarize_gates`` del ledger). El
-            checklist se escribe antes del gate final, que figura "pendiente".
+            checklist se escribe antes del gate final, que figura "pendiente" (o,
+            en A2/A3 sin citas marcadas, "auto-proceed previsto": no llegará ninguna
+            decisión humana).
         forced_human: el gate final exige humano por citas marcadas (M5).
         metrics: métricas de cribado frente al gold standard, si se calcularon.
         exclusions: desglose de exclusiones humano vs IA, si se calculó.
@@ -439,7 +471,11 @@ def render_traice_checklist(
     for stage in GATED_STAGES:
         if stage not in autonomy_effective:
             continue
-        line = f"- {stage} ({autonomy_effective[stage]}): {describe_gate(stage, gates.get(stage))}"
+        nivel = autonomy_effective[stage]
+        # Con citas marcadas el gate final exige humano: no seguirá solo, sea cual sea la
+        # autonomía que le pasen (`reporte` forzado ya llega aquí en A1).
+        prevista = None if stage == "reporte" and forced_human else nivel
+        line = f"- {stage} ({nivel}): {describe_gate(stage, gates.get(stage), autonomy=prevista)}"
         if stage == "reporte" and forced_human and stage not in gates:
             line += " · exige decisión humana: el verificador marcó citas"
         lines.append(line)
