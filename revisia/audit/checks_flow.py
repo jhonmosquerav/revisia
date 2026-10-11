@@ -84,6 +84,7 @@ import io
 import json
 import math
 import re
+import weakref
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
@@ -423,11 +424,21 @@ class _EfectosProtocolo:
     Attributes:
         efectos: los efectos validados como los valida el motor (``EffectsFile``), o ``None`` si
             el protocolo no declara ninguno (sin fichero, o ``effects`` vacío) o no se pudo leer.
+        resultado: ``meta_analyze`` de esos efectos, el que el motor tuvo que escribir.
         problema: por qué un fichero que existe no se pudo leer o no valida (acotado).
     """
 
     efectos: EffectsFile | None = None
+    resultado: dict[str, Any] | None = None
     problema: str = ""
+
+
+# Los efectos ya leídos de cada contexto: los consultan `stage_artifacts`, `deliverable` y tres
+# familias de `arithmetic`, y validarlos recalcula el meta-análisis (sin `scipy`, cada cálculo
+# reintenta importarlo). Débil: muere con el contexto de la auditoría.
+_EFECTOS_LEIDOS: weakref.WeakKeyDictionary[AuditContext, _EfectosProtocolo] = (
+    weakref.WeakKeyDictionary()
+)
 
 
 def _efectos_del_protocolo(ctx: AuditContext) -> _EfectosProtocolo:
@@ -436,8 +447,17 @@ def _efectos_del_protocolo(ctx: AuditContext) -> _EfectosProtocolo:
     ``protocol_files.EffectsFile`` es el mismo modelo con el que el motor valida el fichero al
     cargar el protocolo (k ≥ 2, datos de la medida, varianza positiva): el auditor no puede dar
     por bueno un ``effects.yml`` que el motor habría rechazado. Solo con ``run.json``: sin
-    instantánea (una corrida v0.7) no hay protocolo congelado con el que anclar nada.
+    instantánea (una corrida v0.7) no hay protocolo congelado con el que anclar nada. Se calcula
+    una vez por contexto.
     """
+    leidos = _EFECTOS_LEIDOS.get(ctx)
+    if leidos is None:
+        leidos = _EFECTOS_LEIDOS[ctx] = _leer_efectos_del_protocolo(ctx)
+    return leidos
+
+
+def _leer_efectos_del_protocolo(ctx: AuditContext) -> _EfectosProtocolo:
+    """Cuerpo de :func:`_efectos_del_protocolo` (sin memoizar)."""
     if not _ola1(ctx):
         return _EfectosProtocolo()
     cargado = ctx.art.yaml_o_vacio(EFECTOS_PROTOCOLO)
@@ -453,7 +473,10 @@ def _efectos_del_protocolo(ctx: AuditContext) -> _EfectosProtocolo:
         return _EfectosProtocolo(
             problema=f"{EFECTOS_PROTOCOLO} no valida como lo valida el motor ({type(exc).__name__})"
         )
-    return _EfectosProtocolo(efectos if efectos.effects else None)
+    if not efectos.effects:
+        return _EfectosProtocolo()
+    resultado = meta_analyze(efectos.effects, efectos.measure).model_dump()
+    return _EfectosProtocolo(efectos, resultado)
 
 
 def _journals_ola1(ctx: AuditContext) -> list[tuple[str, str]]:
@@ -1860,9 +1883,7 @@ def _meta_analisis(ctx: AuditContext, rel: _Relations) -> None:
     if not loaded.ok:
         rel.unverifiable(name, f"{META} ilegible")
         return
-    efectos = protocolo.efectos
-    esperado = meta_analyze(efectos.effects, efectos.measure).model_dump()
-    diferencia = _meta_distinto(loaded.value, esperado)
+    diferencia = _meta_distinto(loaded.value, protocolo.resultado)
     rel.check(name, diferencia is None, f"distinto en `{short_text(diferencia)}`")
 
 
