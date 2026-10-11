@@ -11,7 +11,10 @@ Reglas (spec 2026-10-04 §9.3):
   de [inicio de la corrida, ``manifest.created_utc``] con 2 s de tolerancia;
   si el ledger retrocede más de 2 s; si una llamada declara
   ``deterministic: true`` con un proveedor que no es ``fake`` (ningún
-  proveedor real lo garantiza: todos ponen ``False``).
+  proveedor real lo garantiza: todos ponen ``False``); si el ``resumes`` de
+  ``run.json`` no sube o una entrada de ``01_search/log.json`` termina antes de
+  empezar (relación 14 de §4.4). Las reanudaciones, las interrupciones y las
+  horas del log de búsqueda entran en las mismas cotas que las demás marcas.
 - **WARN** (heurísticas, nunca FAIL): ≥ 20 llamadas no exentas con una
   mediana de separación < 5 ms; ≥ 4 marcas del ledger con ≥ 50 % sin
   fracción de segundo; límite inferior o superior no verificable (sin ``run.json`` válido ni
@@ -139,6 +142,53 @@ def _antes(a: datetime, b: datetime) -> bool:
     return b - a > TOLERANCIA
 
 
+def _marcas_ola1(ctx: AuditContext, fails: list[str]) -> list[tuple[str, datetime]]:
+    """Marcas de ``run.json`` (reanudaciones, interrupciones) y del log de búsqueda.
+
+    Devuelve las que se pudieron leer, para que entren en las mismas cotas (inicio de la
+    corrida y manifiesto) que las del ledger y las llamadas; las ilegibles van a ``fails``.
+    También son imposibles un ``resumes`` que no sube y una entrada del log que termina antes
+    de empezar, con la misma tolerancia de 2 s (relación 14 de §4.4). Los nombres de las bases
+    vienen del log, que es entrada no confiable: siempre acotados (``_mostrar``).
+    """
+    marks: list[tuple[str, datetime]] = []
+
+    def _marca(label: str, value: object) -> datetime | None:
+        parsed, error = parse_utc(value)
+        if parsed is None:
+            fails.append(f"{label}: {error}")
+            return None
+        marks.append((label, parsed))
+        return parsed
+
+    if ctx.run_info is not None:
+        resumes = [
+            _marca(f"run.json resumes[{i}]", value) for i, value in enumerate(ctx.run_info.resumes)
+        ]
+        valid = [r for r in resumes if r is not None]
+        if valid != sorted(valid):
+            fails.append("run.json: `resumes` no es ascendente")
+        for i, interruption in enumerate(ctx.run_info.interruptions):
+            _marca(f"run.json interruptions[{i}]", interruption.utc)
+    log = ctx.art.artifact("01_search/log.json")
+    if log.ok:
+        spans = [("01_search/log.json", log.value.started_utc, log.value.finished_utc)]
+        spans += [
+            (
+                f"01_search/log.json entradas[{i}] `{_mostrar(e.database)}`",
+                e.started_utc,
+                e.finished_utc,
+            )
+            for i, e in enumerate(log.value.entries)
+        ]
+        for label, start, end in spans:
+            started = _marca(f"{label} started_utc", start) if start else None
+            finished = _marca(f"{label} finished_utc", end) if end else None
+            if started and finished and _antes(finished, started):
+                fails.append(f"{label}: finished_utc anterior a started_utc")
+    return marks
+
+
 def check_timing(ctx: AuditContext) -> Verdict:
     """PRISMA 27 / trAIce M2: las marcas de tiempo son posibles."""
     fails: list[str] = []
@@ -172,6 +222,8 @@ def check_timing(ctx: AuditContext) -> Verdict:
     if ctx.llm_calls_ilegible is not None:
         # Sin llamadas que leer no se cae a la copia del manifiesto: sus marcas no se comprobaron.
         warns.append(f"no se pueden comprobar las marcas de las llamadas: {LLM_CALLS_ILEGIBLE}")
+
+    marks += _marcas_ola1(ctx, fails)
 
     lower, lower_warn, lower_fail = _limite_inferior(ctx)
     warns += [lower_warn] if lower_warn else []

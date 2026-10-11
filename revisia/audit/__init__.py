@@ -5,7 +5,8 @@ evidencia en disco, que la corrida puede defenderse ante los estándares de
 reporte que el sistema promete:
 
 - **PRISMA 2020** (selección documentada, flow diagram, registro, datos abiertos)
-- **PRISMA-S** (ventana temporal de búsqueda declarada y ejecutada)
+- **PRISMA-S** (búsqueda registrada por el motor base a base, con su cadena y su hash;
+  ventana temporal declarada y fecha de ejecución del motor)
 - **PRISMA-trAIce** (modelos y versiones, prompts hash-eados, supervisión
   humana, exclusiones IA/humano separadas, evaluación contra gold humano,
   procedencia de la corrida (pipeline vs reconstrucción), decisión humana
@@ -93,6 +94,7 @@ CHECKS: tuple[CheckSpec, ...] = (
         checks_quality.check_thresholds,
     ),
     CheckSpec("grounding", "trAIce M8/M9", "sintesis", checks_quality.check_grounding),
+    CheckSpec("search_log", "PRISMA-S 1/8/13/15", "busqueda", checks_search.check_search_log),
     CheckSpec("search_window", "PRISMA-S 9/13", "busqueda", checks_search.check_search_window),
     CheckSpec("registration", "PRISMA 24a", None, checks_search.check_registration),
     CheckSpec("response_overlap", "trAIce M2", "reporte", checks_timing.check_response_overlap),

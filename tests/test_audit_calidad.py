@@ -11,6 +11,7 @@ negativo/``> 1`` o una métrica absurda no pueden lanzar ni llenar el detalle.
 from __future__ import annotations
 
 import math
+import re
 
 import pytest
 from audit_fixtures import (
@@ -586,13 +587,16 @@ def test_search_window_fecha_tecleada_solo_advierte(tmp_path) -> None:
 
 
 def test_search_window_completa_con_fecha_tecleada_sigue_en_warn(corrida) -> None:
+    # Con `01_search/log.json` (Tarea 13) la fecha del motor es la referencia y la tecleada,
+    # que difiere, solo avisa.
     window = fila(auditar(corrida), "search_window")
     assert window.status == "WARN"
-    assert "fecha tecleada (`executed: 2026-06-26`)" in window.detail
+    assert "`executed: 2026-06-26` tecleada distinta de la fecha del motor" in window.detail
     assert "ventana sin" not in window.detail
 
 
 def test_search_window_sin_from_to_advierte(corrida) -> None:
+    (corrida / "01_search" / "log.json").unlink()  # sin la fecha del motor (Tarea 13)
     editar_protocolo(corrida, lambda p: p.update(search_window={}))
     window = fila(auditar(corrida), "search_window")
     assert window.status == "WARN"
@@ -638,15 +642,19 @@ def test_registration_con_claves_y_valores_enormes_se_acota(corrida) -> None:
 def test_search_window_con_una_fecha_yaml_sin_comillas_se_muestra_en_iso(corrida) -> None:
     # PyYAML carga `executed: 2026-06-26` como `datetime.date`: sin `isoformat()` el detalle
     # decía `executed: datetime.date(2026, 6, 26)`.
-    manifiesto = corrida / "manifest.yml"
-    texto = manifiesto.read_text(encoding="utf-8")
-    assert "executed: '2026-06-26'" in texto
-    manifiesto.write_text(
-        texto.replace("executed: '2026-06-26'", "executed: 2026-06-26"), encoding="utf-8"
-    )
+    # El protocolo sale de la instantánea (D3), que es una copia literal del `protocol.yml`
+    # de quien revisa; el manifiesto lleva la suya.
+    for ruta in ("manifest.yml", "00_protocol/protocol.yml"):
+        fichero = corrida / ruta
+        texto = fichero.read_text(encoding="utf-8")
+        sin_comillas, cambios = re.subn(
+            r"executed: ['\"]2026-06-26['\"]", "executed: 2026-06-26", texto
+        )
+        assert cambios == 1, ruta
+        fichero.write_text(sin_comillas, encoding="utf-8")
     window = fila(auditar(corrida), "search_window")
     assert window.status == "WARN"
-    assert "fecha tecleada (`executed: 2026-06-26`)" in window.detail
+    assert "`executed: 2026-06-26` tecleada distinta de la fecha del motor" in window.detail
 
 
 # ── Sin protocolo legible: thresholds, search_window y registration no aplican ──
