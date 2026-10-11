@@ -189,6 +189,7 @@ def test_cli_run_preflight_falla_sin_crear_runs_root(
     assert not runs_root.exists()
 
 
+@pytest.mark.dotenv_real
 def test_cli_carga_dotenv_sin_sobrescribir_el_entorno(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

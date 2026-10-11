@@ -35,6 +35,7 @@ import yaml
 from fakes import ScriptedProvider, fetch_disponible
 from hitl_helpers import correr_hasta
 
+from revisia import cli
 from revisia.config import load_protocol
 from revisia.llm.registry import ProviderConfig
 from revisia.orchestration import pipeline as pipeline_mod
@@ -43,6 +44,29 @@ from revisia.schemas.artifacts import GATED_STAGES
 from revisia.schemas.records import SearchRecord
 
 DEMO = Path(__file__).resolve().parent.parent / "examples" / "demo-mini-review"
+
+# Marca de los tests que prueban la carga real de `.env` (`cli._load_dotenv`).
+DOTENV_REAL = "dotenv_real"
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers", f"{DOTENV_REAL}: el test usa la carga real de .env de `revisia.cli.main`"
+    )
+
+
+@pytest.fixture(autouse=True)
+def _sin_dotenv_real(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ningún test carga el ``.env`` real del repositorio (revisión final de la Ola 1, B3).
+
+    ``cli.main`` carga ``.env`` buscándolo desde el directorio actual hacia arriba (D10): con
+    una API key en la raíz del clon, cualquier test que llamara a ``main()`` la metía en el
+    entorno de pytest (y en el de los tests siguientes). Solo los marcados con
+    ``@pytest.mark.dotenv_real`` (que crean su propio ``.env`` en ``tmp_path``) la usan.
+    """
+    if request.node.get_closest_marker(DOTENV_REAL) is None:
+        monkeypatch.setattr(cli, "_load_dotenv", lambda: None)
+
 
 # Búsqueda simulada de la corrida de auditoría: 7 identificados (OpenAlex 4,
 # Crossref 3), 1 duplicado por DOI, 2 exclusiones IA en T/A ("irrelevante") y

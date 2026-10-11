@@ -61,9 +61,20 @@ def make_client(timeout: float = 60.0, *, mailto: str | None = None) -> Any:
     )
 
 
+# Parámetros de URL con credenciales: keys y tokens, el correo del polite pool y las firmas de
+# las URL prefirmadas que devuelve un repositorio OA al redirigir a su almacenamiento (AWS S3:
+# `X-Amz-Signature`, `X-Amz-Credential`, `X-Amz-Security-Token`; CloudFront: `Signature`,
+# `Policy`, `Key-Pair-Id`; Azure SAS: `sig`), más `secret`, `client_secret` y `password`
+# (revisión final de la Ola 1, B1). Sin prefijos `[\w-]*`: la alternativa es una lista de
+# literales seguida de `=`, lineal en la longitud del texto.
 _SECRET_PARAM_RE = re.compile(
-    r"(?i)((?:api_key|apikey|key|token|access_token|mailto|email)=)[^&\s'\"]+"
+    r"(?i)((?:api_key|apikey|key|token|access_token|mailto|email"
+    r"|x-amz-signature|x-amz-credential|x-amz-security-token|signature|policy|key-pair-id"
+    r"|sig|client_secret|secret|password)=)[^&\s'\"]+"
 )
+# Credenciales en el userinfo de una URL (`https://usuario:clave@host/`): se tapa el par
+# entero. Usuario sin `:`/`/`/`@` y clave sin `/`/`@`, para no cruzar a la ruta.
+_USERINFO_RE = re.compile(r"(//)[^/\s:@'\"]+:[^/\s@'\"]+@")
 
 
 # Cabeceras `x-api-key`, `x-goog-api-key`, `proxy-authorization`, `authorization`, etc.
@@ -99,15 +110,17 @@ def redact_secrets(text: str) -> str:
     (``api_key=…``, ``email=…``) y los de los SDK de LLM, la cabecera o la clave
     (``Authorization: Bearer …``, ``{'x-api-key': …}``, ``Incorrect API key
     provided: sk-…``; también ``AIza…`` de Google y ``hf_…`` de Hugging Face sueltas).
-    Antes de escribirlos en disco (``01_search/failures.json``,
-    ``run.json``) o en consola se pasa por aquí para que ninguna key acabe en un
-    artefacto que se comparte.
+    Las URL prefirmadas (S3, CloudFront, Azure SAS) llevan la firma en la query y una URL
+    puede traer ``usuario:clave@`` en el userinfo. Antes de escribirlos en disco
+    (``01_search/failures.json``, ``run.json``, la ``source_url`` de un texto recuperado) o
+    en consola se pasa por aquí para que ninguna key acabe en un artefacto que se comparte.
     """
     text = _SECRET_HEADER_RE.sub(_redact_header, text)
     text = _BEARER_RE.sub(r"\1<redacted>", text)
     text = _PROVIDER_KEY_RE.sub("<redacted>", text)
     text = _GOOGLE_KEY_RE.sub("<redacted>", text)
     text = _HF_TOKEN_RE.sub("<redacted>", text)
+    text = _USERINFO_RE.sub(r"\1<redacted>@", text)
     return _SECRET_PARAM_RE.sub(r"\1<redacted>", text)
 
 

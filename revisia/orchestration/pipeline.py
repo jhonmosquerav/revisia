@@ -527,6 +527,11 @@ def _write_bytes_durably(path: Path, data: bytes) -> None:
     os.replace(tmp, path)
 
 
+def _redacted(text: str | None) -> str | None:
+    """``text`` sin credenciales (``_http.redact_secrets``); ``None`` se queda en ``None``."""
+    return None if text is None else _http.redact_secrets(text)
+
+
 def _fetch_one(run: _Run, fetch: FetchFn, record: SearchRecord) -> RetrievalOutcome:
     """Recupera un texto completo y, si lo hay, lo guarda en la caché de la corrida.
 
@@ -537,14 +542,17 @@ def _fetch_one(run: _Run, fetch: FetchFn, record: SearchRecord) -> RetrievalOutc
     ft = fetch(record)
     # Un sustituto UTF-16 suelto (``json.loads`` de una respuesta con un sustituto escapado, o un
     # PDF mal extraído) no se puede codificar en UTF-8: el texto y el diario reventarían (A4).
-    source_url = replace_surrogates(ft.source_url)
+    # La URL de origen puede ser una URL prefirmada (la firma va en la query) o traer
+    # `usuario:clave@`: llega a retrieval.jsonl y a la solicitud del gate FT, así que se
+    # redacta antes de guardarla, igual que el detalle de un fallo (B1, B2).
+    source_url = _redacted(replace_surrogates(ft.source_url))
     if not ft.available:
         # Un fetch_fn inyectado puede no dar motivo: el genérico es no_disponible.
         return RetrievalOutcome(
             available=False,
             source_url=source_url,
             reason=ft.reason or "no_disponible",
-            detail=replace_surrogates(ft.detail),
+            detail=_redacted(replace_surrogates(ft.detail)),
         )
     text = replace_surrogates(ft.text)
     text_file = f"04_fulltext/texts/{sha256_text(record.record_id)[:16]}.txt"
