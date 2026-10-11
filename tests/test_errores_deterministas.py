@@ -252,6 +252,29 @@ CASOS_INVALIDOS = {
     "criterios-lista": ("inclusion_exclusion.yml", "- poblacion\n- outcome\n", "no un mapa"),
     "criterios-texto": ("inclusion_exclusion.yml", "criteria: adultos\n", "no un mapa"),
     "formulario-lista": ("extraction_form.yml", "- key: diseno\n", "no un mapa"),
+    # Claves de fusión (`<<`): el auditor no las admite al releer `00_protocol/`; el motor las
+    # rechaza igual que en `protocol.yml`, en los cuatro ficheros auxiliares.
+    "gold-fusion": (
+        "gold.yml",
+        "base: &b {rec-1: true}\ngold:\n  <<: *b\n  rec-2: false\n",
+        "claves de fusión YAML (<<) no admitidas en gold.yml",
+    ),
+    "effects-fusion": (
+        "effects.yml",
+        "measure: precomputed\nbase: &b {study_id: a, yi: 0.1, vi: 0.02}\neffects:\n"
+        "  - <<: *b\n  - {study_id: b, yi: 0.2, vi: 0.03}\n",
+        "claves de fusión YAML (<<) no admitidas en effects.yml",
+    ),
+    "criterios-fusion": (
+        "inclusion_exclusion.yml",
+        "base: &b {poblacion: adultos}\ncriteria:\n  <<: *b\n  outcome: mortalidad\n",
+        "claves de fusión YAML (<<) no admitidas en inclusion_exclusion.yml",
+    ),
+    "formulario-fusion": (
+        "extraction_form.yml",
+        "base: &b {key: diseno}\nfields:\n  - <<: *b\n    descripcion: Diseño del estudio\n",
+        "claves de fusión YAML (<<) no admitidas en extraction_form.yml",
+    ),
 }
 
 
@@ -304,19 +327,23 @@ def test_fichero_auxiliar_invalido_al_reanudar_sale_2_y_conserva_la_pausa(
     assert (info.status, info.stage, info.interruptions) == ("paused", "screening_ta", [])
 
 
+@pytest.mark.parametrize("caso", ["gold-lista", "effects-fusion"])
 def test_tras_la_instantanea_un_fichero_invalido_es_error_de_configuracion(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caso: str
 ) -> None:
     # Segunda línea de defensa: aunque el preflight no lo viera, el pipeline valida
     # `00_protocol/` justo después de la instantánea y lo trata como error de configuración.
+    fichero, contenido, fragmento = CASOS_INVALIDOS[caso]
     run_dir = _corrida_en_pausa(tmp_path)
-    _dañar_instantanea(run_dir, "gold.yml", "gold:\n  - rec-1\n")
+    _dañar_instantanea(run_dir, fichero, contenido)
     monkeypatch.setattr(pipeline_mod, "preflight", lambda *_a, **_k: PreflightReport(()))
     ctx = RunContext.open(run_dir)
     protocol = load_protocol(run_dir / SNAPSHOT_DIR, default_slug=ctx.slug)
 
-    with pytest.raises(ProtocolFilesError, match="gold.yml"):
+    with pytest.raises(ProtocolFilesError, match=fichero) as exc:
         run_pipeline(protocol, None, ctx)
+
+    assert fragmento in str(exc.value)
 
     info = read_run_info(run_dir)
     assert (info.status, info.stage, info.interruptions) == ("paused", "screening_ta", [])

@@ -262,16 +262,29 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - `revisia.audit` es un paquete: `from revisia.audit import run_audit,
   render_audit_md, AuditReport, AuditCheck` sigue funcionando; `AuditReport`
   gana `state` y `n_na`, y `AuditCheck.status` admite `N/A`.
-- `protocol.yml` con claves de fusión YAML (`<<`) ya no carga (código 2 en
-  `validate` y `run`): expándelas. El auditor no las admite al releer la
-  instantánea, porque permiten construir documentos que se expanden sin límite.
+- `protocol.yml`, `gold.yml`, `effects.yml`, los criterios y el formulario con
+  claves de fusión YAML (`<<`) ya no cargan (código 2 en `validate` y `run`):
+  expándelas. El auditor no las admite al releer la instantánea, porque permiten
+  construir documentos que se expanden sin límite; si el motor las aceptara en
+  `effects.yml`, el auditor dejaría de exigir el meta-análisis.
 - `gold.yml` con una etiqueta entre comillas (`"false"`) o un id que no es texto
   ni número, `effects.yml` con un solo estudio, sin los datos de su medida o con
   varianza ≤ 0, y unos criterios o un formulario que no son un mapa ya no cargan
   (código 2).
 - El auditor es más estricto con el meta-análisis declarado en `effects.yml`, con
   los derivados (`agreement.json`, textos en caché, `prisma_flow.md`) y con
-  `human:desconocido` en el gate final (WARN).
+  `human:desconocido` en el gate final (WARN). Un `effects.yml` que existe y el
+  auditor no lee es una relación rota (FAIL), no «no verificable»;
+  `meta_analisis.md` y `effects_metafor.csv` se comparan con lo que el motor
+  renderiza del cálculo (sin los p-valores que dependen de `scipy`); el JSON del
+  meta-análisis se compara entero (una clave de más cuenta); y `deliverable` avisa
+  (WARN) si algún estudio del meta-análisis no está entre los incluidos, la misma
+  condición con la que `metodologia.md` lo declara.
+- Una pausa legítima en el primer gate no da FAIL en `ledger` por no tener ledger
+  todavía (`N/A`; el FAIL de la pausa lo da `final_gate`). En una corrida en pausa
+  o interrumpida, `hitl` y `request_hash` no juzgan el gate pendiente ni los
+  siguientes (su decisión está sustituida, p. ej. tras una reinclusión D14 sobre
+  una corrida completada): los anotan como pendientes.
 
 ## [0.7.0] · 2026-09-28
 

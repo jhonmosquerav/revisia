@@ -17,6 +17,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -35,7 +36,7 @@ from fakes import fetch_disponible
 from hitl_helpers import responder_gate
 
 from revisia.audit.artifacts import AuditContext, load_run
-from revisia.audit.checks_flow import collect_relations
+from revisia.audit.checks_flow import collect_relations, included_ids
 from revisia.config import load_protocol
 from revisia.orchestration import pipeline as pipeline_mod
 from revisia.orchestration.pipeline import run_pipeline
@@ -117,6 +118,168 @@ def test_el_csv_prisma2020_declara_los_k_estudios_del_meta_analisis(corrida) -> 
     assert _relaciones(corrida)[clave][0] is False
 
 
+_EFECTOS_CON_FUSION = (
+    "measure: precomputed\nbase: &b {study_id: a, yi: 0.1, vi: 0.02}\neffects:\n"
+    "  - <<: *b\n  - {study_id: b, yi: 0.2, vi: 0.03}\n"
+)
+
+
+@pytest.mark.parametrize(
+    "contenido",
+    [
+        _EFECTOS_CON_FUSION,
+        "measure: precomputed\neffects: [sin: cerrar\n",
+        "measure: precomputed\neffects:\n  - {study_id: a, yi: 0.1, vi: 0.02}\n",
+    ],
+    ids=["fusion", "yaml-roto", "no-valida-como-el-motor"],
+)
+def test_effects_yml_que_el_auditor_no_lee_rompe_el_anclaje_en_vez_de_no_verificarlo(
+    corrida, contenido: str
+) -> None:
+    # Fail-closed: si `00_protocol/effects.yml` existe pero el auditor no lo puede leer, no se
+    # sabe si la corrida debía traer meta-análisis. Antes la relación quedaba «no verificable» y
+    # dejaba de exigirse todo: borrar los cuatro artefactos del meta-análisis dejaba la corrida
+    # APTA con solo un efecto en el protocolo ilegible.
+    (corrida / "00_protocol" / "effects.yml").write_text(contenido, encoding="utf-8")
+    (corrida / META).unlink()
+    edit_yaml(corrida / "manifest.yml", _sin_copia_del_meta)
+    (corrida / "deliverable" / "meta_analisis.md").unlink()
+    (corrida / "deliverable" / "interop" / "effects_metafor.csv").unlink()
+
+    report = auditar(corrida)
+
+    ok, detalle = _relaciones(corrida)[META_RECALCULADO]
+    assert ok is False and "00_protocol/effects.yml" in detalle
+    assert fila(report, "arithmetic").status == "FAIL"
+    assert META_RECALCULADO in fila(report, "arithmetic").detail
+    assert not report.publishable
+
+
+META_MD_RENDER = (
+    "§8.1 · deliverable/meta_analisis.md == render(meta_analyze(00_protocol/effects.yml))"
+)
+METAFOR_RENDER = (
+    "§8.1 · deliverable/interop/effects_metafor.csv == "
+    "render(meta_analyze(00_protocol/effects.yml))"
+)
+
+
+@pytest.mark.parametrize(
+    ("patron", "reemplazo"),
+    [
+        (r"(Estudios \(k\): \*\*)\d+", r"\g<1>40"),
+        (r"(- Aleatorios: )[+-]\d+\.\d{3}", r"\g<1>-9.999"),
+        (r"(\| \*\*Combinado \(fijos\)\*\* \| )[+-]\d+\.\d{3}", r"\g<1>-9.999"),
+        (r"(I² = )\d+\.\d", r"\g<1>99.9"),
+    ],
+    ids=["k", "aleatorios", "fijos", "i2"],
+)
+def test_meta_analisis_md_con_una_cifra_cambiada_falla(
+    corrida, patron: str, reemplazo: str
+) -> None:
+    # FG6 para el meta-análisis: el entregable que lee quien revisa es el que el motor renderiza
+    # de `meta_analyze(efectos de la instantánea)`. Antes solo se anclaba `meta_analysis.json`.
+    assert _relaciones(corrida)[META_MD_RENDER][0] is True
+    ruta = corrida / "deliverable" / "meta_analisis.md"
+    texto = ruta.read_text(encoding="utf-8")
+    cambiado, n = re.subn(patron, reemplazo, texto, count=1)
+    assert n == 1 and cambiado != texto
+    ruta.write_text(cambiado, encoding="utf-8")
+
+    ok, detalle = _relaciones(corrida)[META_MD_RENDER]
+
+    assert ok is False and "distinto del que escribe el motor" in detalle
+    report = auditar(corrida)
+    assert fila(report, "arithmetic").status == "FAIL"
+    assert not report.publishable
+
+
+def test_meta_analisis_md_ignora_los_p_valores_que_dependen_de_scipy(corrida) -> None:
+    # El Q y el Egger usan `scipy` si está y una aproximación si no: la misma corrida auditada en
+    # otro equipo no puede dar FAIL por eso.
+    ruta = corrida / "deliverable" / "meta_analisis.md"
+    texto = ruta.read_text(encoding="utf-8")
+    con_scipy = re.sub(r"(- Q = .*?, p=)[^)]*\)", r"\g<1>0.1234 · scipy)", texto, count=1)
+    con_scipy = re.sub(r"(- Intercepto = .*?, p=)[^)]*\)", r"\g<1>0.5000 · scipy-t)", con_scipy)
+    assert con_scipy != texto
+    ruta.write_text(con_scipy, encoding="utf-8")
+
+    assert _relaciones(corrida)[META_MD_RENDER][0] is True
+
+
+def test_csv_de_metafor_con_un_efecto_cambiado_falla(corrida) -> None:
+    assert _relaciones(corrida)[METAFOR_RENDER][0] is True
+    ruta = corrida / "deliverable" / "interop" / "effects_metafor.csv"
+    filas = list(csv.reader(io.StringIO(ruta.read_text(encoding="utf-8"))))
+    columna = filas[0].index("yi")
+    filas[1][columna] = "9.99"
+    salida = io.StringIO()
+    csv.writer(salida, lineterminator="\n").writerows(filas)
+    ruta.write_text(salida.getvalue(), encoding="utf-8")
+
+    ok, detalle = _relaciones(corrida)[METAFOR_RENDER]
+
+    assert ok is False and "distinto del que escribe el motor" in detalle
+    assert not auditar(corrida).publishable
+
+
+def test_meta_analisis_md_ausente_deja_la_relacion_no_verificable_y_deliverable_falla(
+    corrida,
+) -> None:
+    (corrida / "deliverable" / "meta_analisis.md").unlink()
+
+    ok, detalle = _relaciones(corrida)[META_MD_RENDER]
+
+    assert ok is None and "ver `deliverable`" in detalle
+    assert fila(auditar(corrida), "deliverable").status == "FAIL"
+
+
+def test_meta_distinto_cuenta_las_claves_de_mas_del_json(corrida) -> None:
+    # `_meta_distinto` solo miraba las claves del recálculo: una clave añadida (un campo
+    # inventado) pasaba. Con el JSON completo, cuenta.
+    edit_json(corrida / META, lambda meta: meta.update({"conclusion": "el tratamiento funciona"}))
+
+    ok, detalle = _relaciones(corrida)[META_RECALCULADO]
+
+    assert ok is False and "conclusion" in detalle
+
+
+def _efectos_con_estudios(run: Path, ids: list[str]) -> None:
+    """Sustituye los efectos de la instantánea por unos ``precomputed`` con esos estudios."""
+    efectos = "".join(
+        f"  - {{study_id: {i}, yi: {0.1 * n}, vi: 0.02}}\n" for n, i in enumerate(ids, start=1)
+    )
+    (run / "00_protocol" / "effects.yml").write_text(
+        f"measure: precomputed\neffects:\n{efectos}", encoding="utf-8"
+    )
+
+
+def test_deliverable_avisa_si_algun_estudio_del_meta_analisis_no_esta_entre_los_incluidos(
+    corrida,
+) -> None:
+    # La condición de `metodologia.md`: cualquier `study_id` ajeno a los incluidos, no solo k > N.
+    # Con k = 2 ≤ 3 incluidos, dos estudios ajenos no daban aviso aunque el meta-análisis no
+    # saliera de la selección.
+    incluidos = included_ids(AuditContext(load_run(corrida)))
+    assert incluidos is not None and len(incluidos) == 3
+    _efectos_con_estudios(corrida, ["ajeno-1", "ajeno-2"])
+
+    deliverable = fila(auditar(corrida), "deliverable")
+
+    assert deliverable.status == "WARN", deliverable.detail
+    assert "2 de los 2 estudios" in deliverable.detail
+    assert "ajeno-1" in deliverable.detail and "ajeno-2" in deliverable.detail
+    assert "metodologia.md" in deliverable.detail  # ya lo declara: el aviso lo reconoce
+
+
+def test_deliverable_no_avisa_si_los_estudios_del_meta_analisis_son_incluidos(corrida) -> None:
+    incluidos = included_ids(AuditContext(load_run(corrida)))
+    assert incluidos is not None
+    _efectos_con_estudios(corrida, incluidos[:2])
+
+    assert fila(auditar(corrida), "deliverable").status == "PASS"
+
+
 @pytest.fixture(scope="module")
 def _corrida_sin_efectos(tmp_path_factory: pytest.TempPathFactory, protocolo_auditoria) -> Path:
     protocolo = tmp_path_factory.mktemp("sin-efectos") / "proto"
@@ -167,6 +330,41 @@ def test_pausa_en_el_primer_gate_falla_el_gate_final_en_vez_de_no_aplicar(
     final_gate = fila(report, "final_gate")
     assert final_gate.status == "FAIL"
     assert "corrida en pausa en `screening_ta`: sin decisión final" in final_gate.detail
+
+
+def test_pausa_en_el_primer_gate_no_da_fail_por_el_ledger_ausente(detener_corrida) -> None:
+    # Una pausa legítima en el primer gate aún no tiene ninguna decisión: el ledger no existe. El
+    # FAIL de la pausa lo da `final_gate`, así que el `N/A` de `ledger` no esconde nada.
+    run = detener_corrida(aprobados=())
+    assert not (run / "decisions_ledger.jsonl").exists()
+
+    report = auditar(run)
+
+    ledger = fila(report, "ledger")
+    assert ledger.status == "N/A", ledger.detail
+    assert "ningún gate decidido todavía" in ledger.detail
+    assert fila(report, "final_gate").status == "FAIL"
+    assert not report.publishable
+
+
+def test_ledger_borrado_en_una_pausa_posterior_al_primer_gate_sigue_dando_fail(
+    detener_corrida,
+) -> None:
+    # En pausa en el segundo gate ya hubo una decisión: que el ledger no esté es manipulación.
+    run = detener_corrida(aprobados=("screening_ta",))
+    (run / "decisions_ledger.jsonl").unlink()
+
+    ledger = fila(auditar(run), "ledger")
+
+    assert ledger.status == "FAIL" and "ausente" in ledger.detail
+
+
+def test_ledger_borrado_de_una_corrida_completada_sigue_dando_fail(corrida) -> None:
+    (corrida / "decisions_ledger.jsonl").unlink()
+
+    ledger = fila(auditar(corrida), "ledger")
+
+    assert ledger.status == "FAIL" and "ausente" in ledger.detail
 
 
 def test_interrumpida_dentro_del_reporte_no_exige_el_manifiesto(

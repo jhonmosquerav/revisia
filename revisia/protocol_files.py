@@ -30,6 +30,7 @@ from typing import Any, TypeVar
 import yaml
 from pydantic import BaseModel, StrictBool, ValidationError, model_validator
 
+from revisia.config import rechazar_claves_de_fusion
 from revisia.meta_analysis import meta_analyze
 from revisia.schemas.effects import EffectInput, Measure
 
@@ -297,8 +298,12 @@ def _detalle(exc: ValidationError) -> str:
 def _leer(path: Path) -> object:
     """El documento YAML de ``path`` (``None`` si no existe o está vacío).
 
+    Rechaza las claves de fusión (``<<``) como ``protocol.yml`` (``config.load_protocol``): el
+    auditor no las admite al releer ``00_protocol/``, y un ``effects.yml`` que el motor
+    aceptara y el auditor no pudiera leer dejaría sus relaciones sin verificar.
+
     Raises:
-        ValueError: si no se puede leer como UTF-8 o no es YAML válido.
+        ValueError: si no se puede leer como UTF-8, no es YAML válido o trae claves de fusión.
     """
     if not path.is_file():
         return None
@@ -309,12 +314,21 @@ def _leer(path: Path) -> object:
             f"no se puede leer como UTF-8 ({type(exc).__name__}); guárdalo en UTF-8"
         ) from exc
     try:
+        rechazar_claves_de_fusion(texto, path.name)
+    except yaml.YAMLError as exc:
+        raise ValueError(_posicion(exc)) from exc
+    try:
         return yaml.safe_load(texto)
     except yaml.YAMLError as exc:
-        marca = getattr(exc, "problem_mark", None)
-        donde = f" (línea {marca.line + 1}, columna {marca.column + 1})" if marca else ""
-        problema = getattr(exc, "problem", None) or type(exc).__name__
-        raise ValueError(f"YAML no válido: {problema}{donde}") from exc
+        raise ValueError(f"YAML no válido: {_posicion(exc)}") from exc
+
+
+def _posicion(exc: yaml.YAMLError) -> str:
+    """El problema de un error de YAML con su línea y columna (si las trae)."""
+    marca = getattr(exc, "problem_mark", None)
+    donde = f" (línea {marca.line + 1}, columna {marca.column + 1})" if marca else ""
+    problema = getattr(exc, "problem", None) or type(exc).__name__
+    return f"{problema}{donde}"
 
 
 def load_protocol_files(protocol_dir: str | Path) -> ProtocolFiles:

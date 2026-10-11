@@ -228,21 +228,25 @@ class ReviewProtocol(BaseModel):
         return self._ensemble_members(stage) or [self.provider_for(stage)]
 
 
-def _rechazar_claves_de_fusion(stream: TextIO) -> None:
-    """Rechaza un ``protocol.yml`` con claves de fusión YAML (``<<``), antes de cargarlo.
+def rechazar_claves_de_fusion(stream: str | TextIO, nombre: str = "protocol.yml") -> None:
+    """Rechaza un fichero del protocolo con claves de fusión YAML (``<<``), antes de cargarlo.
 
-    ``00_protocol/protocol.yml`` es una copia literal de este fichero y el auditor lo lee: sus
+    ``00_protocol/`` es una copia literal de la carpeta del protocolo y el auditor la lee: sus
     guardas rechazan ``<<`` (cada alias fusionado se copia sin memoizar y una cadena de ellos
     multiplica los pares por nivel). Aceptarlas aquí haría que una corrida válida acabara en
     FAIL en la auditoría, con un motivo que la persona que revisa no podría relacionar con su
     protocolo; rechazarlas al principio da el error donde se puede arreglar (Tarea 12 de
-    PR-E). Se recorren los eventos del parser, sin construir nada: el mismo criterio que el
+    PR-E). Vale para ``protocol.yml`` y para los ficheros auxiliares (``gold.yml``,
+    ``effects.yml``, criterios y formulario; ``protocol_files``): si el motor aceptara ``<<``
+    en ellos y el auditor no, un ``effects.yml`` con una fusión dejaría sus relaciones sin
+    verificar. Se recorren los eventos del parser, sin construir nada: el mismo criterio que el
     auditor (la etiqueta de fusión, o un ``<<`` plano). Un YAML mal formado no es de este
     chequeo: ``safe_load`` lo informa justo después, con su línea.
 
     Lee de un fichero abierto (no de un ``str``) para que la posición del error lleve el
     nombre del fichero, como los demás errores de YAML del protocolo. Deja el cursor donde
-    estaba: quien llama debe volver a leer desde el principio.
+    estaba: quien llama debe volver a leer desde el principio. ``nombre`` es el del fichero que
+    sale en el mensaje.
 
     Raises:
         yaml.YAMLError: con la posición de la primera clave de fusión (rc 2 en el CLI).
@@ -263,7 +267,7 @@ def _rechazar_claves_de_fusion(stream: TextIO) -> None:
         raise yaml.constructor.ConstructorError(
             None,
             None,
-            "claves de fusión YAML (<<) no admitidas en protocol.yml: expándelas (copia los "
+            f"claves de fusión YAML (<<) no admitidas en {nombre}: expándelas (copia los "
             "pares del ancla donde la uses); el auditor las rechaza porque una cadena de "
             "fusiones multiplica los pares en memoria",
             fusion,
@@ -288,7 +292,7 @@ def load_protocol(protocol_dir: str | Path, *, default_slug: str | None = None) 
     if not protocol_file.exists():
         raise FileNotFoundError(f"No se encontró {protocol_file}.")
     with protocol_file.open(encoding="utf-8") as fh:
-        _rechazar_claves_de_fusion(fh)
+        rechazar_claves_de_fusion(fh)
         fh.seek(0)
         raw = yaml.safe_load(fh) or {}
     if isinstance(raw, dict):

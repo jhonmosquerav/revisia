@@ -635,7 +635,11 @@ def test_request_hash_corrida_en_pausa_ft_verifica_lo_decidido(corrida_en_pausa_
     report = auditar(corrida_en_pausa_ft)
     request = fila(report, "request_hash")
     assert request.status == "PASS"
-    assert request.detail == "1 decisión humana atada a su solicitud (hash recalculado)."
+    # Lo decidido (T/A) se verifica; el gate pendiente y los que le siguen se anotan como tales.
+    assert request.detail == (
+        "1 decisión humana atada a su solicitud (hash recalculado). Gates pendientes (no se "
+        "evalúan hasta que se decidan de nuevo): `screening_ft`, `extraccion`, `rob`, `reporte`."
+    )
 
 
 # ── hitl por registro ────────────────────────────────────────────────
@@ -958,6 +962,43 @@ def test_final_gate_reinclusion_tras_completar_deja_la_corrida_sin_terminar(
     final_gate = fila(report, "final_gate")
     assert final_gate.status == "FAIL"
     assert "corrida en pausa en `screening_ft`: sin decisión final" in final_gate.detail
+    assert not report.publishable
+
+
+def test_reinclusion_d14_tras_completar_no_juzga_las_decisiones_sustituidas_del_gate_pendiente(
+    corrida, protocolo_auditoria: Path, tmp_path: Path
+) -> None:
+    # Misma corrida: la reinclusión D14 sustituye la decisión de `screening_ft` y la reabre. Hasta
+    # que la revisora responda, el ledger conserva la decisión SUSTITUIDA de ese gate (y las de los
+    # posteriores) frente a artefactos ya rehechos: `hitl` («FT en A0: … sin etiqueta humana») y
+    # `request_hash` («responde a otra solicitud») juzgaban lo que ya no vale. Los gates
+    # pendientes se anotan como tales y no se evalúan; `final_gate` sigue dando el FAIL.
+    solicitud = leer_solicitud(corrida, "screening_ta")
+    reincluido = (
+        "10.1000/cocina"
+        if "10.1000/cocina" in solicitud["ai_excluded"]
+        else (solicitud["ai_excluded"][0])
+    )
+    responder_gate(
+        corrida,
+        "screening_ta",
+        records={reincluido: {"label": "include", "reason": "relevante: habla de cribado"}},
+    )
+    _, result = _correr(corrida, tmp_path, protocolo_auditoria, parar_en="screening_ft")
+    assert result.status == "paused", result.message
+
+    report = auditar(corrida)
+
+    assert report.state is not None
+    assert (report.state.status, report.state.pending_stage) == ("paused", "screening_ft")
+    hitl, request_hash = fila(report, "hitl"), fila(report, "request_hash")
+    assert hitl.status != "FAIL", hitl.detail
+    assert request_hash.status != "FAIL", request_hash.detail
+    for row in (hitl, request_hash):
+        assert "pendientes" in row.detail and "`screening_ft`" in row.detail
+        assert "sin etiqueta humana" not in row.detail
+        assert "responde a otra solicitud" not in row.detail
+    assert fila(report, "final_gate").status == "FAIL"
     assert not report.publishable
 
 

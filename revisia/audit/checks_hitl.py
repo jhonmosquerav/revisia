@@ -242,6 +242,27 @@ def _autonomia_del_manifiesto(ctx: AuditContext, autonomy: dict[str, str]) -> li
     return problems
 
 
+_NA_SIN_GATES_DECIDIDOS = (
+    "no aplica: corrida {estado}, ningún gate decidido todavía (el ledger se crea con la primera "
+    "decisión; `final_gate` da el FAIL de la pausa)."
+)
+
+
+def _sin_gates_decididos(ctx: AuditContext) -> bool:
+    """La corrida está detenida en o antes del primer gate y ningún gate se decidió aún.
+
+    Entonces el ledger legítimamente no existe (o está vacío): se crea con la primera decisión.
+    Un ledger ausente en una pausa posterior, o en una corrida terminada, sí es manipulación.
+    """
+    pendiente = ctx.state.pending_stage
+    return (
+        _detenida(ctx)
+        and not ctx.gates
+        and pendiente in STAGES
+        and STAGES.index(pendiente) <= STAGES.index(GATED_STAGES[0])
+    )
+
+
 def check_ledger(ctx: AuditContext) -> Verdict:
     """trAIce M8 / PRISMA 8: ledger legible, con lo que el motor escribe y en orden.
 
@@ -249,14 +270,19 @@ def check_ledger(ctx: AuditContext) -> Verdict:
     y una acción que ``review_gate`` nunca emite (``propose``/``exclude``/
     ``verify`` en la reconstrucción C3) delata un ledger escrito a mano. La autonomía de
     cada entrada es la efectiva (:func:`autonomia_efectiva_de_la_corrida`, con M5) y las etiquetas y
-    adjudicaciones cumplen la relación 16.
+    adjudicaciones cumplen la relación 16. En una pausa legítima en el primer gate aún no hay
+    ledger: ``N/A`` (revisión final de la Ola 1), con el FAIL de la pausa en ``final_gate``.
     """
     view = ctx.ledger
     if not view.present:
+        if _sin_gates_decididos(ctx):
+            return "N/A", _NA_SIN_GATES_DECIDIDOS.format(estado=ctx.state.describe())
         return "FAIL", "decisions_ledger.jsonl ausente: sin trazabilidad de decisiones."
     if view.read_error:
         return "FAIL", f"decisions_ledger.jsonl ilegible ({view.read_error})."
     if not view.entries and not view.errors:
+        if _sin_gates_decididos(ctx):
+            return "N/A", _NA_SIN_GATES_DECIDIDOS.format(estado=ctx.state.describe())
         return "FAIL", "decisions_ledger.jsonl vacío: sin trazabilidad de decisiones."
 
     problems = list(view.errors)
@@ -302,6 +328,40 @@ def check_ledger(ctx: AuditContext) -> Verdict:
     else:
         note = ""
     return "PASS", f"{len(view.entries)} entradas válidas, en orden{note}."
+
+
+def _detenida(ctx: AuditContext) -> bool:
+    """``run.json`` y el estado deducido dicen que la corrida está en pausa o interrumpida."""
+    return (
+        ctx.run_info is not None
+        and ctx.run_info.status in ("paused", "interrupted")
+        and ctx.state.status in ("paused", "interrupted")
+    )
+
+
+def _gates_pendientes(ctx: AuditContext) -> tuple[str, ...]:
+    """Los gates que una corrida detenida tiene por decidir: el pendiente y los que le siguen.
+
+    Tras una reinclusión D14 sobre una corrida completada (o un rechazo y una nueva decisión),
+    el ledger conserva la decisión SUSTITUIDA del gate que se reabre y las de los posteriores,
+    frente a artefactos que el motor ya rehízo (o rehará al reanudar). Juzgarlas daba FAIL por lo
+    que ya no vale («FT en A0: … sin etiqueta humana», «responde a otra solicitud»). Es seguro:
+    con la corrida detenida ``final_gate`` es siempre FAIL, así que no puede quedar publicable
+    (revisión final de la Ola 1, E2a). ``()`` si la corrida no está detenida.
+    """
+    pendiente = ctx.state.pending_stage
+    if not _detenida(ctx) or pendiente not in STAGES:
+        return ()
+    desde = STAGES.index(pendiente)
+    return tuple(gate for gate in GATED_STAGES if STAGES.index(gate) >= desde)
+
+
+def _nota_pendientes(pendientes: tuple[str, ...]) -> str:
+    """Lo que se añade a un detalle cuando hay gates pendientes que no se evaluaron."""
+    if not pendientes:
+        return ""
+    etapas = ", ".join(f"`{stage}`" for stage in pendientes)
+    return f" Gates pendientes (no se evalúan hasta que se decidan de nuevo): {etapas}."
 
 
 def _orden_etapa(stage: str) -> tuple[int, str]:
@@ -549,8 +609,11 @@ def check_hitl(ctx: AuditContext) -> Verdict:
             "(D8: --auto-approve no es revisión humana)"
         )
 
+    pendientes = _gates_pendientes(ctx)
     humanas: list[GateSummary] = []
     for stage in JUDGMENT_STAGES:
+        if stage in pendientes:
+            continue  # se decide de nuevo al reanudar: su decisión de ahora está sustituida
         gate = ctx.gates.get(stage)
         if gate is None:
             later = [g for g in GATED_STAGES[GATED_STAGES.index(stage) + 1 :] if g in ctx.gates]
@@ -599,10 +662,11 @@ def check_hitl(ctx: AuditContext) -> Verdict:
             if gate.stage in DECISIONES_DE_CRIBADO and gate.action == "approve":
                 fails += _etiquetas_por_registro(ctx, gate)
 
+    nota = _nota_pendientes(pendientes)
     if fails:
-        return "FAIL", f"{_limitar(fails)}."
+        return "FAIL", f"{_limitar(fails)}.{nota}"
     if warns:
-        return "WARN", f"{_limitar(warns)}."
+        return "WARN", f"{_limitar(warns)}.{nota}"
     if not humanas:
         # Ni una etapa de juicio decidida (una corrida que se detuvo en el primer gate):
         # `final_gate` da el FAIL de la pausa.
@@ -610,7 +674,7 @@ def check_hitl(ctx: AuditContext) -> Verdict:
     actores = sorted({g.actor for g in humanas})
     return "PASS", (
         f"decisión humana en {len(humanas)} etapa(s) de juicio alcanzada(s) "
-        f"({_listar(actores)}); {len(propias)} etiqueta(s) por registro."
+        f"({_listar(actores)}); {len(propias)} etiqueta(s) por registro.{nota}"
     )
 
 
@@ -1122,19 +1186,23 @@ def check_request_hash(ctx: AuditContext) -> Verdict:
             "verificable (ver `ledger`)"
         )
     humanas = otras = 0
+    pendientes = _gates_pendientes(ctx)
     for stage in GATED_STAGES:
         gate = ctx.gates.get(stage)
         if gate is None or gate.action not in ("approve", "reject") or stage not in ctx.requests:
             continue
+        if stage in pendientes:
+            continue  # se decide de nuevo al reanudar: la solicitud y la decisión son de antes
         hallazgos.sumar(_atada(ctx, stage, gate))
         if is_human_actor(gate.actor):
             humanas += 1
         else:
             otras += 1
+    nota = _nota_pendientes(pendientes)
     if hallazgos.fails:
-        return "FAIL", f"{_limitar(hallazgos.fails)}."
+        return "FAIL", f"{_limitar(hallazgos.fails)}.{nota}"
     if hallazgos.warns:
-        return "WARN", f"{_limitar(hallazgos.warns)}."
+        return "WARN", f"{_limitar(hallazgos.warns)}.{nota}"
     total = humanas + otras
     if total == 0:
         return "N/A", (
@@ -1149,10 +1217,10 @@ def check_request_hash(ctx: AuditContext) -> Verdict:
         notas.append(f"decision.yml ausente en {etapas}: reconstruida del ledger")
     resumen = "; ".join(notas)
     if otras:
-        return "PASS", f"{total} decisiones atadas a su solicitud ({resumen})."
+        return "PASS", f"{total} decisiones atadas a su solicitud ({resumen}).{nota}"
     if humanas == 1:
-        return "PASS", f"1 decisión humana atada a su solicitud ({resumen})."
-    return "PASS", f"{humanas} decisiones humanas atadas a su solicitud ({resumen})."
+        return "PASS", f"1 decisión humana atada a su solicitud ({resumen}).{nota}"
+    return "PASS", f"{humanas} decisiones humanas atadas a su solicitud ({resumen}).{nota}"
 
 
 # ── final_gate: relaciones 17 y 18 ────────────────────────────────────
@@ -1253,8 +1321,7 @@ def check_final_gate(ctx: AuditContext) -> Verdict:
     """
     view = ctx.ledger
     state = ctx.state
-    detenida = ctx.run_info is not None and ctx.run_info.status in ("paused", "interrupted")
-    if not view.entries and detenida and state.status in ("paused", "interrupted"):
+    if not view.entries and _detenida(ctx):
         # En pausa en el primer gate el ledger aún está vacío: un `N/A` diría «no aplica» de una
         # corrida que no tiene decisión final (§9.2; revisión final de la Ola 1, E2c). Lo dice
         # `run.json`: un ledger borrado de una corrida completada sigue siendo `N/A` aquí (el

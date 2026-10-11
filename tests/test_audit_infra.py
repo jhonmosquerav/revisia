@@ -208,9 +208,11 @@ def test_manifiesto_muy_anidado_no_tumba_el_proceso_del_auditor(corrida, tmp_pat
     # de la Ola 1, E7: un proceso por vector costaba ~2 s cada uno). Si la guarda falla, el
     # proceso muere con el nombre del vector en curso al final de su stderr.
     corridas: dict[str, Path] = {}
-    for vector in _VECTORES_ANIDADOS:
+    for i, vector in enumerate(_VECTORES_ANIDADOS):
         (texto,) = vector.values
-        copia = tmp_path / str(vector.id) / corrida.name
+        # Carpeta corta (`v<i>`) y no el id del vector: el id puede pasar de 40 caracteres y, con
+        # el nombre de la corrida y sus ficheros, acerca la ruta al MAX_PATH de Windows (260).
+        copia = tmp_path / f"v{i}" / corrida.name
         shutil.copytree(corrida, copia)
         (copia / "manifest.yml").write_text(texto(), encoding="utf-8")
         corridas[str(vector.id)] = copia

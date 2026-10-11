@@ -453,11 +453,13 @@ def test_arithmetic_corrida_real_cuenta_sus_relaciones_verificadas(corrida) -> N
     # corrección tras la revisión suma dos: `gold.json` con el gold del protocolo y el diario de
     # T/A dentro del dedup (96 + 2). La revisión final de la Ola 1 suma cinco: el meta-análisis
     # recalculado de `effects.yml` y `total_studies_ma`/`total_reports_ma` del CSV (E1), los
-    # textos en caché frente a `retrieval.json` (FG2) y `prisma_flow.md` (FG6): 98 + 5.
+    # textos en caché frente a `retrieval.json` (FG2) y `prisma_flow.md` (FG6): 98 + 5. La
+    # verificación final suma dos: `meta_analisis.md` y `effects_metafor.csv` frente a lo que el
+    # motor renderiza del meta-análisis de la instantánea: 103 + 2.
     relaciones = _relaciones(corrida)
     assert [n for n, (ok, _) in relaciones.items() if ok is not True] == []
-    assert len(relaciones) == 103
-    assert "103 relaciones verificadas" in fila(auditar(corrida), "arithmetic").detail
+    assert len(relaciones) == 105
+    assert "105 relaciones verificadas" in fila(auditar(corrida), "arithmetic").detail
 
 
 def test_arithmetic_manifiesto_sin_counts_falla(corrida) -> None:
@@ -1040,6 +1042,8 @@ def test_deliverable_completo_avisa_del_meta_analisis_ajeno_a_los_incluidos(corr
     deliverable = fila(auditar(corrida), "deliverable")
     # Completo, pero el demo declara k = 4 efectos con 3 incluidos: WARN, no FAIL (E1).
     assert deliverable.status == "WARN"
-    assert "k = 4" in deliverable.detail and "incluyó 3" in deliverable.detail
+    assert "estudios del meta-análisis no están entre los 3 incluidos" in deliverable.detail
+    assert "de los 4 estudios" in deliverable.detail
+    assert "metodologia.md" in deliverable.detail  # el aviso reconoce que ya lo declara
     # Los 11 de siempre + meta_analisis.md + effects_metafor.csv + la lista 16b de la Ola 1.
     assert "14 artefactos" in deliverable.detail

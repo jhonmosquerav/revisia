@@ -72,9 +72,12 @@ no recalcular un recall bajo el umbral (D7).
 Los efectos del protocolo (``00_protocol/effects.yml``) anclan igual el meta-análisis (revisión
 final de la Ola 1, E1): con efectos declarados, ``08_meta/meta_analysis.json``, su copia en el
 manifiesto, ``deliverable/meta_analisis.md`` y ``interop/effects_metafor.csv`` son obligatorios,
-el resultado se recalcula con ``meta_analyze`` sobre esos efectos y el CSV PRISMA2020 declara
-``k`` estudios en el meta-análisis. Antes, borrar los cuatro o multiplicar la estimación dejaba la
-corrida APTA. Sin efectos, un meta-análisis en disco es inventado.
+el resultado se recalcula con ``meta_analyze`` sobre esos efectos, ``meta_analisis.md`` y el CSV de
+metafor son lo que el motor renderiza de ese cálculo y el CSV PRISMA2020 declara ``k`` estudios en
+el meta-análisis. Antes, borrar los cuatro o multiplicar la estimación dejaba la corrida APTA. Sin
+efectos, un meta-análisis en disco es inventado. Si ``effects.yml`` existe pero el auditor no lo lee
+(``<<``, YAML roto, no valida como lo valida el motor), la relación está rota: el motor valida el
+fichero antes de empezar, así que esa instantánea no la escribió él.
 """
 
 from __future__ import annotations
@@ -101,10 +104,16 @@ from revisia.audit.artifacts import (
 from revisia.audit.model import Verdict
 from revisia.config import STAGES, ReviewProtocol
 from revisia.exclusions import compute_exclusion_breakdown, compute_ft_excluded
-from revisia.exports import PrismaCounts, render_flow_diagram, render_flow_markdown
+from revisia.exports import (
+    PrismaCounts,
+    render_flow_diagram,
+    render_flow_markdown,
+    render_forest_markdown,
+    render_metafor_csv,
+)
 from revisia.extraction_agreement import select_double_extraction_subset
 from revisia.llm.ensemble import recall_biased_label
-from revisia.meta_analysis import meta_analyze
+from revisia.meta_analysis import MetaAnalysisResult, meta_analyze
 from revisia.metrics import confusion, kappa_from_matrix, mcc, wmcc
 from revisia.orchestration.snapshot import SNAPSHOT_DIR
 from revisia.protocol_files import EffectsFile
@@ -426,11 +435,14 @@ class _EfectosProtocolo:
             el protocolo no declara ninguno (sin fichero, o ``effects`` vacío) o no se pudo leer.
         resultado: ``meta_analyze`` de esos efectos, el que el motor tuvo que escribir.
         problema: por qué un fichero que existe no se pudo leer o no valida (acotado).
+        calculo: el mismo ``meta_analyze`` como modelo, el que el motor pasa a los renders de
+            ``meta_analisis.md`` y ``effects_metafor.csv``.
     """
 
     efectos: EffectsFile | None = None
     resultado: dict[str, Any] | None = None
     problema: str = ""
+    calculo: MetaAnalysisResult | None = None
 
 
 # Los efectos ya leídos de cada contexto: los consultan `stage_artifacts`, `deliverable` y tres
@@ -475,8 +487,8 @@ def _leer_efectos_del_protocolo(ctx: AuditContext) -> _EfectosProtocolo:
         )
     if not efectos.effects:
         return _EfectosProtocolo()
-    resultado = meta_analyze(efectos.effects, efectos.measure).model_dump()
-    return _EfectosProtocolo(efectos, resultado)
+    calculo = meta_analyze(efectos.effects, efectos.measure)
+    return _EfectosProtocolo(efectos, calculo.model_dump(), calculo=calculo)
 
 
 def _journals_ola1(ctx: AuditContext) -> list[tuple[str, str]]:
@@ -1828,7 +1840,8 @@ def _meta_distinto(actual: Any, esperado: Any, donde: str = "") -> str | None:
     """Primer campo en que el meta-análisis en disco difiere del recalculado (o ``None``).
 
     Los números se comparan con tolerancia relativa (la misma cuenta en otra plataforma puede
-    diferir en el último bit) y se ignoran los p-valores que dependen de ``scipy``.
+    diferir en el último bit) y se ignoran los p-valores que dependen de ``scipy``. Es el JSON
+    completo: una clave de más en disco (que el recálculo no tiene) también es una diferencia.
     """
     if isinstance(esperado, dict):
         if not isinstance(actual, dict):
@@ -1841,7 +1854,8 @@ def _meta_distinto(actual: Any, esperado: Any, donde: str = "") -> str | None:
             diferencia = _meta_distinto(actual[clave], valor, f"{donde}.{clave}")
             if diferencia is not None:
                 return diferencia
-        return None
+        extra = next((clave for clave in actual if clave not in esperado), None)
+        return None if extra is None else f"{donde}.{extra}".lstrip(".")
     if isinstance(esperado, list):
         if not isinstance(actual, list) or len(actual) != len(esperado):
             return donde or "raíz"
@@ -1865,12 +1879,17 @@ def _meta_analisis(ctx: AuditContext, rel: _Relations) -> None:
     Con efectos en ``00_protocol/effects.yml``, ``08_meta/meta_analysis.json`` se recalcula y se
     compara campo a campo (una estimación multiplicada por 3 deja de pasar); sin efectos, un
     meta-análisis en disco no lo escribió el motor. Su copia en el manifiesto la comparan las
-    relaciones de copias.
+    relaciones de copias. Lo que el revisor lee, ``meta_analisis.md``, y el CSV de metafor
+    también son lo que el motor renderiza de ese cálculo (:func:`_meta_entregables`).
     """
     name = f"§8.1 · {META} == meta_analyze({EFECTOS_PROTOCOLO})"
     protocolo = _efectos_del_protocolo(ctx)
     if protocolo.problema:
-        rel.unverifiable(name, protocolo.problema)
+        # Fail-closed: el motor valida `effects.yml` (y rechaza `<<`) antes de empezar, así que
+        # una instantánea cuyo `effects.yml` no se lee o no valida no la escribió él. Si fuera
+        # «no verificable», el auditor dejaría de exigir el meta-análisis y borrarlo (con su
+        # copia, el entregable y el CSV) dejaría la corrida APTA.
+        rel.check(name, False, protocolo.problema)
         return
     loaded = ctx.art.json(META)
     if protocolo.efectos is None:
@@ -1879,12 +1898,48 @@ def _meta_analisis(ctx: AuditContext, rel: _Relations) -> None:
         return
     if not loaded.present:
         rel.ausente(name, f"{META} ausente con efectos en {EFECTOS_PROTOCOLO}")
-        return
-    if not loaded.ok:
+    elif not loaded.ok:
         rel.unverifiable(name, f"{META} ilegible")
+    else:
+        diferencia = _meta_distinto(loaded.value, protocolo.resultado)
+        rel.check(name, diferencia is None, f"distinto en `{short_text(diferencia)}`")
+    _meta_entregables(ctx, rel, protocolo)
+
+
+# Las líneas del forest con un p-valor que depende de `scipy` (el Q de heterogeneidad y el Egger:
+# exactos con `scipy`, aproximados sin él): se comparan hasta el `p=`.
+_P_SEGUN_ENTORNO = re.compile(r"^(- (?:Q = |Intercepto = ).*?\bp=).*$", re.MULTILINE)
+
+
+def _meta_entregables(ctx: AuditContext, rel: _Relations, protocolo: _EfectosProtocolo) -> None:
+    """§8.1 (E1): ``meta_analisis.md`` y el CSV de metafor son los que el motor renderiza.
+
+    El motor los escribe con ``render_forest_markdown`` (con el ``display`` de ``effects.yml``) y
+    ``render_metafor_csv`` del mismo ``meta_analyze`` que ``meta_analysis.json``: una cifra
+    cambiada a mano en el informe que lee quien revisa (la estimación, un intervalo, I²) no la
+    vería ninguna relación que mirara solo el JSON. Los p-valores de Q y de Egger dependen de
+    ``scipy`` y no cuentan, como en el JSON; el resto del texto sí, con los saltos de línea
+    normalizados (y sin el salto final del forest, que el motor no escribe).
+    """
+    efectos, calculo = protocolo.efectos, protocolo.calculo
+    if efectos is None or calculo is None:
         return
-    diferencia = _meta_distinto(loaded.value, protocolo.resultado)
-    rel.check(name, diferencia is None, f"distinto en `{short_text(diferencia)}`")
+    forest = render_forest_markdown(calculo, display=efectos.display)
+    esperados = (
+        (META_MD, _P_SEGUN_ENTORNO.sub(r"\1", forest)),
+        (METAFOR_CSV, render_metafor_csv(calculo)),
+    )
+    for path, esperado in esperados:
+        name = f"§8.1 · {path} == render(meta_analyze({EFECTOS_PROTOCOLO}))"
+        texto = ctx.art.text(path)
+        if not texto.ok:
+            estado = "ausente" if not texto.present else "ilegible"
+            rel.unverifiable(name, f"{path} {estado} (ver `deliverable`)")
+            continue
+        actual = _normalizar(texto.value)
+        if path == META_MD:
+            actual = _P_SEGUN_ENTORNO.sub(r"\1", actual.rstrip())
+        rel.check(name, actual == esperado, "distinto del que escribe el motor")
 
 
 def _diagrama_prisma(ctx: AuditContext, rel: _Relations) -> None:
@@ -2086,20 +2141,32 @@ def check_deliverable(ctx: AuditContext) -> Verdict:
 
 
 def _meta_sin_incluidos(ctx: AuditContext, protocolo: _EfectosProtocolo) -> str | None:
-    """WARN si el meta-análisis tiene más estudios que la revisión incluidos (E1).
+    """WARN si algún estudio del meta-análisis no está entre los incluidos, o no hay incluidos (E1).
 
     El meta-análisis usa los efectos declarados en ``effects.yml``, no los derivados de la
     extracción: ligarlo a los incluidos queda para la Ola 2. No es un FAIL (el demo tiene k = 4
-    con menos incluidos), pero el entregable presenta un meta-análisis ajeno a la selección y
-    hay que declararlo.
+    con menos incluidos), pero el entregable presenta un meta-análisis ajeno a la selección. Es
+    la misma condición con la que ``metodologia.md`` lo declara (``exports.methods``): cualquier
+    ``study_id`` fuera de los incluidos, o cero incluidos; no solo k mayor que los incluidos.
     """
     if protocolo.efectos is None:
         return None
-    k = len(protocolo.efectos.effects)
+    estudios = [e.study_id for e in protocolo.efectos.effects]
     ids = included_ids(ctx)
-    if ids is None or k <= len(ids):
+    if ids is None:
         return None
+    fuera = sorted(set(estudios) - set(ids))
+    if ids and not fuera:
+        return None
+    cuales = (
+        "la revisión no incluyó ningún estudio"
+        if not ids
+        else (
+            f"{len(fuera)} de los {len(estudios)} estudios del meta-análisis no están entre los "
+            f"{len(ids)} incluidos ({_ids(fuera)})"
+        )
+    )
     return (
-        f"el meta-análisis declara k = {k} estudios en {EFECTOS_PROTOCOLO} y la revisión "
-        f"incluyó {len(ids)}: no salen de la extracción de esta corrida (Ola 2); decláralo"
+        f"los efectos de {EFECTOS_PROTOCOLO} no salen de la extracción de esta corrida (Ola 2): "
+        f"{cuales}. `metodologia.md` ya lo declara con ⚠; mantén esa declaración en el manuscrito"
     )
