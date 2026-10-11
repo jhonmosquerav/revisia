@@ -737,10 +737,11 @@ def _extraction_inputs(
 ) -> dict:
     """``inputs`` del diario de extracción: registro, texto, formulario y proveedor.
 
-    Incluye ``title`` y ``abstract`` porque ``extraccion.extract_record`` los manda a la
-    IA junto con el texto: si el registro cambia, el diario no puede devolver la
-    extracción vieja (revisión de la Tarea 13). Desvía la tabla del §7 del spec, que
-    solo pedía el hash del texto; la de RoB la hereda (``_assess_rob``).
+    Incluye ``title`` y ``abstract`` porque es lo que ``extraccion.extract_record`` manda a
+    la IA (el texto completo no entra en la extracción: M14, Ola 2): si el registro cambia,
+    el diario no puede devolver la extracción vieja (revisión de la Tarea 13). El hash del
+    texto también entra en la clave, como pedía la tabla del §7 del spec; la de RoB la
+    hereda (``_assess_rob``), y RoB sí usa el texto completo cuando existe.
     """
     text = fulltexts.get(record.record_id)
     return {
@@ -1128,12 +1129,15 @@ def _write_deliverables(
             metrics=run.metrics,
             models=models_used,
             quantitative=meta_result is not None,
+            meta_result=meta_result,
+            included_ids=[r.record_id for r in included],
             exclusions=exclusion_breakdown,
             extraction_agreement=extraction_agreement,
             search_log=search_log,
             gates=gates,
             autonomy_effective=autonomy_effective,
             forced_human=forced_human,
+            auto_approve=run.auto_approve,
         ),
         encoding="utf-8",
     )
@@ -1173,6 +1177,8 @@ def _write_deliverables(
             metrics=run.metrics,
             exclusions=exclusion_breakdown,
             search_window=protocol.search_window,
+            search_log=search_log,
+            auto_approve=run.auto_approve,
         ),
         encoding="utf-8",
     )

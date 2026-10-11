@@ -374,7 +374,9 @@ def test_entregables_de_busqueda_salen_del_log_del_motor(
     assert ("Difiere de search_window.executed" in item_13) is difiere
     assert ("⚠" in item_13) is difiere
     # Resúmenes: ítem 4 con la fecha registrada por el motor.
-    assert "2026-03-01 (registrada por el motor)" in item("checklist_abstracts.md", "- [ ] 4.")
+    assert "fecha de la búsqueda (registrada por el motor): 2026-03-01" in item(
+        "checklist_abstracts.md", "- [ ] 4."
+    )
     # Métodos: fecha del motor y sin cita de cadenas por base (la búsqueda fue inyectada).
     metodologia = (entregable / "metodologia.md").read_text(encoding="utf-8")
     assert "(fecha registrada por el motor): 2026-03-01" in metodologia

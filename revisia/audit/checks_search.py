@@ -24,7 +24,7 @@ from revisia.agents import search_backends
 from revisia.audit.artifacts import NA_PROTOCOLO, AuditContext, short_text, sufijo_mas
 from revisia.audit.checks_timing import parse_utc
 from revisia.audit.model import Verdict
-from revisia.exports.checklist import _ran_in_engine, engine_search_date
+from revisia.exports.checklist import engine_search_date, ran_in_engine
 from revisia.orchestration.snapshot import SEARCH_STRINGS_DIR, SNAPSHOT_DIR
 from revisia.provenance.runmeta import sha256_text
 from revisia.schemas.artifacts import SearchLog, SearchLogEntry
@@ -322,7 +322,7 @@ def _fecha_utc(log: SearchLog) -> str | None:
     el día local y no el UTC. ``None`` si alguna marca no se puede leer o no tiene instante UTC
     representable: entonces vale la fecha textual de los exports.
     """
-    marcas = [e.started_utc for e in log.entries if _ran_in_engine(e) and e.started_utc]
+    marcas = [e.started_utc for e in log.entries if ran_in_engine(e) and e.started_utc]
     instantes: list[datetime] = []
     for marca in marcas or [log.started_utc]:
         instante, _ = parse_utc(marca)

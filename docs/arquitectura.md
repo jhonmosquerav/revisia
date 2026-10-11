@@ -74,7 +74,7 @@ flowchart TB
 | Plano | Módulos | Comandos |
 |---|---|---|
 | Pipeline | `agents/` · `orchestration/` | `run` |
-| Defensa | `rag/` (grounding) · `provenance/` · `audit.py` · `metrics.py` | `audit` · `gold-template` · `validate` |
+| Defensa | `rag/` (grounding) · `provenance/` · `audit/` · `metrics.py` | `audit` · `gold-template` · `validate` |
 | Memoria | `memory/` (patrón [cerebro](https://github.com/jhonmosquerav/cerebro)) | `brain` · `run --brain` |
 | Reporte | `exports/` (flow oficial, checklists, interop, documento único) | `run` (emite todo) · `export` (HTML autocontenido / PDF) |
 | Adherencia | `check.py` | `check` |
