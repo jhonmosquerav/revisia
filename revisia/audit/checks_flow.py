@@ -1352,7 +1352,11 @@ def _gold_anclado(ctx: AuditContext, rel: _Relations, protocolo: _GoldProtocolo)
     """
     name = "§9.3 · gold.json con el gold del protocolo"
     if protocolo.problema:
-        rel.unverifiable(name, protocolo.problema)
+        # Fail-closed, como el de `effects.yml`: el motor valida `gold.yml` (y rechaza `<<`)
+        # antes de empezar y tras la instantánea, así que un `gold.yml` de `00_protocol/` que
+        # no se lee no lo dejó él. Si fuera «no verificable», borrar `gold.json` y
+        # `metrics.json` dejaría sin verificar un recall bajo el umbral (D7).
+        rel.check(name, False, protocolo.problema)
         return
     if not protocolo.claves:  # el protocolo no trae gold: el motor no escribe gold.json
         return

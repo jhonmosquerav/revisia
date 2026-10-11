@@ -1239,11 +1239,20 @@ def test_arithmetic_gold_plano_en_la_instantanea_tambien_se_exige(corrida) -> No
     assert _relaciones(corrida)[GOLD_DEL_PROTOCOLO][0] is False
 
 
-def test_arithmetic_gold_del_protocolo_ilegible_deja_la_relacion_no_verificable(corrida) -> None:
+def test_arithmetic_gold_del_protocolo_ilegible_rompe_la_relacion(corrida) -> None:
+    # El motor rechaza un gold.yml ilegible antes de correr: en la instantánea es manipulación.
     (corrida / "00_protocol" / "gold.yml").write_text("gold: [sin: cerrar", encoding="utf-8")
     ok, detalle = _relaciones(corrida)[GOLD_DEL_PROTOCOLO]
-    assert ok is None
+    assert ok is False
     assert "00_protocol/gold.yml" in detalle
+
+
+def test_gold_del_protocolo_ilegible_y_gold_borrado_no_es_publicable(corrida) -> None:
+    (corrida / "00_protocol" / "gold.yml").write_text("gold: [sin: cerrar", encoding="utf-8")
+    _borrar_gold_y_metricas(corrida)
+    report = auditar(corrida)
+    assert fila(report, "arithmetic").status == "FAIL"
+    assert not report.publishable
 
 
 def test_arithmetic_corrida_sin_gold_no_tiene_gold_ni_metricas_y_pasa(corrida_real) -> None:
