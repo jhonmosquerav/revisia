@@ -239,6 +239,28 @@ una fuente secundaria. La página oficial de la Gemini API no les da fecha
 (ese anuncio se retiró), así que se quitaron: habrían bloqueado protocolos
 válidos desde el 16 de octubre.
 
-Siguen abiertos, en el orden de §8: el resto de la Ola 1 (HITL por registro y
-auditor exigente) y la Ola 2 (rigor y honestidad de las afirmaciones, incluido
-el verificador anti-alucinación C2).
+### Ola 1 · cerrada (PR-0 a PR-E, ramas `feat/ola1-*`)
+
+Diseño, decisiones (D1-D14) y desviaciones en
+[`docs/superpowers/specs/2026-10-04-ola-1-remediacion-design.md`](../superpowers/specs/2026-10-04-ola-1-remediacion-design.md);
+detalle de cambios en `CHANGELOG.md`.
+
+| Hallazgo | Estado | Qué se hizo |
+|---|---|---|
+| **C1** · checkpoint humano | Cerrado | `decision.yml` por registro (`records`) y atado a su solicitud (`request_sha256`); en texto completo (A0) cada informe recuperado lleva etiqueta humana y un `unclear` solo lo resuelve un humano; `human_label` solo ante una etiqueta explícita (PR-C, PR-D). El auditor exige decisión humana en cada etapa de juicio y que el ledger, `decisions.json` y `decision.yml` digan lo mismo (PR-E). |
+| **C3** · corrida de referencia | Parcial | Hecho (auditor): esquemas, aritmética del flujo, marcas de tiempo, ledger, artefactos por etapa e instantánea del protocolo; la reconstrucción con la procedencia falsificada a `pipeline` da FAIL en once checks (`tests/test_audit_c3.py`). Queda (Ola 2): regenerar el benchmark con el pipeline real. |
+| **A9** · corridas no reanudables | Cerrado | `revisia run --resume`: `run.json`, instantánea en `00_protocol/`, búsqueda y dedup congelados, un diario por etapa y `llm_calls.jsonl`; reanudar no repite ninguna llamada (PR-C). |
+| **A11** · auditor por existencia | Cerrado | `thresholds` lee `recall_target` y `kappa_min` (D7): un recall bajo el umbral con exclusiones de la IA sin revisar es FAIL; un κ bajo, una desviación a declarar; un gold sin potencia avisa, con el intervalo de Wilson (PR-E). Las métricas miden la propuesta de la IA (D6, PR-D). |
+| **M5** · `hallucination_flagged` solo se imprimía | Cerrado | Con citas marcadas, el gate final exige humano y una adjudicación por cita (PR-D); el auditor da FAIL a una cita marcada sin adjudicar y WARN a las adjudicadas (D8, PR-E). |
+| **M6** · errores de configuración a mitad de corrida | Cerrado | Preflight sin red en `validate` y `run` (código 2) antes de crear la corrida; `.env` cargado (PR-A). |
+| **M11** · flujo PRISMA sin no recuperados | Cerrado | Texto completo estricto: un no recuperado no se criba con IA y va a su caja; lista 16b de excluidos con su razón; CSV PRISMA2020 con los conteos reales (PR-B). |
+| **M12** · búsqueda sin registrar | Cerrado | `01_search/log.json` por base con la cadena efectiva, su hash, los parámetros, las horas y los resultados (PR-C); el auditor lo exige (`search_log`) y `search_window` usa su fecha (PR-E). |
+| **M13** · trAIce y métodos con una validación fija | Cerrado | `checklist_traice.md` y `metodologia.md` dicen, gate por gate y desde el ledger, quién decidió y con qué autonomía efectiva (PR-D). |
+| **M23** · negaciones de `runs/` en `.gitignore` | Cerrado | `runs/` se ignora entero: una corrida se deposita con su revisión (D11, PR-B). |
+
+Las corridas anteriores a la Ola 1 no se reanudan ni son publicables (D13):
+`revisia audit` las sigue auditando enteras, como diagnóstico.
+
+Sigue abierta, en el orden de §8, la Ola 2 (rigor y honestidad de las
+afirmaciones), incluidos el verificador anti-alucinación (C2) y la
+regeneración del benchmark (C3).

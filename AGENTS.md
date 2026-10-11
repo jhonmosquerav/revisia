@@ -34,9 +34,9 @@ incumpla (o con una etapa o nivel desconocidos) no carga, y `revisia validate` y
 | `rob` | Riesgo de sesgo (RoB2/ROBINS-I/NOS/AMSTAR-2/QUADAS-2/GRADE) | 🤖 LLM propone | A0 | Juicio final del experto; export robvis |
 | `meta-analisis` | Síntesis cuantitativa (IV fijo/aleatorio DL, Q/I²/τ², Egger, forest/funnel) | ⚙️ determinista | A2 | Solo corre si el protocolo aporta `effects.yml`; export metafor |
 | `sintesis` | Síntesis narrativa (SWiM) | 🤖 LLM | A1 | **Verificador anti-alucinación** antes del gate humano |
-| `verificador` | Grounding de citas contra el corpus | 🤖/⚙️ (embedder, agente o existencia) | A2 | Marca citas sin respaldo; bloquea la aprobación silenciosa |
+| `verificador` | Grounding de citas contra el corpus | 🤖/⚙️ (embedder, agente o existencia) | A2 | Marca citas sin respaldo; con alguna marcada, el gate final exige humano y una adjudicación por cita (M5), y el auditor da FAIL a las que nadie adjudicó |
 | `reporte` | Entregable + checklists + flow diagram | ⚙️ determinista | A1 | Checkpoint final humano |
-| `auditor` | Auditoría post-corrida (`revisia audit`) | ⚙️ determinista | A2 | Verifica evidencia PRISMA 2020/-S/trAIce en disco; PASS/WARN/FAIL |
+| `auditor` | Auditoría post-corrida (`revisia audit`) | ⚙️ determinista | A2 | Verifica la coherencia de la corrida (esquemas, instantánea del protocolo, marcas de tiempo, ledger, HITL por registro, aritmética PRISMA, umbrales, búsqueda); PASS/WARN/FAIL/N/A, *fail-closed* |
 | `memoria` | Cerebro de investigador (`--brain`) | ⚙️ determinista | A2 | Solo informa (living review); **nunca** alimenta el juicio |
 
 Tipos: ⚙️ determinista (sin LLM, reproducible bit a bit) · 🤖 LLM
@@ -51,12 +51,17 @@ Tipos: ⚙️ determinista (sin LLM, reproducible bit a bit) · 🤖 LLM
 3. **Gold standard escalonado** — modelos ligeros criban → un modelo fuerte
    recomienda en zona gris → el humano valida → κ/recall del sistema contra ese
    gold (nunca "accuracy").
-4. **Auditor post-corrida** — `revisia audit runs/<slug>-<fecha>` verifica
-   manifest, procedencia de la corrida (`provenance: pipeline`), prompts
-   hash-eados, supervisión humana, decisión humana sobre el reporte final,
-   exclusiones IA/humano separadas (trAIce R1), gold (WARN si κ/MCC no son
-   informativos), grounding, ventana de búsqueda y registro; emite `audit.md`
-   con veredicto de publicabilidad.
+4. **Auditor post-corrida** — `revisia audit runs/<slug>-<fecha>` comprueba
+   que la corrida es coherente, no solo que sus ficheros existan: esquemas de
+   cada artefacto, instantánea del protocolo (`00_protocol/` contra
+   `run.json`), plausibilidad de las marcas de tiempo, orden del ledger,
+   decisión humana en cada etapa de juicio con las etiquetas por registro
+   atadas a la solicitud revisada (`request_sha256`), aritmética del flujo
+   PRISMA de punta a punta, umbrales del protocolo (`recall_target`,
+   `kappa_min`), citas marcadas adjudicadas, log de búsqueda y procedencia;
+   emite `audit.md` con el estado de la corrida y el veredicto de
+   publicabilidad. Es *fail-closed*: un error interno es FAIL, y una corrida
+   con `--auto-approve` nunca es publicable.
 5. **Manifiesto reproducible** — `manifest.yml` con modelo/versión/seed/hash de
    prompt por llamada: reproducibilidad "a nivel decisión" cuando el proveedor
    no garantiza determinismo a nivel token.

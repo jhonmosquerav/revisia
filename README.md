@@ -89,9 +89,19 @@ Y al terminar, **audita la corrida** antes de usarla:
 
 ```bash
 uv run revisia audit runs/mi-revision-<fecha>
-# ✅/⚠️/❌ por verificación (manifest, prompts, HITL, gold, grounding, registro…)
-# → escribe runs/.../audit.md con el veredicto de publicabilidad
+# ✅/⚠️/❌/➖ por verificación: esquemas, instantánea del protocolo, marcas de tiempo,
+#   ledger y HITL por registro, aritmética del flujo PRISMA, umbrales, grounding, búsqueda…
+# → escribe runs/.../audit.md con el estado de la corrida y el veredicto de publicabilidad
 ```
+
+El auditor comprueba que la corrida es **coherente**, no solo que sus ficheros
+existan: cada artefacto valida su modelo, el protocolo usado es el de
+`00_protocol/`, los conteos del diagrama salen de los registros, cada decisión
+humana responde a la solicitud que se revisó y los umbrales del protocolo
+(`recall_target`, `kappa_min`) se cumplen o se declaran. Una corrida con
+`--auto-approve`, sin decisión humana en una etapa de juicio, con citas
+marcadas sin adjudicar o anterior a la Ola 1 (sin `run.json`) **no es
+publicable**.
 
 ## Principios de diseño
 
@@ -207,12 +217,8 @@ reanudes la misma corrida en dos procesos a la vez, y si empezaste con
 `--auto-approve` sirve para demostraciones: aprueba con las etiquetas de la IA
 (actor `auto-approve (demo)`, que el checklist trAIce y `metodologia.md`
 declaran como no humano) y pausa si hay un `unclear` en texto completo o citas
-marcadas.
-
-> **Limitación actual (Ola 1 del plan de remediación).** `revisia audit` todavía
-> marca `--auto-approve` solo con WARN en `hitl` y en `final_gate`, sin
-> declararlo no publicable; el auditor estricto llega con la última PR de la
-> Ola 1.
+marcadas. `revisia audit` declara esa corrida **no publicable** (FAIL en
+`hitl` y en `final_gate`).
 
 ## Exportar el artículo (HTML / PDF)
 
@@ -264,16 +270,22 @@ Licencia Apache-2.0, `CITATION.cff` y `.zenodo.json` listos para depósito en Ze
 > reproducción de cada hallazgo están en
 > [`docs/auditoria/2026-09-03-auditoria-completa.md`](docs/auditoria/2026-09-03-auditoria-completa.md):
 > la base de ingeniería es sólida (estadística contrastada con `metafor`, suite
-> determinista, capa de proveedores), pero **tres promesas de este README aún no
-> se cumplen en el código**: la decisión humana registro a registro, el
+> determinista, capa de proveedores), pero **tres promesas de este README no se
+> cumplían en el código**: la decisión humana registro a registro, el
 > verificador anti-alucinación en su modo por defecto, y la reproducibilidad de
 > la corrida de referencia. El plan de remediación en tres olas está en el
 > informe. **La Ola 0 se cerró el 2026-09-25** (PRs #8–#10): seguridad del motor
 > y del exportador, un reporte rechazado ya no figura como completado, el
 > auditor exige procedencia y decisión humana final, modelo por defecto vigente
-> y métricas indefinidas marcadas como tales (estado en §11 del informe). Hasta
-> cerrar la Ola 1, trata las salidas como borradores que requieren revisión
-> humana completa, no como evidencia publicable.
+> y métricas indefinidas marcadas como tales. **La Ola 1** cumple la primera
+> promesa y endurece el auditor: decisión humana por registro atada a la
+> solicitud revisada, corridas reanudables, preflight sin red, flujo PRISMA
+> estricto y un `revisia audit` que comprueba la coherencia de la corrida y
+> declara no publicable lo que no tiene un humano detrás (estado en §11 del
+> informe). Sigue abierta la Ola 2: hasta que el verificador compruebe de
+> verdad (C2), una síntesis sin citas marcadas no prueba que esté
+> fundamentada, y las cifras del benchmark fundacional siguen siendo
+> ilustrativas.
 
 ## Equipo de agentes, autonomías y auditorías
 
@@ -427,6 +439,7 @@ una RS no repita las limitaciones clásicas de una revisión rápida:
 | Sesgo de idioma | cadenas de ejemplo **EN/ES/PT** + `grounding: agent` (verificación cross-lingual) |
 | Sesgo de modelo IA | `grounding: agent` (juicio cross-lingual) + ensemble multi-modelo + verificador |
 | Sin metaanálisis | `effects.yml` → efectos fijos/aleatorios, I²/τ², Egger (cuando hay efectos poolables) |
+| Umbrales de calidad decorativos | `revisia audit` lee `recall_target` y `kappa_min` del protocolo: un recall bajo el umbral con exclusiones de la IA sin revisar hace la corrida **no publicable**; un κ bajo es una desviación a declarar (PRISMA 24c); el recall se informa con su intervalo de Wilson y avisa si el gold no tiene positivos suficientes |
 
 Scopus/Web of Science **no** se automatizan (su licencia lo prohíbe): se incorporan
 por export→import RIS/BibTeX desde la biblioteca de tu institución.
@@ -455,7 +468,7 @@ revisia/          # EL MOTOR (paquete instalable · provider-agnostic)
   provenance/         # RunMeta + ledger append-only de decisiones
   orchestration/      # flujo Prefect + checkpoints HITL
   memory/             # cerebro de investigador (markdown + JSONL, living review)
-  audit.py            # auditor post-corrida (PRISMA 2020 / -S / trAIce)
+  audit/              # auditor post-corrida (PRISMA 2020 / -S / trAIce), un módulo por familia de checks
   prompts/            # prompts versionados y hash-eados
 protocols/_TEMPLATE/  # LA CONFIG (una carpeta por revisión · default: gemini)
   protocolo-prisma-p.md  #   plantilla de preregistro (17 ítems PRISMA-P)

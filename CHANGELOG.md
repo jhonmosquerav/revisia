@@ -72,6 +72,26 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - `decision.template.yml` lista cada registro y cada cita marcada con la
   propuesta de la IA en comentarios saneados: un título o una razón con saltos
   de línea Unicode no puede inyectar claves (`approved: true`) en el YAML (D4).
+- **Auditor exigente** (`revisia audit`; auditoría 2026-09-03, C3, A11 y M5):
+  el auditor pasa a ser el paquete `revisia/audit/` y comprueba que la corrida
+  es coherente, no solo que sus ficheros existan. Una fila por check, siempre:
+  `N/A` solo si la etapa no se alcanzó o la raíz del check ya falló, y un
+  error interno es FAIL, nunca un PASS por omisión. Checks nuevos: `schemas`
+  (cada artefacto contra su modelo), `protocol_snapshot` (`00_protocol/`
+  contra las huellas de `run.json`), `timing` (marcas de tiempo posibles; las
+  heurísticas de una reconstrucción solo avisan), `ledger` (orden y unicidad),
+  `request_hash` (cada decisión atada a la solicitud que el humano revisó),
+  `stage_artifacts`, `arithmetic` (las relaciones del flujo PRISMA de punta a
+  punta: búsqueda, dedup, cribado, recuperación, 16b, CSV, diarios),
+  `thresholds` (`recall_target` y `kappa_min` del protocolo, con el intervalo
+  de Wilson del recall), `search_log` y `response_overlap`. `hitl` comprueba
+  las etiquetas por registro (ledger, `decisions.json` y `decision.yml`
+  coinciden) y `grounding`, que cada cita marcada la adjudicó un humano.
+- `revisia.metrics.kappa_from_matrix(tp, fp, fn, tn)` y
+  `revisia.metrics.wilson_interval(k, n)`, públicas.
+- `revisia validate` y `revisia run` rechazan (código 2) las claves de fusión
+  YAML (`<<`) en `protocol.yml`: el auditor no las admite al releer la
+  instantánea, porque permiten construir documentos que se expanden sin límite.
 
 ### Fixed
 - **`claude_code` corre sin herramientas de verdad**: `--tools ""` sustituye a
@@ -120,6 +140,17 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - Un umbral no finito (`.nan`, `.inf`) o fuera de rango en `protocol.yml`
   rompía la corrida a mitad del cribado; ahora `validate` y `run` lo rechazan
   con código 2.
+- `revisia audit` aprobaba la reconstrucción de la corrida de referencia (C3):
+  140 llamadas en 1,3 ms, un ledger fechado una semana antes, `excluded_human:
+  3` sin ninguna decisión humana, métricas sin matriz que las respalde y etapas
+  sin sus artefactos. Ahora la declara no publicable por once checks distintos.
+- `gold` daba PASS con κ = 0,0 aunque el protocolo pidiera `kappa_min: 0.6`:
+  nadie leía los umbrales (A11).
+- `search_window` daba PASS a una fecha de ejecución tecleada a mano.
+- Seguridad: ningún artefacto manipulado tumba ni cuelga `revisia audit` (YAML
+  muy anidado, bombas de alias y de claves de fusión, escalares numéricos
+  gigantes, claves que colisionan en el hash), y los textos que vienen de la
+  corrida llegan al informe acotados y con los caracteres invisibles a la vista.
 
 ### Changed
 - `MANUAL_ONLY` incluye CINAHL, Cochrane/CENTRAL, ProQuest, EconLit, JSTOR,
@@ -141,6 +172,8 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   (`ensemble_label`) frente al gold, nunca la decisión final humano + IA (D6).
 - `--auto-approve` aprueba con las etiquetas de la IA y no exige etiquetar
   cada registro en A0, pero pausa si hay un `unclear` en texto completo (D9).
+- Una corrida en pausa o interrumpida se audita con lo que tiene: los checks de
+  las etapas que no alcanzó dan `N/A` (➖ en la consola) y el gate final, FAIL.
 
 ### Cambios incompatibles
 - `revisia validate` y `revisia run` salen con código 2 ante cualquier error de
@@ -168,6 +201,17 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   `kappa_min` fuera de [-1, 1] o `wmcc_fn_weight` fuera de (0, 1000] ya no carga.
 - Con un gate forzado a humano, `actor` tiene que ser `human:<nombre>` con un
   nombre visible.
+- El auditor es más estricto (D7, D8): `--auto-approve` o una etapa de juicio
+  sin decisión humana, un recall bajo `recall_target` con exclusiones de la IA
+  sin revisar y una cita marcada sin adjudicar pasan a FAIL, y la corrida deja
+  de ser publicable. Un κ bajo `kappa_min` es una desviación a declarar (WARN).
+- Las corridas anteriores a esta versión (sin `run.json`) dan FAIL en
+  `protocol_snapshot` y no son publicables (D13); se siguen auditando enteras
+  como diagnóstico. Regenéralas con el motor actual.
+- `revisia.audit` es un paquete: `from revisia.audit import run_audit,
+  render_audit_md, AuditReport, AuditCheck` sigue funcionando; `AuditReport`
+  gana `state` y `n_na`, y `AuditCheck.status` admite `N/A`.
+- `protocol.yml` con claves de fusión YAML (`<<`) ya no carga: expándelas.
 
 ## [0.7.0] · 2026-09-28
 
