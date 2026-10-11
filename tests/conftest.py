@@ -16,6 +16,11 @@ propuesta de la IA (``etiquetar_auditoria``). El gold va en ``gold.yml`` de
 una copia del demo, porque ``correr_hasta`` no pasa ``gold_labels``. La
 recuperación de texto completo se inyecta con ``fetch_disponible``: con el FT
 estricto (D2) un registro sin texto en abierto no llegaría a extracción.
+
+``corrida_con_cita_marcada`` es la misma corrida con una síntesis que cita
+``[2019]`` (un año, no un id del corpus): el verificador la marca, el gate
+final se fuerza a humano y la revisora la adjudica como falso positivo en
+``reporte/decision.yml`` (D8).
 """
 
 from __future__ import annotations
@@ -128,6 +133,20 @@ def proveedor_auditoria(cfg: ProviderConfig) -> ScriptedProvider:
     return ScriptedProvider(model=cfg.model, palabras=palabras)
 
 
+# Síntesis con una cita real (un incluido) y otra que no está en el corpus.
+SINTESIS_CON_CITA_MARCADA = "La IA reduce el cribado [10.1000/llm-1]. Lo confirma [2019]."
+RAZON_FALSO_POSITIVO = "[2019] es un año, no una cita"
+
+
+def proveedor_con_cita_marcada(cfg: ProviderConfig) -> ScriptedProvider:
+    """Como ``proveedor_auditoria``; ``fake-1`` (síntesis) escribe ``[2019]``."""
+    if cfg.model != "fake-1":
+        return proveedor_auditoria(cfg)
+    return ScriptedProvider(
+        model=cfg.model, palabras=PALABRAS_FT, sintesis=SINTESIS_CON_CITA_MARCADA
+    )
+
+
 def etiquetar_auditoria(stage: str, solicitud: dict) -> dict | None:
     """La revisora humana de la corrida de auditoría.
 
@@ -147,6 +166,17 @@ def etiquetar_auditoria(stage: str, solicitud: dict) -> dict | None:
     return {"records": records} if records else None
 
 
+def adjudicar_auditoria(stage: str, solicitud: dict) -> dict | None:
+    """``etiquetar_auditoria`` que, además, adjudica las citas marcadas (D8)."""
+    if stage != "reporte":
+        return etiquetar_auditoria(stage, solicitud)
+    flags = {
+        str(indice): {"verdict": "false_positive", "reason": RAZON_FALSO_POSITIVO}
+        for indice in solicitud.get("must_adjudicate", [])
+    }
+    return {"flags": flags} if flags else None
+
+
 @pytest.fixture(scope="session")
 def protocolo_auditoria(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Copia del demo con el gold de la corrida de auditoría en ``gold.yml``."""
@@ -155,6 +185,19 @@ def protocolo_auditoria(tmp_path_factory: pytest.TempPathFactory) -> Path:
     (destino / "gold.yml").write_text(
         yaml.safe_dump({"gold": GOLD_AUDITORIA}, allow_unicode=True), encoding="utf-8"
     )
+    return destino
+
+
+@pytest.fixture(scope="session")
+def protocolo_con_cita_marcada(
+    tmp_path_factory: pytest.TempPathFactory, protocolo_auditoria: Path
+) -> Path:
+    """``protocolo_auditoria`` con ``grounding: existence`` (id en el corpus o no)."""
+    destino = tmp_path_factory.mktemp("protocolo-marcas") / DEMO.name
+    shutil.copytree(protocolo_auditoria, destino)
+    raw = yaml.safe_load((destino / "protocol.yml").read_text(encoding="utf-8"))
+    raw["grounding"] = "existence"
+    (destino / "protocol.yml").write_text(yaml.safe_dump(raw, allow_unicode=True), "utf-8")
     return destino
 
 
@@ -170,12 +213,15 @@ def _correr(
     parar_en: str | None,
     rechazar: str | None = None,
     search_fn: Callable[[str, int], list[SearchRecord]] = busqueda_auditoria,
+    proveedor: Callable[[ProviderConfig], ScriptedProvider] = proveedor_auditoria,
+    etiquetar: Callable[[str, dict], dict | None] = etiquetar_auditoria,
 ) -> Path:
-    """Corre el pipeline real con la revisora de ``etiquetar_auditoria``.
+    """Corre el pipeline real con la revisora ``etiquetar`` (por defecto, ``etiquetar_auditoria``).
 
     Se detiene en la pausa de ``parar_en`` o, con ``rechazar``, cuando la revisora
     rechaza ese gate (``approved: false`` atado a su solicitud, como en la vida real).
-    ``search_fn`` es la búsqueda simulada (por defecto, los siete registros de la auditoría).
+    ``search_fn`` es la búsqueda simulada (por defecto, los siete registros de la auditoría) y
+    ``proveedor`` el ``build_provider`` de la corrida (por defecto, ``proveedor_auditoria``).
     """
     protocol = load_protocol(protocol_dir)
     # Timestamp UTC real: el auditor lo usa como límite inferior de las marcas
@@ -186,10 +232,10 @@ def _correr(
     def _revisora(stage: str, solicitud: dict) -> dict | None:
         if stage == rechazar:
             return {"approved": False, "reason": "sin respaldo"}
-        return etiquetar_auditoria(stage, solicitud)
+        return etiquetar(stage, solicitud)
 
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(pipeline_mod, "build_provider", proveedor_auditoria)
+        mp.setattr(pipeline_mod, "build_provider", proveedor)
         result = correr_hasta(
             protocol,
             protocol_dir,
@@ -234,6 +280,20 @@ def _corrida_sin_registros(
     )
 
 
+@pytest.fixture(scope="session")
+def _corrida_con_cita_marcada(
+    tmp_path_factory: pytest.TempPathFactory, protocolo_con_cita_marcada: Path
+) -> Path:
+    """Corrida completada con una cita marcada y adjudicada por la revisora."""
+    return _correr(
+        tmp_path_factory.mktemp("cita-marcada"),
+        protocolo_con_cita_marcada,
+        parar_en=None,
+        proveedor=proveedor_con_cita_marcada,
+        etiquetar=adjudicar_auditoria,
+    )
+
+
 def _copia(origen: Path, tmp_path: Path) -> Path:
     destino = tmp_path / "runs" / origen.name
     shutil.copytree(origen, destino)
@@ -256,6 +316,12 @@ def corrida_en_pausa_ft(_corrida_en_pausa_ft: Path, tmp_path: Path) -> Path:
 def corrida_sin_registros(_corrida_sin_registros: Path, tmp_path: Path) -> Path:
     """Copia propia de la corrida completada de una búsqueda sin registros."""
     return _copia(_corrida_sin_registros, tmp_path)
+
+
+@pytest.fixture
+def corrida_con_cita_marcada(_corrida_con_cita_marcada: Path, tmp_path: Path) -> Path:
+    """Copia propia de la corrida con la cita ``[2019]`` adjudicada."""
+    return _copia(_corrida_con_cita_marcada, tmp_path)
 
 
 @pytest.fixture
