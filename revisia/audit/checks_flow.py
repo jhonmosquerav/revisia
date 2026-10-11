@@ -37,16 +37,41 @@ llamadas a la IA hasta la síntesis (``_cribado_con_trabajo``).
 Un ``llm_calls.jsonl`` que existe y no se puede leer no se sustituye por la copia del manifiesto
 (``AuditContext.llm_calls_ilegible``): las relaciones que lo necesitan son no verificables y
 ``schemas`` da el FAIL.
+
+Con ``run.json`` (corrida de la Ola 1; la rama la decide la presencia del fichero, como en
+``stage_artifacts`` y ``deliverable``) ``arithmetic`` aplica las relaciones 1-13 de §4.4 sobre lo
+que el motor escribe desde PR-B..PR-D: la búsqueda y el dedup (1, 4), el orden del cribado T/A
+(5), los informes buscados (6), la recuperación y los rescates del texto completo (7, 8), la
+lista 16b (9), los incluidos (10), el CSV PRISMA2020 (11), los diarios frente a
+``llm_calls.jsonl`` (12) y cada consolidado frente a su diario (13), más la matriz de confusión
+recalculada desde ``gold.json`` (D6). Las relaciones v0.7 del embudo no se aplican a esas
+corridas: con el PRISMA estricto (D2) un no recuperado no se criba con IA ni cuenta como
+evaluado salvo que un humano lo rescate, y una corrida legítima sin ningún texto recuperado
+incumplía ``excluded_ta + fulltext_assessed == screened`` y ``len(decisions FT) ==
+fulltext_assessed`` (Tarea 14).
+
+Los diarios se leen con el lector del auditor (``RunArtifacts.jsonl``/``jsonl_models``), que
+nunca toca el fichero: ``orchestration.journal.read_jsonl`` recorta una última línea truncada al
+leer, y un auditor no puede reparar lo que audita. La relación 12 es de inclusión y no de
+igualdad de totales: cada meta de cada línea está, idéntica, en ``llm_calls.jsonl``, pero
+``llm_calls.jsonl`` puede tener llamadas que ningún diario cita (huérfanas de una caída, válidas
+según §4.3) y le pueden faltar llamadas pagadas que no llegaron a registrarse (el miembro
+anterior del ensemble T/A cuando el siguiente falla a mitad del registro, o el juez de grounding
+cuando la verificación se cae a medias: el registro se recalcula entero al reanudar y su línea de
+diario lleva las metas completas). Contar totales daría FAIL a corridas legítimas reanudadas; la
+cota inferior de llamadas (§9.3) sigue delatando decisiones sin las llamadas que las produjeron.
 """
 
 from __future__ import annotations
 
 import csv
 import io
+import json
 import math
 import re
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections import Counter
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass, field
 from functools import partial
 from typing import Any
 
@@ -59,14 +84,15 @@ from revisia.audit.artifacts import (
 )
 from revisia.audit.model import Verdict
 from revisia.config import STAGES, ReviewProtocol
-from revisia.exclusions import compute_exclusion_breakdown
+from revisia.exclusions import compute_exclusion_breakdown, compute_ft_excluded
 from revisia.exports import PrismaCounts
 from revisia.extraction_agreement import select_double_extraction_subset
 from revisia.llm.ensemble import recall_biased_label
-from revisia.metrics import kappa_from_matrix, mcc, wmcc
-from revisia.schemas.artifacts import TRANSIENT_FULLTEXT_REASONS
+from revisia.metrics import confusion, kappa_from_matrix, mcc, wmcc
+from revisia.schemas.artifacts import JOURNAL_PATHS, TRANSIENT_FULLTEXT_REASONS, JournalEntry
 from revisia.schemas.records import SearchRecord
 from revisia.schemas.screening import ScreeningDecision
+from revisia.schemas.verification import VerificationReport
 
 TA = "03_screening/decisions.json"
 FT = "04_fulltext/decisions.json"
@@ -76,6 +102,19 @@ ASSESSMENTS = "07_rob/assessments.json"
 AGREEMENT = "05_extraction/agreement.json"
 EXCLUSIONS = "03_screening/exclusions.json"
 RETRIEVAL = "04_fulltext/retrieval.json"
+SEARCH_RECORDS = "01_search/records.json"
+DEDUP_REPORT = "02_dedup/dedup.json"
+EXCLUDED = "04_fulltext/excluded.json"
+GOLD = "03_screening/gold.json"
+METRICS = "03_screening/metrics.json"
+VERIFICATION = "06_synthesis/verification.json"
+DOCUMENTO = "deliverable/documento.md"
+
+# Campos que el humano (o el gate) añade a una decisión de cribado: el diario guarda la propuesta
+# de la IA sin ellos y el consolidado se compara con él quitándolos (relación 13 de §4.4).
+_CAMPOS_HUMANOS = ("human_label", "final_label", "human_reason", "human_actor")
+# Etiquetas finales de T/A con las que un registro pasa a texto completo (sesgo a recall).
+_PASAN_TA = frozenset({"include", "unclear"})
 
 _MAX = 6  # relaciones, ficheros o artefactos que se listan en un detalle
 _MAX_IDS = 3  # ids de registro que se listan dentro de una relación
@@ -213,18 +252,55 @@ def _n(value: object) -> str:
     return short_repr(value, limit=_LIMITE_NUMERO)
 
 
-def _ids_incluidos(ft: Sequence[ScreeningDecision]) -> list[str]:
-    """Ids incluidos en unas decisiones a texto completo ya cargadas (``include`` o ``unclear``)."""
-    return [d.record_id for d in ft if d.final_label in {"include", "unclear"}]
+def _primera_diferencia(actual: Sequence[str], esperado: Sequence[str]) -> str:
+    """Dónde difieren dos secuencias de ids, acotado: la primera posición distinta y los largos.
+
+    Un ``repr`` de las dos listas enteras no dice dónde está el problema y, con miles de ids, el
+    recorte de ``_valor`` lo esconde.
+    """
+    largos = f"{len(actual)} frente a {len(esperado)} ids"
+    for i, (a, b) in enumerate(zip(actual, esperado, strict=False)):
+        if a != b:
+            return (
+                f"posición {i}: {short_text(a, limit=_LIMITE_ID)} ≠ "
+                f"{short_text(b, limit=_LIMITE_ID)} ({largos})"
+            )
+    return largos
+
+
+def _misma_secuencia(
+    rel: _Relations, name: str, actual: Sequence[str], esperado: Sequence[str]
+) -> None:
+    """Relación ``actual == esperado`` (mismos ids, mismo orden) con un detalle legible."""
+    iguales = list(actual) == list(esperado)
+    rel.check(name, iguales, "" if iguales else _primera_diferencia(actual, esperado))
+
+
+def _ola1(ctx: AuditContext) -> bool:
+    """La corrida es de la Ola 1: tiene ``run.json`` (aunque no valide; eso lo marca ``schemas``).
+
+    Decide la rama por la presencia del fichero, como ``stage_artifacts`` y ``deliverable``: un
+    ``run.json`` presente e inválido no convierte la corrida en una v0.7, cuyas relaciones darían
+    FAIL falsos sobre los artefactos de la Ola 1.
+    """
+    return ctx.art.exists("run.json")
+
+
+def _ids_incluidos(ft: Sequence[ScreeningDecision], *, ola1: bool) -> list[str]:
+    """Ids incluidos en unas decisiones a texto completo ya cargadas (ver :func:`included_ids`)."""
+    labels = {"include"} if ola1 else _PASAN_TA
+    return [d.record_id for d in ft if d.final_label in labels]
 
 
 def included_ids(ctx: AuditContext) -> list[str] | None:
     """Incluidos según las decisiones a texto completo (``None`` si no se leen).
 
-    Relaciones v0.7 (sin ``run.json``): ``include`` o ``unclear``.
+    Desde la Ola 1 (con ``run.json``), ``final_label == include``: un ``unclear`` lo resuelve un
+    humano (D1) y nunca llega a extracción. Relaciones v0.7 (sin ``run.json``): ``include`` o
+    ``unclear``, que es lo que aquel motor extraía.
     """
     ft = ctx.art.artifact(FT)
-    return _ids_incluidos(ft.value) if ft.ok else None
+    return _ids_incluidos(ft.value, ola1=_ola1(ctx)) if ft.ok else None
 
 
 def _requiere_doble_extraccion(ctx: AuditContext) -> bool:
@@ -461,6 +537,7 @@ def _funnel(ctx: AuditContext, rel: _Relations) -> None:
     counts = _seccion(ctx, rel, "counts", "conteos del embudo")
     if counts is None:
         return
+    ola1 = _ola1(ctx)
     rel.eq(
         "1 · Σ identified_by_source == identified",
         sum(counts.identified_by_source.values()),
@@ -474,11 +551,17 @@ def _funnel(ctx: AuditContext, rel: _Relations) -> None:
         - counts.removed_automation
         - counts.removed_other,
     )
-    rel.eq(
-        "v0.7 · excluded_ta + fulltext_assessed == screened",
-        counts.excluded_ta + counts.fulltext_assessed,
-        counts.screened,
-    )
+    if ola1:
+        _conteos_ola1(rel, counts)
+    else:
+        # v0.7: un `unclear` a texto completo contaba como evaluado e incluido y no había no
+        # recuperados. Con el PRISMA estricto (D2) no vale: los no recuperados sin rescate no
+        # son evaluados ni excluidos en T/A.
+        rel.eq(
+            "v0.7 · excluded_ta + fulltext_assessed == screened",
+            counts.excluded_ta + counts.fulltext_assessed,
+            counts.screened,
+        )
     rel.eq(
         "10 · included == fulltext_assessed − excluded_ft",
         counts.included,
@@ -506,9 +589,36 @@ def _funnel(ctx: AuditContext, rel: _Relations) -> None:
     if ta is not None:
         _cribado_ta(ctx, rel, counts, ta)
     if ft is not None and ta is not None:
-        _texto_completo(rel, counts, ta, ft)
+        if ola1:
+            _texto_completo_ola1(ctx, rel, counts, ta, ft)
+        else:
+            _texto_completo(rel, counts, ta, ft)
     elif ft is not None:
         rel.unverifiable("relaciones del texto completo", f"dependen de {TA} (ver arriba)")
+
+
+def _conteos_ola1(rel: _Relations, counts: PrismaCounts) -> None:
+    """Relaciones 6, 8 y 9 entre los conteos de la Ola 1 (PRISMA estricto, D2).
+
+    Un informe buscado es evaluado salvo que no se recuperara y nadie lo rescatara: un rescate
+    humano cuenta como evaluado (D2), así que ``fulltext_assessed = fulltext_sought −
+    fulltext_not_retrieved`` y no ``screened − excluded_ta``.
+    """
+    rel.eq(
+        "6 · fulltext_sought == screened − excluded_ta",
+        counts.fulltext_sought,
+        counts.screened - counts.excluded_ta,
+    )
+    rel.eq(
+        "8 · fulltext_assessed == fulltext_sought − fulltext_not_retrieved",
+        counts.fulltext_assessed,
+        counts.fulltext_sought - counts.fulltext_not_retrieved,
+    )
+    rel.eq(
+        "9 · excluded_ft_human + excluded_ft_ai == excluded_ft",
+        counts.excluded_ft_human + counts.excluded_ft_ai,
+        counts.excluded_ft,
+    )
 
 
 def _cribado_ta(
@@ -530,6 +640,8 @@ def _cribado_ta(
     )
     bad_final = [d.record_id for d in ta if d.final_label != (d.human_label or d.ensemble_label)]
     rel.check("5 · final_label == human_label or ensemble_label", not bad_final, _ids(bad_final))
+    if _ola1(ctx):
+        _cribado_ta_ola1(ctx, rel, counts, ta)
     name_votos = "§9.3 · un voto por screener T/A configurado"
     protocol = _seccion(ctx, rel, "protocol", name_votos)
     if protocol is None:
@@ -546,13 +658,218 @@ def _cribado_ta(
     rel.check(name_votos, not bad_votes, f"{_ids(bad_votes)} (screeners: {_ids(screeners)})")
 
 
+def _cribado_ta_ola1(
+    ctx: AuditContext, rel: _Relations, counts: PrismaCounts, ta: list[ScreeningDecision]
+) -> None:
+    """Relaciones 5 y 6 que solo se pueden comprobar con los artefactos de la Ola 1.
+
+    El motor criba ``02_dedup/records.json`` en su orden y escribe una decisión por registro: una
+    decisión de más, de menos o reordenada no sale del pipeline.
+    """
+    name_orden = f"5 · {TA} en el orden de {DEDUP_RECORDS}"
+    deduped = _artefacto(ctx, rel, DEDUP_RECORDS, name_orden)
+    if deduped is not None:
+        _misma_secuencia(rel, name_orden, [d.record_id for d in ta], [r.record_id for r in deduped])
+    rel.eq(
+        "6 · fulltext_sought == #(final T/A ∈ {include, unclear})",
+        counts.fulltext_sought,
+        sum(1 for d in ta if d.final_label in _PASAN_TA),
+    )
+
+
+def _busqueda_y_dedup(ctx: AuditContext, rel: _Relations) -> None:
+    """Relaciones 1 y 4 de §4.4: los conteos salen de ``01_search/`` y ``02_dedup/``.
+
+    La reconstrucción C3 declaraba 40/40/40 identificados por base frente a 28 registros
+    (auditoría 2026-09-03): con los registros de la búsqueda (antes del dedup) y el informe del
+    dedup en disco, ``identified``, ``identified_by_source``, ``duplicates_removed`` y ``screened``
+    se recalculan. Σ ``n_returned`` del log de búsqueda lo compara ``search_log``.
+    """
+    counts = _seccion(ctx, rel, "counts", "relaciones de la búsqueda y el dedup")
+    if counts is None:
+        return
+    records = _artefacto(
+        ctx, rel, SEARCH_RECORDS, f"1 · {SEARCH_RECORDS} (identified, identified_by_source)"
+    )
+    if records is not None:
+        rel.eq(f"1 · identified == len({SEARCH_RECORDS})", counts.identified, len(records))
+        rel.eq(
+            "1 · identified_by_source == Counter(source_db) de records.json",
+            dict(sorted(counts.identified_by_source.items())),
+            dict(sorted(Counter(r.source_db for r in records).items())),
+        )
+    dedup = _artefacto(ctx, rel, DEDUP_REPORT, f"4 · {DEDUP_REPORT} (n_in, n_out, duplicates)")
+    deduped = _artefacto(ctx, rel, DEDUP_RECORDS, f"4 · {DEDUP_RECORDS} (ids, screened)")
+    if dedup is not None:
+        rel.eq("4 · dedup.n_in == identified", dedup.n_in, counts.identified)
+        rel.eq(
+            "4 · n_in − n_out == len(duplicates) == duplicates_removed",
+            (dedup.n_in - dedup.n_out, len(dedup.duplicates)),
+            (counts.duplicates_removed, counts.duplicates_removed),
+        )
+    if deduped is not None:
+        repetidos = sorted(i for i, n in Counter(r.record_id for r in deduped).items() if n > 1)
+        rel.check(f"4 · ids de {DEDUP_RECORDS} únicos", not repetidos, _ids(repetidos))
+    if dedup is not None and deduped is not None:
+        rel.eq(
+            f"4 · n_out == screened == len({DEDUP_RECORDS})",
+            (dedup.n_out, len(deduped)),
+            (counts.screened, counts.screened),
+        )
+
+
+def _texto_completo_ola1(
+    ctx: AuditContext,
+    rel: _Relations,
+    counts: PrismaCounts,
+    ta: list[ScreeningDecision],
+    ft: list[ScreeningDecision],
+) -> None:
+    """Relaciones 7-10 de §4.4 con la recuperación, los rescates y la lista 16b (D2, M11).
+
+    PRISMA estricto: un informe sin texto completo no se criba con IA (sin voto ni propuesta) y
+    solo cuenta como evaluado si un humano lo rescata con una razón (D2). Así, un rescatado tiene
+    etiqueta humana y ningún voto, un no recuperado sin rescate no tiene ni lo uno ni lo otro, y
+    ``fulltext_rescued + fulltext_not_retrieved`` son los no recuperados.
+    """
+    pasan = [d.record_id for d in ta if d.final_label in _PASAN_TA]
+    ids_ft = [d.record_id for d in ft]
+    _misma_secuencia(rel, "7 · ids de 04_fulltext == pasan T/A", ids_ft, pasan)
+    _recuperacion(ctx, rel, ft, ids_ft)
+    _propuestas_ft(rel, ft)
+    no_recuperados = [d for d in ft if d.fulltext_status == "not_retrieved"]
+    rel.eq(
+        "8 · fulltext_not_retrieved == #(no recuperado sin humano)",
+        counts.fulltext_not_retrieved,
+        sum(1 for d in no_recuperados if d.human_label is None),
+    )
+    rel.eq(
+        "8 · fulltext_rescued == #(no recuperado con humano)",
+        counts.fulltext_rescued,
+        sum(1 for d in no_recuperados if d.human_label is not None),
+    )
+    rel.eq(
+        "8 · fulltext_assessed == #(final FT ≠ null)",
+        counts.fulltext_assessed,
+        sum(1 for d in ft if d.final_label is not None),
+    )
+    excluidos = [d for d in ft if d.final_label == "exclude"]
+    rel.eq("9 · excluded_ft == #(final FT == exclude)", counts.excluded_ft, len(excluidos))
+    _lista_16b(ctx, rel, counts, ft, excluidos)
+    rel.eq(
+        "10 · included == #(final FT == include)",
+        counts.included,
+        sum(1 for d in ft if d.final_label == "include"),
+    )
+
+
+def _recuperacion(
+    ctx: AuditContext, rel: _Relations, ft: list[ScreeningDecision], ids_ft: list[str]
+) -> None:
+    """Relación 7: recuperado ⇔ ``retrieval.available`` ⇔ un voto de la IA (D2).
+
+    ``retrieval.json`` tiene una fila por informe buscado, en su orden, también los fallos
+    transitorios que el diario no guarda (§14, fila 24a). Una decisión sin ``fulltext_status``
+    no sale del motor de la Ola 1 y no cuenta para ningún lado: se marca.
+    """
+    name = "7 · retrieved ⇔ retrieval.available ⇔ un voto"
+    retrieval = _artefacto(ctx, rel, RETRIEVAL, name)
+    if retrieval is None:
+        return
+    ids_recuperacion = [r.record_id for r in retrieval]
+    _misma_secuencia(rel, f"7 · ids de {RETRIEVAL} == ids de 04_fulltext", ids_recuperacion, ids_ft)
+    disponible = {r.record_id: r.available for r in retrieval}
+    malos = [
+        d.record_id
+        for d in ft
+        if d.fulltext_status is None
+        or len({d.fulltext_status == "retrieved", disponible.get(d.record_id), len(d.votes) == 1})
+        != 1
+    ]
+    rel.check(name, not malos, _ids(malos))
+
+
+def _propuestas_ft(rel: _Relations, ft: list[ScreeningDecision]) -> None:
+    """Relación 7 tras aprobar FT: propuesta, etiqueta final, ``unclear`` y rescates (D1, D2)."""
+    malos = [
+        d.record_id
+        for d in ft
+        if d.ensemble_label
+        != (recall_biased_label([v.label for v in d.votes]) if d.votes else None)
+    ]
+    rel.check(
+        "7 · ensemble_label FT == propuesta de su voto (null si no se recuperó)",
+        not malos,
+        _ids(malos),
+    )
+    malos = [d.record_id for d in ft if d.final_label != (d.human_label or d.ensemble_label)]
+    rel.check("7 · final_label FT == human_label or ensemble_label", not malos, _ids(malos))
+    malos = [d.record_id for d in ft if d.final_label == "unclear"]
+    rel.check("7 · ningún final FT == unclear (lo resuelve un humano, D1)", not malos, _ids(malos))
+    malos = [
+        d.record_id
+        for d in ft
+        if d.fulltext_status == "not_retrieved"
+        and d.human_label is not None
+        and not (d.human_reason or "").strip()
+    ]
+    rel.check("7 · un rescate lleva human_reason (D2)", not malos, _ids(malos))
+
+
+def _lista_16b(
+    ctx: AuditContext,
+    rel: _Relations,
+    counts: PrismaCounts,
+    ft: list[ScreeningDecision],
+    excluidos: list[ScreeningDecision],
+) -> None:
+    """Relación 9: la lista 16b (``excluded.json``) frente a las decisiones FT y los conteos.
+
+    Además de las igualdades de §4.4, la lista se recalcula con ``compute_ft_excluded``, la
+    misma función con la que la escribe el motor (razón humana si el humano excluyó; si no, el
+    primer criterio de la IA): así no se puede cambiar una razón, un título o un origen sin que
+    se note, ni pasar exclusiones de la IA a humanas en los conteos.
+    """
+    reports = _artefacto(ctx, rel, EXCLUDED, f"9 · lista 16b ({EXCLUDED})")
+    if reports is None:
+        return
+    rel.eq(f"9 · excluded_ft == len({EXCLUDED})", counts.excluded_ft, len(reports))
+    rel.eq(
+        "9 · ft_exclusion_reasons == Counter(reason) de excluded.json",
+        dict(sorted(counts.ft_exclusion_reasons.items())),
+        dict(sorted(Counter(r.reason for r in reports).items())),
+    )
+    humanos = {d.record_id for d in excluidos if d.human_label == "exclude"}
+    malos = [
+        r.record_id for r in reports if (r.reason_source == "human") != (r.record_id in humanos)
+    ]
+    rel.check("9 · reason_source == human ⇔ human_label == exclude", not malos, _ids(malos))
+    rel.eq(
+        "9 · excluded_ft_human/ai == reason_source de excluded.json",
+        (counts.excluded_ft_human, counts.excluded_ft_ai),
+        (
+            sum(1 for r in reports if r.reason_source == "human"),
+            sum(1 for r in reports if r.reason_source == "ai"),
+        ),
+    )
+    name = f"9 · {EXCLUDED} == compute_ft_excluded({FT})"
+    deduped = _artefacto(ctx, rel, DEDUP_RECORDS, name)
+    if deduped is None:
+        return
+    esperado = [r.model_dump() for r in compute_ft_excluded(ft, deduped)]
+    actual = [r.model_dump() for r in reports]
+    distintos = [a.get("record_id", "?") for a, e in zip(actual, esperado, strict=False) if a != e]
+    detalle = f"{_ids(distintos)} ({len(actual)} frente a {len(esperado)} informes)"
+    rel.check(name, actual == esperado, detalle)
+
+
 def _texto_completo(
     rel: _Relations,
     counts: PrismaCounts,
     ta: list[ScreeningDecision],
     ft: list[ScreeningDecision],
 ) -> None:
-    passed = {d.record_id for d in ta if d.final_label in {"include", "unclear"}}
+    passed = {d.record_id for d in ta if d.final_label in _PASAN_TA}
     in_ft = {d.record_id for d in ft}
     rel.check("7 · ids de 04_fulltext == pasan T/A", in_ft == passed, _ids(sorted(in_ft ^ passed)))
     rel.eq(f"v0.7 · len({FT}) == fulltext_assessed", len(ft), counts.fulltext_assessed)
@@ -570,7 +887,7 @@ def _texto_completo(
     rel.eq(
         "v0.7 · included == #(final FT ∈ {include, unclear})",
         counts.included,
-        len(_ids_incluidos(ft)),
+        len(_ids_incluidos(ft, ola1=False)),
     )
 
 
@@ -660,13 +977,16 @@ def _csv(ctx: AuditContext, rel: _Relations) -> None:
     if leido.values is None:  # el motor siempre escribe un CSV legible
         rel.check(name, False, leido.problema)
         return
+    # Relación 11. v0.7 (sin run.json): buscados = evaluados y ningún no recuperado (un informe
+    # sin texto se cribaba con el resumen). Desde la Ola 1, las cajas reales del texto completo.
+    ola1 = _ola1(ctx)
     expected = {
         "database_results": c.identified,
         "duplicates": c.duplicates_removed,
         "records_screened": c.screened,
         "records_excluded": c.excluded_ta,
-        "dbr_sought_reports": c.fulltext_assessed,  # v0.7: buscados = evaluados
-        "dbr_notretrieved_reports": 0,
+        "dbr_sought_reports": c.fulltext_sought if ola1 else c.fulltext_assessed,
+        "dbr_notretrieved_reports": c.fulltext_not_retrieved if ola1 else 0,
         "dbr_assessed": c.fulltext_assessed,
         "new_studies": c.included,
     }
@@ -744,7 +1064,7 @@ def _calls(ctx: AuditContext, rel: _Relations) -> None:
     members = len(screeners) if screeners else 1
     agreement = ctx.art.artifact(AGREEMENT)
     doubles = agreement.value.n_studies if agreement.ok else 0
-    if ctx.run_info is None:
+    if not _ola1(ctx):
         # Sin run.json el motor es el v0.7, que nunca rescata textos completos: un
         # `fulltext_rescued` distinto de cero solo servía para bajar la cota (revisión de la
         # Tarea 7). Se exige cero y la cota no descuenta rescates.
@@ -771,8 +1091,16 @@ def _calls(ctx: AuditContext, rel: _Relations) -> None:
 
 
 def _metrics(ctx: AuditContext, rel: _Relations) -> None:
-    loaded = ctx.art.artifact("03_screening/metrics.json")
+    loaded = ctx.art.artifact(METRICS)
     if not loaded.present:
+        if _ola1(ctx) and ctx.art.exists(GOLD):
+            # El motor escribe gold.json y metrics.json juntos (`_screen_ta`, si hay gold):
+            # quitar las métricas no puede ser la forma de no recalcularlas.
+            rel.check(
+                "§9.3 · metrics.json junto a gold.json",
+                False,
+                f"{METRICS} ausente con {GOLD} presente (el motor escribe los dos)",
+            )
         return
     if not loaded.ok:
         rel.unverifiable("§9.3 · métricas desde la matriz", "metrics.json inválido")
@@ -801,6 +1129,39 @@ def _metrics(ctx: AuditContext, rel: _Relations) -> None:
     protocol = _seccion(ctx, rel, "protocol", name)
     if protocol is not None:
         rel.eq(name, m.wmcc_fn_weight, float(protocol.thresholds.get("wmcc_fn_weight", 10.0)))
+    if _ola1(ctx):
+        _matriz_desde_gold(ctx, rel, (tp, fp, fn, tn))
+
+
+def _matriz_desde_gold(
+    ctx: AuditContext, rel: _Relations, declarada: tuple[int, int, int, int]
+) -> None:
+    """§9.3 (F2): la matriz de ``metrics.json`` sale de ``decisions.json`` y ``gold.json``.
+
+    Recalcular las métricas desde la matriz no basta: una matriz inventada (como la κ de C3) es
+    coherente consigo misma. Desde la Ola 1 el motor escribe el gold efectivo (D6) y la matriz se
+    recalcula con la propuesta de la IA (``ensemble_label``), como ``compute_screening_metrics``:
+    con ``final_label`` mediría humano + IA.
+    """
+    name = "§9.3 · matriz == recálculo desde decisions.json y gold.json (ensemble_label, D6)"
+    gold = ctx.art.artifact(GOLD)
+    if not gold.present:
+        rel.check(name, False, f"{GOLD} ausente con {METRICS} presente (el motor escribe los dos)")
+        return
+    if not gold.ok:
+        rel.unverifiable(name, f"{GOLD} inválido (ver `schemas`)")
+        return
+    ta = ctx.art.artifact(TA)
+    if not ta.ok:
+        rel.unverifiable(name, f"{TA} ausente o inválido (ver arriba)")
+        return
+    by_id = {d.record_id: d for d in ta.value}
+    pares = [
+        (by_id[rid].ensemble_label != "exclude", truth)
+        for rid, truth in gold.value.items()
+        if rid in by_id
+    ]
+    rel.eq(name, declarada, confusion([p for p, _ in pares], [t for _, t in pares]))
 
 
 def _copies(ctx: AuditContext, rel: _Relations) -> None:
@@ -836,17 +1197,389 @@ def _copies(ctx: AuditContext, rel: _Relations) -> None:
             )
 
 
+def _clave(item: object) -> str:
+    """Forma canónica de un valor JSON, para comparar sin depender del orden de las claves."""
+    return json.dumps(item, sort_keys=True, ensure_ascii=False)
+
+
+def _sin_humanos(item: object) -> str:
+    """:func:`_clave` de un consolidado o de una salida de diario sin ``_CAMPOS_HUMANOS``."""
+    if isinstance(item, dict):
+        item = {k: v for k, v in item.items() if k not in _CAMPOS_HUMANOS}
+    return _clave(item)
+
+
+@dataclass(frozen=True)
+class _Llamadas:
+    """``llm_calls.jsonl`` para la relación 12: sus líneas en forma canónica o por qué no.
+
+    Attributes:
+        claves: :func:`_clave` de cada línea (``None`` si no se puede leer o falta).
+        ausente: el fichero no existe (el motor lo escribe antes que cualquier diario).
+    """
+
+    claves: frozenset[str] | None
+    ausente: bool = False
+
+
+def _llamadas(ctx: AuditContext) -> _Llamadas:
+    """Las llamadas de ``llm_calls.jsonl``, la fuente (D3), nunca la copia del manifiesto.
+
+    La copia la compara ``_calls``; aquí no se usa porque es YAML no confiable (una bomba de
+    alias no se puede volcar a JSON) y porque el motor escribe cada llamada en ``llm_calls.jsonl``
+    antes que en su diario.
+    """
+    if not ctx.art.exists(LLM_CALLS):
+        return _Llamadas(None, ausente=True)
+    raw = ctx.art.jsonl(LLM_CALLS)
+    if raw.value is None:
+        return _Llamadas(None)
+    return _Llamadas(frozenset(_clave(obj) for _, obj in raw.value))
+
+
+def _llamadas_esperadas(
+    stage: str, entry: JournalEntry, miembros: int | None, modo: str | None
+) -> set[int] | None:
+    """Llamadas que lleva una línea del diario de ``stage`` (relación 12; §14, fila 24c).
+
+    T/A, una por miembro del ensemble; la recuperación, ninguna; FT, extracción (ambos
+    extractores), RoB y síntesis, una. La verificación, una por cita que el juez juzga (las que
+    existen en el corpus, con su fuente) en modo ``agent`` y ninguna en los demás modos; con el
+    protocolo ilegible, cualquiera de las dos. ``None`` si no se puede saber: el protocolo no
+    declara el ensemble T/A o la salida de la verificación no valida.
+    """
+    if stage == "screening_ta":
+        return {miembros} if miembros else None
+    if stage == "fulltext_retrieval":
+        return {0}
+    if stage == "verificacion":
+        try:
+            informe = VerificationReport.model_validate(entry.output)
+        except Exception:  # fail-closed: una salida que no valida no da un número
+            return None
+        juzgadas = sum(1 for c in informe.checks if c.exists_in_corpus)
+        if modo is None:
+            return {0, juzgadas}
+        return {juzgadas} if modo == "agent" else {0}
+    return {1}
+
+
+def _diarios(ctx: AuditContext, rel: _Relations) -> None:
+    """Relación 12 de §4.4: los diarios frente a ``llm_calls.jsonl``.
+
+    Cada meta de cada línea válida aparece idéntica en ``llm_calls.jsonl``, con la etapa y el
+    registro de su línea, y cada línea lleva las llamadas que hace su etapa. Inclusión y no
+    igualdad de totales (docstring del módulo). Un diario ausente no tiene metas que comprobar:
+    su ausencia, si el motor lo escribe, la marcan la relación 13 (el consolidado sin su diario)
+    y ``stage_artifacts``.
+    """
+    llamadas = _llamadas(ctx)
+    screeners = _screeners(ctx.protocol)
+    miembros = len(screeners) if screeners else None
+    modo = ctx.protocol.grounding if ctx.protocol is not None else None
+    for stage, path in JOURNAL_PATHS.items():
+        raw = ctx.art.jsonl(path)
+        if not raw.present:
+            continue
+        name_metas = f"12 · metas de {path} en llm_calls.jsonl"
+        name_n = f"12 · llamadas por línea en {path}"
+        if raw.value is None:
+            rel.unverifiable(name_metas, f"{path} ilegible (ver `schemas`)")
+            rel.unverifiable(name_n, f"{path} ilegible (ver `schemas`)")
+            continue
+        modelos = ctx.art.jsonl_models(path)
+        revision = _revisar_diario(
+            stage, raw.value, dict(modelos.value or []), llamadas, miembros, modo
+        )
+        invalidas = f"{path} con líneas inválidas (ver `schemas`)" if modelos.error else ""
+        if revision.problemas:
+            rel.check(name_metas, False, _ids(revision.problemas))
+        elif revision.con_metas and llamadas.ausente:
+            rel.ausente(name_metas, f"{LLM_CALLS} ausente con metas en {path}")
+        elif revision.con_metas and llamadas.claves is None:
+            rel.unverifiable(name_metas, LLM_CALLS_ILEGIBLE)
+        elif invalidas:
+            rel.unverifiable(name_metas, invalidas)
+        else:
+            rel.check(name_metas, True)
+        if revision.mal_contadas:
+            rel.check(name_n, False, _ids(revision.mal_contadas))
+        elif revision.sin_saber:
+            rel.unverifiable(
+                name_n,
+                f"{revision.sin_saber} línea(s) sin número esperado de llamadas (protocolo sin "
+                "ensemble T/A o salida de verificación inválida)",
+            )
+        elif invalidas:
+            rel.unverifiable(name_n, invalidas)
+        else:
+            rel.check(name_n, True)
+
+
+@dataclass
+class _RevisionDiario:
+    """Lo que la relación 12 encontró en las líneas válidas de un diario.
+
+    Attributes:
+        problemas: líneas con una meta que no está en ``llm_calls.jsonl``, una meta de otra etapa
+            o registro, o la línea misma de otra etapa (``"línea N …"``, sin repetir).
+        mal_contadas: líneas con un número de llamadas distinto del de su etapa.
+        sin_saber: líneas cuyo número esperado de llamadas no se puede saber.
+        con_metas: alguna línea cita alguna llamada.
+    """
+
+    problemas: list[str] = field(default_factory=list)
+    mal_contadas: list[str] = field(default_factory=list)
+    sin_saber: int = 0
+    con_metas: bool = False
+
+
+def _revisar_diario(
+    stage: str,
+    lineas: list[tuple[int, Any]],
+    validas: dict[int, JournalEntry],
+    llamadas: _Llamadas,
+    miembros: int | None,
+    modo: str | None,
+) -> _RevisionDiario:
+    """Recorre las líneas de un diario para la relación 12 (las inválidas las marca ``schemas``).
+
+    Las metas se comparan en crudo (``lineas``: el JSON tal cual) y no desde el modelo: «aparece
+    idéntica» incluye los campos que ``LLMCall`` ignoraría o normalizaría.
+    """
+    revision = _RevisionDiario()
+    for numero, obj in lineas:
+        entry = validas.get(numero)
+        if entry is None:
+            continue
+        if entry.stage != stage:
+            etapa = short_text(entry.stage, limit=_LIMITE_ID)
+            revision.problemas.append(f"línea {numero} (etapa {etapa})")
+            continue
+        metas = obj.get("metas") or []
+        revision.con_metas = revision.con_metas or bool(metas)
+        for meta in metas:
+            if meta.get("stage") != stage or meta.get("record_id") != entry.record_id:
+                revision.problemas.append(f"línea {numero} (meta de otra etapa o registro)")
+            elif llamadas.claves is not None and _clave(meta) not in llamadas.claves:
+                revision.problemas.append(f"línea {numero}")
+        esperado = _llamadas_esperadas(stage, entry, miembros, modo)
+        if esperado is None:
+            revision.sin_saber += 1
+        elif len(metas) not in esperado:
+            se_esperan = "/".join(map(str, sorted(esperado)))
+            revision.mal_contadas.append(f"línea {numero}: {len(metas)} (se esperan {se_esperan})")
+    revision.problemas = list(dict.fromkeys(revision.problemas))
+    return revision
+
+
+@dataclass(frozen=True)
+class _Diario:
+    """Las salidas del diario de una etapa por registro, para la relación 13.
+
+    Attributes:
+        path: ruta del diario.
+        presente: el fichero existe.
+        legible: se pudo leer como texto (sus líneas inválidas las marca ``schemas``).
+        invalidas: alguna línea no es JSON o no valida ``JournalEntry``.
+        salidas: ``record_id → {_sin_humanos(output)}`` de las líneas válidas de su etapa.
+    """
+
+    path: str
+    presente: bool = False
+    legible: bool = False
+    invalidas: bool = False
+    salidas: dict[str, set[str]] = field(default_factory=dict)
+
+
+def _diario(ctx: AuditContext, stage: str) -> _Diario:
+    path = JOURNAL_PATHS[stage]
+    raw = ctx.art.jsonl(path)
+    if not raw.present:
+        return _Diario(path)
+    if raw.value is None:
+        return _Diario(path, presente=True)
+    modelos = ctx.art.jsonl_models(path)
+    salidas: dict[str, set[str]] = {}
+    for _, entry in modelos.value or []:
+        if entry.stage == stage:
+            salidas.setdefault(entry.record_id, set()).add(_sin_humanos(entry.output))
+    return _Diario(path, True, True, modelos.error is not None, salidas)
+
+
+def _contra_diario(
+    rel: _Relations, name: str, diario: _Diario, items: Iterable[tuple[str, object]]
+) -> None:
+    """Relación 13: cada ``(record_id, consolidado)`` coincide con una línea de su diario.
+
+    Un consolidado sin nada que respaldar se verifica (no hay registro sin línea). Con registros,
+    un diario ausente es manipulación (el motor escribe la línea antes que el consolidado), uno
+    ilegible es no verificable (``schemas``), y un registro sin línea igual es una relación rota,
+    salvo que el diario tenga líneas inválidas: la que falta podría ser una de ellas.
+    """
+    items = list(items)
+    if not items:
+        rel.check(name, True)
+        return
+    if not diario.presente:
+        rel.ausente(name, f"{diario.path} ausente con {len(items)} registro(s) consolidados")
+        return
+    if not diario.legible:
+        rel.unverifiable(name, f"{diario.path} ilegible (ver `schemas`)")
+        return
+    malos = [rid for rid, item in items if _sin_humanos(item) not in diario.salidas.get(rid, ())]
+    if malos and diario.invalidas:
+        rel.unverifiable(
+            name,
+            f"{_ids(malos)} sin línea igual; {diario.path} tiene líneas inválidas (ver `schemas`)",
+        )
+    else:
+        rel.check(name, not malos, _ids(malos))
+
+
+def _consolidado(ctx: AuditContext, rel: _Relations, path: str, name: str) -> Any | None:
+    """El consolidado ``path`` en crudo (JSON) si valida su modelo; si no, se registra por qué."""
+    if _artefacto(ctx, rel, path, name) is None:
+        return None
+    return ctx.art.json(path).value
+
+
+def _consolidados(ctx: AuditContext, rel: _Relations) -> None:
+    """Relación 13 de §4.4: cada consolidado coincide, sin campos humanos, con su diario.
+
+    Se compara el JSON en crudo (no los modelos): un campo que el modelo ignora o normaliza
+    también cuenta. Las decisiones T/A y FT pierden antes los campos humanos que añade el gate.
+    Sin diario quedan, por diseño, los no recuperados a texto completo (sin llamada a la IA,
+    relación 7) y los fallos transitorios de la recuperación, que el motor no escribe para
+    reintentarlos al reanudar (§14, fila 24a).
+    """
+    for path, stage, elegir in (
+        (TA, "screening_ta", lambda d: True),
+        (FT, "screening_ft", lambda d: d.get("fulltext_status") == "retrieved"),
+    ):
+        name = f"13 · {path} == una línea de {JOURNAL_PATHS[stage]}"
+        decisions = _consolidado(ctx, rel, path, name)
+        if decisions is not None:
+            items = [(d["record_id"], d) for d in decisions if elegir(d)]
+            _contra_diario(rel, name, _diario(ctx, stage), items)
+    name = f"13 · {RETRIEVAL} == una línea de {JOURNAL_PATHS['fulltext_retrieval']}"
+    filas = _consolidado(ctx, rel, RETRIEVAL, name)
+    if filas is not None:
+        definitivas = [
+            (f["record_id"], {k: v for k, v in f.items() if k != "record_id"})
+            for f in filas
+            if f.get("reason") not in TRANSIENT_FULLTEXT_REASONS
+        ]
+        _contra_diario(rel, name, _diario(ctx, "fulltext_retrieval"), definitivas)
+    for path, stage in ((EXTRACTIONS, "extraccion"), (ASSESSMENTS, "rob")):
+        name = f"13 · {path} == una línea de {JOURNAL_PATHS[stage]}"
+        por_estudio = _consolidado(ctx, rel, path, name)
+        if por_estudio is not None:
+            _contra_diario(rel, name, _diario(ctx, stage), por_estudio.items())
+    name = f"13 · {VERIFICATION} == una línea de {JOURNAL_PATHS['verificacion']}"
+    verification = _consolidado(ctx, rel, VERIFICATION, name)
+    if verification is not None:
+        _contra_diario(rel, name, _diario(ctx, "verificacion"), [("verificacion", verification)])
+    _documento(ctx, rel)
+    _doble_extraccion_en_diario(ctx, rel)
+
+
+def _normalizar(texto: str) -> str:
+    return texto.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _documento(ctx: AuditContext, rel: _Relations) -> None:
+    """Relación 13 para la síntesis: ``documento.md`` lleva la narrativa de su diario.
+
+    ``documento.md`` es el consolidado de la síntesis (el motor lo reescribe con la narrativa en
+    cada invocación que llega al reporte); una narrativa que no sale de ninguna línea del diario
+    no la produjo ninguna llamada registrada. Ausente o ilegible lo marca ``deliverable``.
+    """
+    path = JOURNAL_PATHS["sintesis"]
+    name = f"13 · {DOCUMENTO} contiene la narrativa de una línea de {path}"
+    texto = ctx.art.text(DOCUMENTO)
+    if not texto.ok:
+        estado = "ausente" if not texto.present else "ilegible"
+        rel.unverifiable(name, f"{DOCUMENTO} {estado} (ver `deliverable`)")
+        return
+    raw = ctx.art.jsonl(path)
+    if not raw.present:
+        rel.ausente(name, f"{path} ausente")
+        return
+    if raw.value is None:
+        rel.unverifiable(name, f"{path} ilegible (ver `schemas`)")
+        return
+    modelos = ctx.art.jsonl_models(path)
+    narrativas = [
+        e.output["narrative"]
+        for _, e in modelos.value or []
+        if e.stage == "sintesis" and isinstance(e.output.get("narrative"), str)
+    ]
+    documento = _normalizar(texto.value)
+    if any(_normalizar(n) in documento for n in narrativas):
+        rel.check(name, True)
+    elif modelos.error is not None:
+        rel.unverifiable(name, f"{path} con líneas inválidas (ver `schemas`)")
+    else:
+        rel.check(name, False, f"ninguna de las {len(narrativas)} narrativas del diario")
+
+
+def _doble_extraccion_en_diario(ctx: AuditContext, rel: _Relations) -> None:
+    """Relación 13 para el 2.º extractor: ``agreement.json`` se apoya en ``journal_2.jsonl``.
+
+    El acuerdo se calcula con una extracción por estudio del subconjunto de doble extracción, y
+    cada una deja su línea en el diario del 2.º extractor antes de escribir ``agreement.json``.
+    Sin ``agreement.json`` no hay doble extracción (si el protocolo la declara, lo marcan
+    ``§9.3`` y ``stage_artifacts``).
+    """
+    agreement = ctx.art.artifact(AGREEMENT)
+    if not agreement.present:
+        return
+    path = JOURNAL_PATHS["extraccion_2"]
+    name = f"13 · {AGREEMENT} respaldado por {path}"
+    if not agreement.ok:
+        rel.unverifiable(name, f"{AGREEMENT} inválido (ver `schemas`)")
+        return
+    ids = included_ids(ctx)
+    if ids is None:
+        rel.unverifiable(name, f"{FT} ausente o inválido")
+        return
+    subset = select_double_extraction_subset([SearchRecord(record_id=i, title="") for i in ids])
+    diario = _diario(ctx, "extraccion_2")
+    if subset and not diario.presente:
+        rel.ausente(name, f"{path} ausente con {len(subset)} estudio(s) de doble extracción")
+        return
+    if subset and not diario.legible:
+        rel.unverifiable(name, f"{path} ilegible (ver `schemas`)")
+        return
+    sin_linea = [r.record_id for r in subset if r.record_id not in diario.salidas]
+    if sin_linea and diario.invalidas:
+        rel.unverifiable(name, f"{path} con líneas inválidas (ver `schemas`)")
+    else:
+        rel.check(name, not sin_linea, f"sin línea: {_ids(sin_linea)}")
+
+
 def collect_relations(ctx: AuditContext) -> list[_Relation]:
-    """Todas las relaciones de ``arithmetic`` (la fila solo muestra las primeras de cada clase)."""
+    """Todas las relaciones de ``arithmetic`` (la fila solo muestra las primeras de cada clase).
+
+    Las familias de la Ola 1 (búsqueda y dedup, diarios, consolidados) solo con ``run.json``: sin
+    él no existen esos artefactos y se aplican las relaciones v0.7.
+    """
     rel = _Relations()
-    families: tuple[tuple[str, Callable[[AuditContext, _Relations], None]], ...] = (
+    families: list[tuple[str, Callable[[AuditContext, _Relations], None]]] = [
         ("relaciones del embudo", _funnel),
         ("relaciones de los incluidos", _included_artifacts),
         ("relaciones del CSV PRISMA2020", _csv),
         ("relaciones de las llamadas IA", _calls),
         ("relaciones de las métricas", _metrics),
         ("relaciones de las copias del manifiesto", _copies),
-    )
+    ]
+    if _ola1(ctx):
+        families[1:1] = [("relaciones de la búsqueda y el dedup", _busqueda_y_dedup)]
+        families += [
+            ("relaciones de los diarios (12)", _diarios),
+            ("relaciones de los consolidados (13)", _consolidados),
+        ]
     for family, fn in families:
         rel.guard(family, partial(fn, ctx, rel))
     return rel.items
@@ -860,7 +1593,7 @@ def check_arithmetic(ctx: AuditContext) -> Verdict:
     broken = [f"{r.name}: {r.detail}" for r in relations if r.ok is False]
     unverifiable = [f"{r.name} ({r.detail})" for r in relations if r.ok is None]
     verified = sum(1 for r in relations if r.ok)
-    mode = " (relaciones v0.7: corrida sin run.json)" if ctx.run_info is None else ""
+    mode = "" if _ola1(ctx) else " (relaciones v0.7: corrida sin run.json)"
     if broken:
         return "FAIL", f"{len(broken)} relación(es) rota(s){mode}: {_limitar(broken)}."
     if unverifiable:
