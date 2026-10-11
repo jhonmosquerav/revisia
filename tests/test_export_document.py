@@ -513,3 +513,20 @@ def test_imagen_sin_src_se_degrada_a_texto_alternativo(run_dir: Path, markdown: 
     assert all('src="' in chunk.split(">", 1)[0] for chunk in imgs)
     alt = markdown.split("[", 1)[1].split("]", 1)[0] if markdown.startswith("!") else "html crudo"
     assert f"<em>{alt}</em>" in html
+
+
+def test_el_export_incluye_la_lista_16b_de_excluidos_a_texto_completo(run_dir: Path) -> None:
+    # El ítem 16 del checklist PRISMA 2020 cita `excluidos_texto_completo.md` (16b) y el
+    # documento exportado no la incluía (revisión final de la Ola 1, C2).
+    (run_dir / "deliverable" / "excluidos_texto_completo.md").write_text(
+        "# Informes excluidos tras evaluar el texto completo\n\n"
+        "| Informe | Año | DOI | Razón | Origen |\n|---|---|---|---|---|\n"
+        "| Estudio X (`10.1/x`) | 2024 | 10.1/x | desenlace secundario | humano |\n",
+        encoding="utf-8",
+    )
+
+    html = assemble_html(run_dir)
+
+    assert "Anexo A.2" in html
+    assert "desenlace secundario" in html
+    assert html.index("Anexo A ·") < html.index("Anexo A.2") < html.index("Anexo B")

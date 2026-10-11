@@ -185,10 +185,16 @@ def _attribute_filter(tag: str, attr: str, value: str) -> str | None:
     return value
 
 
-# Anexos del deliverable, en orden de ensamblado; los ausentes se omiten.
+# Anexos del deliverable, en orden de ensamblado; los ausentes se omiten. La lista 16b
+# (`excluidos_texto_completo.md`) va junto al flujo: el ítem 16 del checklist PRISMA 2020 la
+# cita y el documento exportado no la incluía (revisión final de la Ola 1, C2).
 _SECTIONS: tuple[tuple[str, str], ...] = (
     ("prisma_flow.md", "Anexo A · Flujo de selección PRISMA 2020"),
     ("prisma_flow_updated.md", "Anexo A.1 · Flujo de actualización (living review)"),
+    (
+        "excluidos_texto_completo.md",
+        "Anexo A.2 · Informes excluidos tras evaluar el texto completo (PRISMA 2020, 16b)",
+    ),
     ("meta_analisis.md", "Anexo B · Metaanálisis"),
     ("metodologia.md", "Anexo C · Metodología detallada"),
     ("checklist_2020.md", "Anexo D · Checklist PRISMA 2020"),
