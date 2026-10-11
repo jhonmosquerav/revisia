@@ -423,6 +423,31 @@ def test_grounding_adjudicacion_de_actor_no_humano_falla(corrida) -> None:
     assert "adjudicación de un actor no humano: agent:verificador" in grounding.detail
 
 
+# Un `human:` sin nombre visible no dice quién adjudicó. «Humano» es `is_human_actor` (PR-D), la
+# misma definición del motor; con `startswith("human:")` los tres pasaban como adjudicación humana.
+# El detalle muestra el actor tal cual (los invisibles, como su escape `\uXXXX`).
+_ADJUDICA_SIN_NOMBRE = {
+    "vacio": ("human:", "human:"),
+    "espacios": ("human:   ", "human:   "),
+    "zwsp": ("human:" + chr(0x200B), "human:" + chr(92) + "u200b"),
+}
+
+
+@pytest.mark.parametrize(
+    ("actor", "mostrado"), list(_ADJUDICA_SIN_NOMBRE.values()), ids=list(_ADJUDICA_SIN_NOMBRE)
+)
+def test_grounding_adjudicacion_de_un_human_sin_nombre_visible_falla(
+    corrida, actor: str, mostrado: str
+) -> None:
+    edit_json(corrida / VERIFICATION, _citas(_cita("2019", existe=False)))
+    edit_ledger(corrida, _con_adjudicaciones(_revision(0, actor)))
+    report = auditar(corrida)
+    grounding = fila(report, "grounding")
+    assert grounding.status == "FAIL"
+    assert grounding.detail.endswith(f"adjudicación de un actor no humano: {mostrado}.")
+    assert not report.publishable
+
+
 def test_grounding_adjudicada_por_un_humano_advierte_y_no_bloquea(corrida) -> None:
     edit_json(corrida / VERIFICATION, _citas(_cita("2019", existe=False)))
     edit_ledger(corrida, _con_adjudicaciones(_revision(0)))

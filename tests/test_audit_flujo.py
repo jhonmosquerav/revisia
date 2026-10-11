@@ -610,31 +610,51 @@ def test_arithmetic_doble_extraccion_declarada_sin_fichero_ni_copia_falla(corrid
     assert relaciones[COPIA_DOBLE][0] is False
 
 
-def test_arithmetic_fulltext_rescued_sin_run_json_es_relacion_rota(corrida) -> None:
-    # Sin run.json el motor es el v0.7 y nunca rescata textos (la corrida de la Ola 1 lo tiene:
-    # se quita para auditarla con las relaciones v0.7).
-    (corrida / "run.json").unlink()
-    edit_yaml(corrida / "manifest.yml", lambda m: m["counts"].update(fulltext_rescued=1))
-    arithmetic = fila(auditar(corrida), "arithmetic")
+def test_arithmetic_corrida_v07_con_fulltext_rescued_es_relacion_rota(tmp_path) -> None:
+    # Sin run.json el motor es el v0.7 y nunca rescata textos: la corrida v0.7 de referencia
+    # (`write_legacy_v07`, la fuente realista de ese motor) no puede declarar rescates.
+    run = write_legacy_v07(tmp_path)
+    edit_yaml(run / "manifest.yml", lambda m: m["counts"].update(fulltext_rescued=1))
+    arithmetic = fila(auditar(run), "arithmetic")
     assert arithmetic.status == "FAIL"
     assert "1 relación(es) rota(s)" in arithmetic.detail
     assert f"{RESCATADOS}: 1 ≠ 0" in arithmetic.detail
 
 
-def test_arithmetic_fulltext_rescued_no_baja_la_cota_de_llamadas(corrida) -> None:
+def test_arithmetic_corrida_v07_fulltext_rescued_no_baja_la_cota_de_llamadas(tmp_path) -> None:
     # Con rescates declarados la cota bajaba y una corrida con llamadas de menos pasaba. Sin
-    # run.json (relaciones v0.7) se exige `fulltext_rescued == 0`; con run.json, contrastar los
-    # rescates declarados con los del ledger es la relación 8 de la Ola 1 (Tarea 14).
-    (corrida / "run.json").unlink()
+    # run.json (relaciones v0.7) se exige `fulltext_rescued == 0` y la cota no descuenta
+    # rescates: la v0.7 de referencia tiene 12 llamadas y 3 textos completos evaluados, así que
+    # descontarlos la bajaría a 9 y 11 llamadas pasarían.
+    run = write_legacy_v07(tmp_path)
+    edit_yaml(
+        run / "manifest.yml",
+        lambda m: m["counts"].update(fulltext_rescued=m["counts"]["fulltext_assessed"]),
+    )
+    editar_llamadas(run, lambda calls: calls[:11])
+    arithmetic = fila(auditar(run), "arithmetic")
+    assert arithmetic.status == "FAIL"
+    assert RESCATADOS in arithmetic.detail
+    assert "11 llamadas < 12" in arithmetic.detail
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Tarea 14: relación 8 (fulltext_rescued frente al ledger) y cota de llamadas",
+)
+def test_arithmetic_fulltext_rescued_con_run_json_baja_la_cota_y_no_es_publicable(corrida) -> None:
+    # Vector abierto en una corrida de la Ola 1 (con run.json): declarar todos los textos
+    # completos como rescatados baja la cota de llamadas y una corrida con llamadas de menos
+    # pasa. Hoy `arithmetic` es PASS y la corrida es publicable; la relación 8 (los rescates
+    # declarados frente a los del ledger) y la cota de llamadas de la Tarea 14 lo cierran.
     edit_yaml(
         corrida / "manifest.yml",
         lambda m: m["counts"].update(fulltext_rescued=m["counts"]["fulltext_assessed"]),
     )
     editar_llamadas(corrida, lambda calls: calls[:23])
-    arithmetic = fila(auditar(corrida), "arithmetic")
-    assert arithmetic.status == "FAIL"
-    assert RESCATADOS in arithmetic.detail
-    assert "23 llamadas < 24" in arithmetic.detail
+    report = auditar(corrida)
+    assert report.publishable is False
+    assert fila(report, "arithmetic").status == "FAIL"
 
 
 def test_arithmetic_manifiesto_sin_models_used_falla(corrida) -> None:

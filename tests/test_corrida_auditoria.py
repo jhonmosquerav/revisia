@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 
+import pytest
 import yaml
 
-from revisia.schemas.artifacts import RunInfo
+from revisia.schemas.artifacts import GATED_STAGES, RunInfo
 
 
 def _ledger(run) -> list[dict]:
@@ -59,3 +60,11 @@ def test_corrida_en_pausa_ft_se_detuvo_en_el_gate_de_texto_completo(corrida_en_p
     assert not (corrida_en_pausa_ft / "screening_ft" / "decision.yml").exists()
     assert not (corrida_en_pausa_ft / "manifest.yml").exists()
     assert [e["stage"] for e in _ledger(corrida_en_pausa_ft)] == ["screening_ta"]
+
+
+def test_detener_corrida_con_los_cinco_gates_aprobados_no_tiene_donde_detenerse(
+    detener_corrida,
+) -> None:
+    # La corrida completada es la fixture `corrida`: antes era un `IndexError` sin explicación.
+    with pytest.raises(ValueError, match="la corrida completada es la fixture `corrida`"):
+        detener_corrida(aprobados=GATED_STAGES)

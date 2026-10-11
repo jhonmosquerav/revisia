@@ -634,6 +634,73 @@ def test_short_text_escapa_el_sustituto_suelto_en_vez_de_perderlo() -> None:
     assert short_text("a\ud800b") == "a\\ud800b"
 
 
+# Caracteres que un detalle no puede imprimir crudos: no se ven (Cf, Cc), parten la fila de la
+# tabla de `audit.md` (Zl, Zp, controles) o no significan nada para el lector (Co). Cada uno
+# se muestra como su escape; los de fuera del plano básico llevan 8 cifras.
+_BARRA = chr(92)
+_INVISIBLES = {
+    "zwsp": (0x200B, "u200b"),
+    "lrm": (0x200E, "u200e"),
+    "rlm": (0x200F, "u200f"),
+    "lre": (0x202A, "u202a"),
+    "rle": (0x202B, "u202b"),
+    "pdf": (0x202C, "u202c"),
+    "lro": (0x202D, "u202d"),
+    "rlo": (0x202E, "u202e"),
+    "lri": (0x2066, "u2066"),
+    "rli": (0x2067, "u2067"),
+    "fsi": (0x2068, "u2068"),
+    "pdi": (0x2069, "u2069"),
+    "bom": (0xFEFF, "ufeff"),
+    "guion-blando": (0x00AD, "u00ad"),
+    "nul": (0x00, "u0000"),
+    "salto-de-linea": (0x0A, "u000a"),
+    "tabulador": (0x09, "u0009"),
+    "del": (0x7F, "u007f"),
+    "control-c1-nel": (0x85, "u0085"),
+    "separador-de-linea": (0x2028, "u2028"),
+    "separador-de-parrafo": (0x2029, "u2029"),
+    "uso-privado": (0xE000, "ue000"),
+    "etiqueta-fuera-del-plano-basico": (0xE0001, "U000e0001"),
+}
+
+
+@pytest.mark.parametrize(("codigo", "escape"), list(_INVISIBLES.values()), ids=list(_INVISIBLES))
+def test_short_text_muestra_los_caracteres_invisibles_como_escape_visible(
+    codigo: int, escape: str
+) -> None:
+    # `human:` + U+200B se leía `human:` en `audit.md`: el detalle mentía sobre lo que se auditó.
+    assert short_text("human:" + chr(codigo)) == "human:" + _BARRA + escape
+    assert short_text(chr(codigo) + "fin") == _BARRA + escape + "fin"
+    assert chr(codigo) not in short_text("a" + chr(codigo) + "b")
+
+
+def test_short_text_deja_intacto_el_texto_corriente_no_ascii() -> None:
+    for texto in ("Educación inclusiva: año 2026", "naïve — «cribado» ñandú", "ok ✓ 🎓 評価"):
+        assert short_text(texto) == texto
+        assert short_text(texto, limit=len(texto)) == texto
+
+
+@pytest.mark.parametrize("limite", [1, 2, 5, 6, 7, 50, 120])
+def test_short_text_con_escapes_nunca_pasa_del_limite(limite: int) -> None:
+    # El escape alarga el texto (1 → 6 caracteres): se recorta después de escapar, por piezas
+    # enteras, para que el límite sea exacto y un escape no quede partido.
+    for texto in (chr(0x200B) * 10_000, "ab" + chr(0x202E) * 500, "\ud800" * 300, "x" * 999):
+        recortado = short_text(texto, limit=limite)
+        assert len(recortado) <= limite
+        recortado.encode("utf-8")
+
+
+def test_short_text_recorta_los_escapes_por_piezas_enteras() -> None:
+    escape = _BARRA + "u200b"
+    # 19 escapes (114 caracteres) + «…» = 115; un vigésimo (120) pasaría de los 119 útiles.
+    assert short_text(chr(0x200B) * 10_000) == escape * 19 + "…"
+    # 20 escapes miden justo 120: caben enteros, sin «…».
+    assert short_text(chr(0x200B) * 20) == escape * 20
+    assert short_text(chr(0x200B) * 21) == escape * 19 + "…"
+    assert short_text("ab" + chr(0x200B) * 50, limit=10) == "ab" + escape + "…"
+
+
 def test_ledger_con_separadores_unicode_en_el_texto_conserva_la_entrada(corrida) -> None:
     """``str.splitlines`` también corta en U+2028/U+2029/U+0085; el ledger los escribe tal cual."""
     ruta = corrida / "decisions_ledger.jsonl"

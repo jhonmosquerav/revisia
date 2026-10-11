@@ -245,11 +245,18 @@ def detener_corrida(
     entregable todavía no existen (spec 2026-10-04 §4.2), y lo que el auditor exige de ellas
     no puede inventarse editando una corrida terminada. ``aprobados`` son los primeros gates de
     ``GATED_STAGES``, en orden: el pipeline no puede decidir un gate sin pasar por los previos.
+    Con los cinco aprobados no queda ningún gate donde detenerse (``ValueError``): esa es la
+    corrida completada, la fixture ``corrida``.
     """
 
     def _detener(*, aprobados: Sequence[str], rechazar: str | None = None) -> Path:
         aprobados = tuple(aprobados)
         assert aprobados == GATED_STAGES[: len(aprobados)], f"no es un prefijo: {aprobados}"
+        if len(aprobados) == len(GATED_STAGES):
+            raise ValueError(
+                "con los cinco gates aprobados no queda ninguno donde detenerse: la corrida "
+                "completada es la fixture `corrida`"
+            )
         siguiente = GATED_STAGES[len(aprobados)]
         assert rechazar in (None, siguiente), f"solo se rechaza `{siguiente}`, no `{rechazar}`"
         return _correr(

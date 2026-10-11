@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import reprlib
+import unicodedata
 from dataclasses import dataclass
 from datetime import date
 from functools import cached_property
@@ -178,20 +179,49 @@ _SHORT_REPR.maxlist = _SHORT_REPR.maxtuple = _SHORT_REPR.maxdict = _SHORT_REPR.m
 _SHORT_REPR.maxstring = _SHORT_REPR.maxother = 60
 
 
+# Categorías Unicode que un detalle del informe no debe imprimir crudas: las marcas de formato
+# (Cf: U+200B, U+200E/F, U+202A-E, U+2066-9, U+FEFF…) y los controles (Cc) no se ven, así que
+# `human:` + U+200B se leería como `human:`; los separadores de línea y de párrafo (Zl, Zp:
+# U+2028/U+2029) y los controles parten la fila de la tabla de `audit.md`; los sustitutos sueltos
+# (Cs) ni siquiera codifican a UTF-8; y los de uso privado (Co) no significan nada para el lector.
+_NO_VISIBLES = frozenset({"Cc", "Cf", "Cs", "Co", "Zl", "Zp"})
+
+
+def _visible(caracter: str) -> str:
+    """``caracter`` tal cual, o su escape ``\\uXXXX`` (``\\UXXXXXXXX`` fuera del plano básico)."""
+    if unicodedata.category(caracter) not in _NO_VISIBLES:
+        return caracter
+    codigo = ord(caracter)
+    return f"\\u{codigo:04x}" if codigo <= 0xFFFF else f"\\U{codigo:08x}"
+
+
 def _acotar(text: str, limit: int) -> str:
-    """``text`` recortado a ``limit`` y siempre codificable en UTF-8.
+    """``text`` recortado a ``limit``, visible y siempre codificable en UTF-8.
 
     Un JSON con ``"\\ud800"`` (un sustituto suelto, U+D800) deja en la cadena un carácter
     que ``str`` admite pero que ``write_text(..., encoding="utf-8")`` rechaza con
     ``UnicodeEncodeError``: ``revisia audit`` moría al escribir ``audit.md`` (revisión de la
-    Tarea 6). Se escapa el sustituto (``backslashreplace``) **después** de recortar, para que
-    el coste siga acotado por ``limit``, y se recorta otra vez porque el escape alarga el
-    texto (1 → 6 caracteres).
+    Tarea 6). Y un carácter que no se ve (``human:`` + U+200B) o que parte la línea (U+2028)
+    haría que el detalle mintiera sobre lo que el auditor leyó (revisión de la Tarea 11).
+    Cada uno se muestra como un escape visible (:func:`_visible`); el texto corriente (acentos,
+    emoji) queda intacto. Se recorta **antes** de escapar, para que el coste siga acotado por
+    ``limit``, y otra vez después, por piezas enteras (un escape no se parte), porque el
+    escape alarga el texto (1 → 6 caracteres): el resultado nunca pasa de ``limit``.
     """
-    if len(text) > limit:
-        text = text[: limit - 1] + "…"
-    seguro = text.encode("utf-8", "backslashreplace").decode("utf-8")
-    return seguro if len(seguro) <= limit else seguro[: limit - 1] + "…"
+    recortado = len(text) > limit
+    if recortado:
+        text = text[:limit]
+    piezas = [_visible(caracter) for caracter in text]
+    if not recortado and sum(map(len, piezas)) <= limit:
+        return "".join(piezas)
+    salida: list[str] = []
+    usado = 0
+    for pieza in piezas:
+        if usado + len(pieza) > limit - 1:
+            break
+        salida.append(pieza)
+        usado += len(pieza)
+    return "".join(salida) + "…"
 
 
 def short_repr(value: object, *, limit: int = 120) -> str:
