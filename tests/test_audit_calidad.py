@@ -159,6 +159,38 @@ def test_thresholds_kappa_min_no_medible_advierte_sin_lanzar(corrida, umbral: fl
     assert len(thresholds.detail) < 400
 
 
+def test_thresholds_de_un_protocolo_que_no_valida_se_leen_en_crudo(corrida) -> None:
+    # Desde PR-D `ReviewProtocol` rechaza al cargar un umbral fuera de rango: el protocolo entero
+    # deja de validar (FAIL en `schemas`), pero `thresholds` no se queda en un N/A que oculte qué
+    # umbral no se puede medir.
+    editar_protocolo(corrida, lambda p: p.update(thresholds={"recall_target": 1.5}))
+    report = auditar(corrida)
+    thresholds = fila(report, "thresholds")
+    assert thresholds.status == "WARN"
+    assert "recall_target 1.5 no medible (debe ser un número en (0, 1])" in thresholds.detail
+    assert "leídos del manifiesto en crudo: el protocolo no valida" in thresholds.detail
+    assert fila(report, "schemas").status == "FAIL"
+    assert not report.publishable
+
+
+@pytest.mark.parametrize(
+    "umbrales",
+    [
+        pytest.param({"recall_target": "alto"}, id="texto"),
+        pytest.param({"recall_target": None}, id="nulo"),
+        pytest.param({"kappa_min": 10**400}, id="entero-que-no-cabe-en-un-float"),
+        pytest.param({"recall_target": 0.95, 5: 0.1, "z": 1}, id="clave-no-textual"),
+    ],
+)
+def test_thresholds_crudos_hostiles_advierten_sin_lanzar(corrida, umbrales: dict) -> None:
+    editar_protocolo(corrida, lambda p: p.update(thresholds=umbrales))
+    thresholds = fila(auditar(corrida), "thresholds")
+    assert thresholds.status == "WARN"
+    assert "error interno" not in thresholds.detail
+    assert "leídos del manifiesto en crudo" in thresholds.detail
+    assert len(thresholds.detail) < 400
+
+
 def test_thresholds_decide_con_el_recall_de_la_matriz_y_no_con_el_guardado(corrida) -> None:
     # Revisión de la fase 1 de PR-E: el IC de Wilson y los positivos ya salían de la matriz, pero
     # la decisión usaba el `recall` de `metrics.json`: un 1.0 guardado con una matriz que da 0.25

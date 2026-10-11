@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import math
 import re
+from typing import Any
 
 from revisia.audit.artifacts import NA_PROTOCOLO, AuditContext, short_repr, short_text
 from revisia.audit.checks_flow import TA, included_ids
@@ -46,6 +47,8 @@ _LIMITE_DECIMAL = 1e15  # un float de módulo mayor deja la notación decimal (`
 _TOLERANCIA_RANGO = 1e-9  # holgura del redondeo de coma flotante en los límites de κ y MCC
 _LIMITE_ID = 60  # caracteres de un id de cita, una clave o un actor
 _BANDERA = re.compile(r"flag:([0-9]{1,9})", re.ASCII)  # objetivo de una `flag_review`
+# Sufijo de `thresholds` cuando el protocolo no valida y los umbrales salen del mapa crudo.
+_NOTA_CRUDOS = " (leídos del manifiesto en crudo: el protocolo no valida, ver `schemas`)"
 
 
 def _num(value: object, spec: str = ".3f") -> str:
@@ -173,14 +176,31 @@ def _ic(k: int, n: int) -> str:
     return f"[IC95 {interval[0]:.2f}–{interval[1]:.2f}]"
 
 
+def _como_umbral(value: object) -> float | None:
+    """Un umbral del protocolo como número finito; ``None`` si no lo es.
+
+    Leído del manifiesto en crudo (:func:`_umbrales`), un umbral puede ser ``nan``, ``inf``,
+    texto, un booleano o un entero que no cabe en un float: ninguno se puede medir y ninguno
+    puede lanzar (``math.isfinite`` de un entero enorme es un ``OverflowError``).
+    """
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    try:
+        number = float(value)
+    except OverflowError:
+        return None
+    return number if math.isfinite(number) else None
+
+
 def _recall(
-    ctx: AuditContext, m: ScreeningMetrics | None, why: str, target: float
+    ctx: AuditContext, m: ScreeningMetrics | None, why: str, declarado: object
 ) -> tuple[str, str]:
     """``(estado, texto)`` de ``recall_target`` frente a las métricas validadas (D7)."""
-    if not math.isfinite(target) or not 0 < target <= 1:
+    target = _como_umbral(declarado)
+    if target is None or not 0 < target <= 1:
         return "WARN", (
-            f"recall_target {short_repr(target, limit=_LIMITE_NUMERO)} no medible (debe ser un "
-            "número en (0, 1])"
+            f"recall_target {short_repr(declarado, limit=_LIMITE_NUMERO)} no medible (debe ser "
+            "un número en (0, 1])"
         )
     objetivo = f"{target:.2f}"
     if m is None:
@@ -224,11 +244,12 @@ def _recall(
     return "PASS", f"{recall} ≥ {objetivo} con {_num(positives)} positivos"
 
 
-def _kappa(m: ScreeningMetrics | None, why: str, minimo: float) -> tuple[str, str]:
+def _kappa(m: ScreeningMetrics | None, why: str, declarado: object) -> tuple[str, str]:
     """``(estado, texto)`` de ``kappa_min``: un κ bajo es una desviación a declarar (WARN)."""
-    if not math.isfinite(minimo) or not 0 <= minimo <= 1:
+    minimo = _como_umbral(declarado)
+    if minimo is None or not 0 <= minimo <= 1:
         return "WARN", (
-            f"kappa_min {short_repr(minimo, limit=_LIMITE_NUMERO)} no medible (debe ser un "
+            f"kappa_min {short_repr(declarado, limit=_LIMITE_NUMERO)} no medible (debe ser un "
             "número en [0, 1])"
         )
     objetivo = f"{minimo:.2f}"
@@ -249,25 +270,44 @@ def _kappa(m: ScreeningMetrics | None, why: str, minimo: float) -> tuple[str, st
     return "PASS", f"κ {kappa:.2f} ≥ {objetivo}"
 
 
+def _umbrales(ctx: AuditContext) -> tuple[dict[Any, Any], bool] | None:
+    """``thresholds`` del protocolo registrado y si se leyeron del manifiesto en crudo.
+
+    Con el protocolo válido, los validados. Desde PR-D ``ReviewProtocol`` rechaza al cargar
+    un umbral no finito o fuera de rango, así que un manifiesto con ``recall_target: .nan``
+    deja inválido el protocolo entero (el FAIL lo da ``schemas``) y el umbral pasaba a N/A:
+    entonces se lee el mapa ``thresholds`` crudo, para que cada umbral siga recibiendo su WARN
+    «no medible» (D7). ``None`` si tampoco hay eso: sin manifiesto legible, sin ``protocol``
+    o sin un mapa ``thresholds`` en él (la causa la da otra fila).
+    """
+    if ctx.protocol is not None:
+        return dict(ctx.protocol.thresholds), False
+    protocolo = (ctx.manifest_dict or {}).get("protocol")
+    crudos = protocolo.get("thresholds") if isinstance(protocolo, dict) else None
+    return (crudos, True) if isinstance(crudos, dict) else None
+
+
 def check_thresholds(ctx: AuditContext) -> Verdict:
     """trAIce M9/R2 / PRISMA 8, 24c: umbrales del protocolo según lo que miden (D7)."""
-    if ctx.protocol is None:
+    umbrales = _umbrales(ctx)
+    if umbrales is None:
         # Sin protocolo no hay umbrales que contrastar: es un N/A como en `search_window` y
         # `registration`, y el FAIL lo da la fila que explica por qué (`manifest` o `schemas`).
         return "N/A", NA_PROTOCOLO
-    thresholds = ctx.protocol.thresholds
+    thresholds, crudos = umbrales
     resultados: dict[str, list[str]] = {"FAIL": [], "WARN": [], "PASS": []}
 
-    unknown = sorted(set(thresholds) - KNOWN_THRESHOLDS)
+    # Las claves del mapa crudo pueden no ser texto (YAML `5:`): se ordenan ya acotadas.
+    unknown = sorted(
+        f"`{short_text(k, limit=_LIMITE_ID)}`" for k in thresholds if k not in KNOWN_THRESHOLDS
+    )
     if unknown:
-        claves = _con_resto([f"`{short_text(k, limit=_LIMITE_ID)}`" for k in unknown], _MAX_CLAVES)
         resultados["WARN"].append(
-            f"clave(s) desconocida(s) en thresholds: {claves} "
+            f"clave(s) desconocida(s) en thresholds: {_con_resto(unknown, _MAX_CLAVES)} "
             f"(¿errata? se entienden {', '.join(sorted(KNOWN_THRESHOLDS))})"
         )
-    recall_target = thresholds.get("recall_target")
-    kappa_min = thresholds.get("kappa_min")
-    if recall_target is None and kappa_min is None:
+    # Por presencia y no por valor: un `recall_target: null` crudo está declarado y no se mide.
+    if "recall_target" not in thresholds and "kappa_min" not in thresholds:
         resultados["WARN"].append(
             "ningún umbral declarado: declara al menos `recall_target` en el protocolo"
         )
@@ -276,19 +316,20 @@ def check_thresholds(ctx: AuditContext) -> Verdict:
     m: ScreeningMetrics | None = loaded.value if loaded.ok else None
     why = "sin gold" if not loaded.present else "metrics.json no válido"
 
-    if recall_target is not None:
-        estado, texto = _recall(ctx, m, why, recall_target)
+    if "recall_target" in thresholds:
+        estado, texto = _recall(ctx, m, why, thresholds["recall_target"])
         resultados[estado].append(texto)
-    if kappa_min is not None:
-        estado, texto = _kappa(m, why, kappa_min)
+    if "kappa_min" in thresholds:
+        estado, texto = _kappa(m, why, thresholds["kappa_min"])
         resultados[estado].append(texto)
 
     fails, warns, passes = resultados["FAIL"], resultados["WARN"], resultados["PASS"]
+    nota = _NOTA_CRUDOS if crudos else ""
     if fails:
-        return "FAIL", "; ".join(fails + warns + passes) + "."
+        return "FAIL", "; ".join(fails + warns + passes) + nota + "."
     if warns:
-        return "WARN", "; ".join(warns + passes) + "."
-    return "PASS", "; ".join(passes) + "."
+        return "WARN", "; ".join(warns + passes) + nota + "."
+    return "PASS", "; ".join(passes) + nota + "."
 
 
 def _adjudications(ctx: AuditContext) -> dict[int, list[str]]:
