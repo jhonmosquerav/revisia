@@ -16,8 +16,11 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
+import sys
+import tracemalloc
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -49,12 +52,14 @@ from hitl_helpers import correr_hasta, leer_solicitud, responder_gate
 
 from revisia.audit import CHECKS
 from revisia.audit.artifacts import AuditContext, load_run
-from revisia.audit.checks_hitl import effective_autonomy
+from revisia.audit.checks_hitl import _hash_acotado, effective_autonomy
 from revisia.config import load_protocol
 from revisia.llm.registry import ProviderConfig
 from revisia.orchestration import pipeline as pipeline_mod
+from revisia.orchestration.hitl import HumanDecision, dump_yaml
 from revisia.orchestration.pipeline import FetchFn, PipelineResult, run_pipeline
 from revisia.orchestration.run_context import RunContext
+from revisia.provenance.runmeta import canonical_sha256
 
 TA = "03_screening/decisions.json"
 FT = "04_fulltext/decisions.json"
@@ -233,11 +238,103 @@ def test_request_hash_decision_yml_de_otra_solicitud_falla(corrida) -> None:
     assert "`rob`: decision.yml responde a otra solicitud" in request.detail
 
 
-def test_request_hash_decision_humana_sin_decision_yml_falla(corrida) -> None:
+def test_request_hash_sin_decision_yml_se_reconstruye_del_ledger(corrida) -> None:
+    # `decision.yml` es solo el canal de entrada: el motor reanuda aunque se borre (reconstruye
+    # la decisión del ledger) y el auditor recalcula el `decision_sha256` del mismo modo.
     (corrida / "rob" / "decision.yml").unlink()
     request = fila(auditar(corrida), "request_hash")
+    assert request.status == "PASS"
+    assert "decision.yml ausente en `rob`: reconstruida del ledger" in request.detail
+
+
+def test_request_hash_corrida_real_sin_ningun_decision_yml_sigue_publicable(corrida) -> None:
+    # Cinco gates humanos, entre ellos el de texto completo con sus etiquetas por registro: la
+    # decisión se reconstruye (records y flags salen de las `label` y `flag_review` del ledger).
+    assert auditar(corrida).publishable
+    borrados = sorted(corrida.glob("*/decision.yml"))
+    assert len(borrados) == 5
+    for decision in borrados:
+        decision.unlink()
+    report = auditar(corrida)
+    request = fila(report, "request_hash")
+    assert request.status == "PASS", request.detail
+    assert "reconstruida del ledger" in request.detail
+    assert report.n_fail == 0
+    assert report.publishable
+
+
+def test_request_hash_cita_marcada_sin_decision_yml_reconstruye_las_adjudicaciones(
+    corrida_con_cita_marcada,
+) -> None:
+    (corrida_con_cita_marcada / "reporte" / "decision.yml").unlink()
+    report = auditar(corrida_con_cita_marcada)
+    assert fila(report, "request_hash").status == "PASS"
+    assert report.publishable
+
+
+def test_request_hash_sin_decision_yml_y_ledger_alterado_advierte(corrida) -> None:
+    # Sin el fichero, lo único que se puede recalcular es la decisión que el ledger describe:
+    # si el ledger se tocó, ya no es la que se hasheó y el hash no se puede comprobar.
+    (corrida / "rob" / "decision.yml").unlink()
+
+    def _tocar(entries: list[dict]) -> None:
+        entries[_indice(entries, "rob", "approve")]["detail"]["reason"] = "otra razón"
+
+    edit_ledger(corrida, _tocar)
+    request = fila(auditar(corrida), "request_hash")
+    assert request.status == "WARN"
+    assert "`rob`: decision_sha256 no recalculable sin decision.yml" in request.detail
+
+
+def test_request_hash_con_decision_yml_presente_el_hash_distinto_sigue_fallando(corrida) -> None:
+    edit_yaml(corrida / "rob" / "decision.yml", lambda d: d.update(reason="otra razón"))
+    request = fila(auditar(corrida), "request_hash")
     assert request.status == "FAIL"
-    assert "`rob`: decisión humana sin decision.yml" in request.detail
+    assert "`rob`: decision.yml no es la decisión registrada en el ledger" in request.detail
+
+
+def test_request_hash_decision_yml_con_una_fecha_extra_se_hashea_como_el_motor(corrida) -> None:
+    # `HumanDecision` conserva los campos extra y su volcado JSON convierte una fecha YAML sin
+    # comillas en texto: el motor hashea esa decisión y escribe la fecha como texto en el ledger.
+    # El crudo del fichero no es JSON, pero el auditor hashea lo mismo que el motor.
+    path = corrida / "rob" / "decision.yml"
+    path.write_text(path.read_text(encoding="utf-8") + "revisada: 2026-10-04\n", encoding="utf-8")
+    decision = HumanDecision.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))
+
+    def _registrar(entries: list[dict]) -> None:
+        detail = entries[_indice(entries, "rob", "approve")]["detail"]
+        detail.update(decision_sha256=canonical_sha256(decision.model_dump(mode="json")))
+        detail["revisada"] = "2026-10-04"
+
+    edit_ledger(corrida, _registrar)
+    assert fila(auditar(corrida), "request_hash").status == "PASS"
+    path.unlink()  # y sin el fichero, el ledger la rehace igual
+    request = fila(auditar(corrida), "request_hash")
+    assert request.status == "PASS"
+    assert "decision.yml ausente en `rob`: reconstruida del ledger" in request.detail
+
+
+def test_request_hash_sin_decision_yml_de_un_rechazo_real_se_reconstruye(detener_corrida) -> None:
+    # Un `reject` no lleva etiquetas: la decisión es `approved: false` con su actor y su razón.
+    run = detener_corrida(aprobados=("screening_ta", "screening_ft", "extraccion"), rechazar="rob")
+    assert (run / "rob" / "decision.yml").exists()
+    (run / "rob" / "decision.yml").unlink()
+    request = fila(auditar(run), "request_hash")
+    assert request.status != "FAIL", request.detail
+    assert "decision.yml ausente en `rob`: reconstruida del ledger" in request.detail
+
+
+def test_request_hash_sin_decision_yml_con_el_sentido_alterado_advierte(corrida) -> None:
+    # La acción del ledger decide `approved`: un `approve` convertido en `reject` ya no es la
+    # decisión que se hasheó.
+    def _rechazar(entries: list[dict]) -> None:
+        entries[_indice(entries, "rob", "approve")]["action"] = "reject"
+
+    edit_ledger(corrida, _rechazar)
+    (corrida / "rob" / "decision.yml").unlink()
+    request = fila(auditar(corrida), "request_hash")
+    assert request.status == "WARN"
+    assert "`rob`: decision_sha256 no recalculable sin decision.yml" in request.detail
 
 
 def test_request_hash_etiqueta_fuera_de_la_solicitud_falla(corrida) -> None:
@@ -325,6 +422,132 @@ def test_request_hash_bomba_de_alias_no_cuelga_el_auditor(corrida, fichero: str)
     assert len(detalle) < 1_500
     assert [i for i, (_, d) in filas.items() if "error interno" in d] == []
     assert len(filas) == len(CHECKS)
+
+
+# Una bomba de *cadenas*: pocos nodos (el tope por nodos no la ve) y muchos bytes, porque el
+# volcado a JSON expande la cadena anclada una vez por cada alias. 24 KB × 2 500 alias = 60 MB.
+_RAIZ_DEL_REPO = Path(__file__).resolve().parent.parent
+_PICO_MAXIMO = 50 * 2**20  # bytes de memoria que puede asignar una auditoría de una corrida chica
+_ALIAS_QUE_SE_EXPANDEN = "estructura YAML con alias que se expanden más allá del tamaño del fichero"
+_SCRIPT_MEDIDO = (
+    "import json, sys, tracemalloc\n"
+    "from revisia.audit import run_audit\n"
+    "tracemalloc.start()\n"
+    "informe = run_audit(sys.argv[1])\n"
+    "pico = tracemalloc.get_traced_memory()[1]\n"
+    "filas = [[c.check_id, c.status, c.detail] for c in informe.checks]\n"
+    "print(json.dumps({'pico': pico, 'filas': filas}))\n"
+)
+
+
+def _auditar_midiendo(
+    corrida: Path, *, timeout: int = 120
+) -> tuple[int, dict[str, tuple[str, str]]]:
+    """``run_audit`` en un subproceso con ``tracemalloc``: (pico de memoria, filas)."""
+    proceso = subprocess.run(
+        [sys.executable, "-c", _SCRIPT_MEDIDO, str(corrida)],
+        cwd=_RAIZ_DEL_REPO,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    assert proceso.returncode == 0, f"el auditor murió: {proceso.stderr[-500:]}"
+    datos = json.loads(proceso.stdout)
+    return datos["pico"], {i: (estado, detalle) for i, estado, detalle in datos["filas"]}
+
+
+def test_auditoria_de_una_corrida_real_cabe_en_el_pico_de_memoria(corrida) -> None:
+    # La referencia de los tests siguientes: lo que asigna una auditoría limpia.
+    pico, filas = _auditar_midiendo(corrida)
+    assert pico < _PICO_MAXIMO // 2, pico
+    assert filas["request_hash"][0] == "PASS"
+
+
+def test_request_hash_bomba_de_cadenas_ancladas_en_la_solicitud_no_agota_la_memoria(
+    corrida,
+) -> None:
+    path = corrida / "rob" / "review_request.yml"
+    extra = f'zz_s: &s "{"x" * (24 * 1024)}"\nzz_l: [' + ", ".join(["*s"] * 2_500) + "]\n"
+    path.write_text(path.read_text(encoding="utf-8") + extra, encoding="utf-8")
+    pico, filas = _auditar_midiendo(corrida)
+    estado, detalle = filas["request_hash"]
+    assert estado == "FAIL"
+    assert (
+        f"`rob`: el contenido de la solicitud no se puede hashear ({_ALIAS_QUE_SE_EXPANDEN})"
+        in (detalle)
+    )
+    assert pico < _PICO_MAXIMO, pico
+    assert [i for i, (_, d) in filas.items() if "error interno" in d] == []
+    assert len(filas) == len(CHECKS)
+
+
+def test_request_hash_bomba_anidada_de_cadenas_en_la_decision_no_agota_la_memoria(corrida) -> None:
+    # `HumanDecision` conserva los campos extra: 8 KB anclados y cuatro niveles de `*b × 9`
+    # son 6 561 copias de la cadena (54 MB) en un fichero de 9 KB.
+    path = corrida / "rob" / "decision.yml"
+    extra = f'zz_s: &b0 "{"x" * (8 * 1024)}"\n' + "".join(
+        f"zz_{i}: &b{i} [{', '.join([f'*b{i - 1}'] * 9)}]\n" for i in range(1, 5)
+    )
+    path.write_text(path.read_text(encoding="utf-8") + extra, encoding="utf-8")
+    pico, filas = _auditar_midiendo(corrida)
+    estado, detalle = filas["request_hash"]
+    assert estado == "FAIL"
+    assert f"`rob`: decision.yml no se puede hashear ({_ALIAS_QUE_SE_EXPANDEN})" in detalle
+    assert pico < _PICO_MAXIMO, pico
+    assert [i for i, (_, d) in filas.items() if "error interno" in d] == []
+    assert len(filas) == len(CHECKS)
+
+
+def test_hash_acotado_rechaza_la_expansion_de_cadenas_sin_construirla() -> None:
+    cadena = "x" * (32 * 1024)
+    valor = {"zz_l": [cadena] * 5_000}  # 5 000 alias de una misma cadena: 160 MB al volcar
+    tracemalloc.start()
+    try:
+        resultado = _hash_acotado(valor, texto="zz_l: [*s, *s]\n")
+        pico = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert resultado == (None, _ALIAS_QUE_SE_EXPANDEN)
+    assert pico < 5 * 2**20, pico
+
+
+def test_hash_acotado_cuenta_los_bytes_de_las_claves() -> None:
+    clave = "k" * (32 * 1024)
+    valor = {"zz_l": [{clave: 1}] * 5_000}  # la clave anclada también se repite al volcar
+    assert _hash_acotado(valor, texto="zz_l: [*m, *m]\n") == (None, _ALIAS_QUE_SE_EXPANDEN)
+
+
+def test_hash_acotado_valor_que_no_es_json_dice_que_no_es_json() -> None:
+    assert _hash_acotado({"f": date(2026, 10, 4)}, texto="f: 2026-10-04\n") == (
+        None,
+        "valores que no son JSON",
+    )
+
+
+def test_hash_acotado_de_los_ficheros_del_motor_es_el_canonico(
+    corrida, corrida_con_cita_marcada
+) -> None:
+    ficheros = [
+        path
+        for run in (corrida, corrida_con_cita_marcada)
+        for patron in ("*/review_request.yml", "*/decision.yml")
+        for path in sorted(run.glob(patron))
+    ]
+    assert len(ficheros) == 20
+    for path in ficheros:
+        texto = path.read_text(encoding="utf-8")
+        valor = yaml.safe_load(texto)
+        assert _hash_acotado(valor, texto=texto) == (canonical_sha256(valor), ""), path
+
+
+def test_hash_acotado_acepta_el_alias_que_escribe_el_motor() -> None:
+    # En FT A1 `must_label` y `must_resolve` son la misma lista: `dump_yaml` la ancla y la
+    # copia solo duplica su JSON. Aun con miles de ids, el volcado cabe en el tamaño del fichero.
+    unclear = [f"10.1000/registro-{n:05d}" for n in range(3_000)]
+    texto = dump_yaml({"stage": "screening_ft", "must_label": unclear, "must_resolve": unclear})
+    assert "&id001" in texto and "*id001" in texto
+    valor = yaml.safe_load(texto)
+    assert _hash_acotado(valor, texto=texto) == (canonical_sha256(valor), "")
 
 
 def test_request_hash_corrida_v07_no_aplica(tmp_path) -> None:

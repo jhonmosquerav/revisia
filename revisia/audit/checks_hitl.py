@@ -22,8 +22,10 @@ líneas de diario obsoletas: lo que el humano aprobó es lo que hay en disco.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterable
+from dataclasses import dataclass, field
 from typing import Any
 
 from revisia.audit.artifacts import AuditContext, short_repr, short_text
@@ -58,11 +60,16 @@ ARTEFACTOS_APROBADOS = {"extraccion": EXTRACTIONS, "rob": ASSESSMENTS}
 _ACTOR_POR_DEFECTO: str = HumanDecision.model_fields["actor"].default
 # Objetivo de una `flag_review`: `flag:<índice>` con dígitos ASCII (un `²` no es un índice).
 _BANDERA = re.compile(r"flag:([0-9]{1,9})", re.ASCII)
-# Nodos (mapas, listas y escalares, contando cada alias expandido) por carácter del fichero que
-# se recorren como mucho antes de hashear: un fichero legítimo nunca se acerca y una bomba de
-# alias (`*a` nueve veces por nivel) lo supera enseguida (ver `_hash_acotado`).
-_NODOS_POR_CARACTER = 4
-_NODOS_MINIMOS = 1_000
+# Caracteres de JSON canónico (cada alias expandido cuenta entero: cadenas, claves y separadores)
+# por carácter del fichero que se admiten como mucho antes de hashear: un fichero del motor
+# nunca se acerca (su JSON es más corto que su YAML) y una bomba de alias lo supera enseguida
+# (ver `_hash_acotado`).
+_BYTES_POR_CARACTER = 4
+_BYTES_MINIMOS = 1_000
+_ALIAS_DESMESURADOS = "estructura YAML con alias que se expanden más allá del tamaño del fichero"
+_NO_ES_JSON = "valores que no son JSON"
+# Claves del `detail` de un `approve`/`reject` que añade el motor y no vienen de `decision.yml`.
+_CLAVES_DEL_MOTOR = frozenset({"request_sha256", "decision_sha256", "n_labels", "forced_human"})
 
 
 def indice_de_bandera(target: str | None) -> int | None:
@@ -599,38 +606,80 @@ def check_hitl(ctx: AuditContext) -> Verdict:
 # ── request_hash: relación 15 ─────────────────────────────────────────
 
 
-def _hash_acotado(value: object, *, texto: str) -> str | None:
-    """``canonical_sha256`` de ``value`` (cargado de ``texto``) sin colgar ni lanzar.
+def _caracteres_json(texto: str, memo: dict[int, int]) -> int:
+    """Caracteres que ocupa ``texto`` en el JSON canónico (comillas y escapes incluidos).
+
+    Una cadena anclada llega a muchos lugares como el mismo objeto: se mide una vez (por
+    ``id``; todos los objetos viven mientras dura el recorrido de ``_cabe_en_el_fichero``).
+    """
+    coste = memo.get(id(texto))
+    if coste is None:
+        coste = memo[id(texto)] = len(json.dumps(texto, ensure_ascii=False))
+    return coste
+
+
+def _caracteres_de_escalar(valor: object, memo: dict[int, int]) -> int:
+    """Caracteres que ocupa un escalar (o una clave) en el JSON canónico, por exceso."""
+    if isinstance(valor, str):
+        return _caracteres_json(valor, memo)
+    if valor is None or isinstance(valor, bool):
+        return 5
+    if isinstance(valor, int):
+        return valor.bit_length() * 30103 // 100000 + 2  # cifras decimales, sin construirlas
+    if isinstance(valor, float):
+        return 24
+    return 32  # no es JSON (una fecha, un conjunto…): `canonical_sha256` lo rechazará
+
+
+def _cabe_en_el_fichero(value: object, *, texto: str) -> bool:
+    """¿El JSON canónico de ``value`` cabe en ``_BYTES_POR_CARACTER`` veces el fichero ``texto``?
 
     Una bomba de alias YAML carga en milisegundos porque PyYAML comparte los nodos, pero
-    volcarla a JSON la recorre entera (9**10 hojas): antes de hashear se cuentan los nodos
-    expandidos, con un tope proporcional al tamaño del fichero (``_NODOS_POR_CARACTER``). Un
-    fichero del motor nunca llega: cada nodo ocupa al menos un carácter, y el único alias que
-    escribe (``must_label`` y ``must_resolve`` de FT en A1, la misma lista) solo la duplica.
-    ``None`` si se pasa del tope o si el valor no es JSON (una fecha YAML sin comillas, un
-    ``NaN``, un entero de miles de cifras, claves de tipos mezclados): no se puede atar a un
-    hash.
+    volcarla a JSON expande cada alias: ``*a`` nueve veces por nivel son 9**10 hojas, y una
+    cadena anclada de 24 KB referenciada 2 500 veces son 60 MB en un fichero de 30 KB, con
+    pocos nodos. Contar nodos no la ve: se cuentan los caracteres de JSON de cada visita
+    (cadenas y claves enteras, más separadores), contra un tope proporcional al tamaño del
+    fichero. Un fichero del motor nunca llega: su JSON es más corto que su YAML, y el único
+    alias que escribe (``must_label`` y ``must_resolve`` de FT en A1, la misma lista) solo la
+    duplica. Cada visita cuesta lo que carga, así que el recorrido (iterativo) y la memoria
+    que usa son del orden del tope, no de la expansión.
     """
-    presupuesto = _NODOS_POR_CARACTER * len(texto) + _NODOS_MINIMOS
+    presupuesto = _BYTES_POR_CARACTER * len(texto) + _BYTES_MINIMOS
+    memo: dict[int, int] = {}
+    gastado = 0
     pendientes: list[object] = [value]
-    nodos = 0
     while pendientes:
         actual = pendientes.pop()
-        nodos += 1
         if isinstance(actual, dict):
-            nodos += len(actual)
-            pendientes.extend(actual.values())
+            gastado += 2
+            for clave, valor in actual.items():
+                gastado += _caracteres_de_escalar(clave, memo) + 2  # los dos puntos y la coma
+                pendientes.append(valor)
         elif isinstance(actual, list):
+            gastado += 2 + len(actual)  # corchetes y comas
             pendientes.extend(actual)
-        if nodos > presupuesto:
-            return None
+        else:
+            gastado += _caracteres_de_escalar(actual, memo)
+        if gastado > presupuesto:
+            return False
+    return True
+
+
+def _hash_acotado(value: object, *, texto: str) -> tuple[str | None, str]:
+    """``(canonical_sha256(value), "")`` o ``(None, motivo)``, sin colgar, sin agotar la memoria
+    y sin lanzar.
+
+    ``value`` se cargó de ``texto``. Si su JSON no cabe en el tamaño del fichero
+    (:func:`_cabe_en_el_fichero`), no se hashea. Tampoco si el valor no es JSON (una fecha YAML
+    sin comillas, un ``NaN``, un entero de miles de cifras, claves de tipos mezclados): no se
+    puede atar a un hash.
+    """
+    if not _cabe_en_el_fichero(value, texto=texto):
+        return None, _ALIAS_DESMESURADOS
     try:
-        return canonical_sha256(value)
+        return canonical_sha256(value), ""
     except (TypeError, ValueError, RecursionError, OverflowError):
-        return None
-
-
-_NO_HASHEABLE = "valores que no son JSON o estructura desmesurada"
+        return None, _NO_ES_JSON
 
 
 def _solicitud(ctx: AuditContext, stage: str) -> tuple[dict | None, list[str]]:
@@ -642,11 +691,11 @@ def _solicitud(ctx: AuditContext, stage: str) -> tuple[dict | None, list[str]]:
     request = dict(loaded.value)
     declared = request.pop("request_sha256", None)
     texto = ctx.art.text(rel).value or ""
-    recalculado = _hash_acotado(request, texto=texto)
+    recalculado, motivo = _hash_acotado(request, texto=texto)
     problems: list[str] = []
     if recalculado is None:
         problems.append(
-            f"`{stage}`: el contenido de la solicitud no se puede hashear ({_NO_HASHEABLE}): no "
+            f"`{stage}`: el contenido de la solicitud no se puede hashear ({motivo}): no "
             "está atada a su request_sha256"
         )
     elif recalculado != declared:
@@ -661,33 +710,138 @@ def _solicitud(ctx: AuditContext, stage: str) -> tuple[dict | None, list[str]]:
     return request, problems
 
 
-def _decision_yml(ctx: AuditContext, stage: str, gate: GateSummary, declared: object) -> list[str]:
-    """``decision.yml`` es la decisión registrada: misma solicitud, mismo hash, mismo actor."""
+@dataclass
+class _Hallazgos:
+    """Lo que ``request_hash`` encuentra en una o varias decisiones.
+
+    ``fails`` son FAIL; ``warns``, lo que no se puede comprobar sin ser una contradicción;
+    ``reconstruidas``, las etapas cuyo ``decision.yml`` falta y cuya decisión se rehízo del
+    ledger con el mismo hash.
+    """
+
+    fails: list[str] = field(default_factory=list)
+    warns: list[str] = field(default_factory=list)
+    reconstruidas: list[str] = field(default_factory=list)
+
+    def sumar(self, otros: _Hallazgos) -> None:
+        self.fails += otros.fails
+        self.warns += otros.warns
+        self.reconstruidas += otros.reconstruidas
+
+
+def _entrada_efectiva(ctx: AuditContext, stage: str) -> DecisionEntry | None:
+    """La última entrada de decisión de ``stage`` (la que reduce ``summarize_gates``)."""
+    efectiva = None
+    for entry in ctx.ledger.decisions:
+        if entry.stage == stage and entry.action in GATE_DECISION_ACTIONS:
+            efectiva = entry
+    return efectiva
+
+
+def _decision_del_ledger(ctx: AuditContext, stage: str, gate: GateSummary) -> HumanDecision | None:
+    """La ``HumanDecision`` que el motor hasheó, rehecha solo con el ledger.
+
+    Es lo que hace el motor al reanudar sin ``decision.yml`` (``review_gate``: el ledger manda,
+    ``_from_ledger``) y es la inversa de ``_register``: ``approved`` sale de la acción, ``actor``
+    del actor, ``reason`` y los campos extra del ``detail`` del ``approve`` (sin los hashes,
+    ``n_labels`` ni ``forced_human``, que añade el motor), ``records`` de las ``label`` y ``flags``
+    de las ``flag_review`` de la decisión efectiva (un ``reject`` no registra ninguna). ``None`` si
+    el ledger no describe una decisión válida (una ``label`` con un valor que no existe).
+    """
+    entrada = _entrada_efectiva(ctx, stage)
+    if entrada is None or gate.request_sha256 is None:
+        return None
+    aprobada = gate.action == "approve"
+    records: dict[str, dict[str, Any]] = {}
+    flags: dict[str, dict[str, Any]] = {}
+    for entry in ctx.ledger.decisions if aprobada else ():
+        if entry.stage != stage or not de_la_decision_efectiva(ctx, entry):
+            continue
+        if entry.action == "label" and entry.target is not None:
+            records[entry.target] = {
+                "label": entry.detail.get("to"),
+                "reason": entry.detail.get("reason"),
+            }
+        elif entry.action == "flag_review" and indice_de_bandera(entry.target) is not None:
+            flags[(entry.target or "").removeprefix("flag:")] = {
+                "verdict": entry.detail.get("verdict"),
+                "reason": entry.detail.get("reason"),
+            }
+    extras = {k: v for k, v in entrada.detail.items() if k not in _CLAVES_DEL_MOTOR}
+    try:
+        return HumanDecision.model_validate(
+            {
+                **extras,
+                "request_sha256": gate.request_sha256,
+                "approved": aprobada,
+                "actor": entrada.actor,
+                "records": records,
+                "flags": flags,
+            }
+        )
+    except (ValueError, TypeError, RecursionError):
+        return None
+
+
+def _sin_decision_yml(ctx: AuditContext, stage: str, gate: GateSummary) -> _Hallazgos:
+    """Una decisión humana sin ``decision.yml``: se rehace del ledger y se recalcula su hash.
+
+    ``decision.yml`` es el canal de entrada del humano, no un artefacto de la corrida (spec
+    §4.3): el motor reanuda aunque se borre. Si el ledger reproduce el ``decision_sha256``
+    registrado, la decisión está atada igual que con el fichero (PASS con nota); si no, el hash
+    no se puede comprobar, pero ausente el fichero tampoco hay contradicción que probar: WARN
+    (las contradicciones del ledger las dan ``ledger``, ``hitl`` y el resto de las filas).
+    """
+    if gate.decision_sha256 is None:
+        return _Hallazgos()  # `_atada` ya dice que la decisión efectiva no lleva decision_sha256
+    decision = _decision_del_ledger(ctx, stage, gate)
+    sha = None
+    if decision is not None:
+        try:
+            sha = canonical_sha256(decision.model_dump(mode="json"))
+        except (TypeError, ValueError, RecursionError, OverflowError):
+            sha = None
+    if sha == gate.decision_sha256:
+        return _Hallazgos(reconstruidas=[stage])
+    return _Hallazgos(
+        warns=[
+            f"`{stage}`: decision_sha256 no recalculable sin decision.yml (el ledger no "
+            "reproduce la decisión que se hasheó)"
+        ]
+    )
+
+
+def _decision_yml(ctx: AuditContext, stage: str, gate: GateSummary, declared: object) -> _Hallazgos:
+    """``decision.yml`` es la decisión registrada: misma solicitud, mismo hash, mismo actor.
+
+    Si falta, la decisión se rehace del ledger (:func:`_sin_decision_yml`). Una decisión que no
+    es humana (``--auto-approve``) no escribe el fichero y ``hitl`` da el FAIL (D8).
+    """
     loaded = ctx.art.decision(stage)
     if not loaded.present:
-        if is_human_actor(gate.actor):
-            return [
-                f"`{stage}`: decisión humana sin decision.yml (no se puede recalcular su "
-                "decision_sha256)"
-            ]
-        return []  # `--auto-approve` no escribe decision.yml (y `hitl` da el FAIL, D8)
+        return _sin_decision_yml(ctx, stage, gate) if is_human_actor(gate.actor) else _Hallazgos()
     if not loaded.ok:
-        return [f"`{stage}/decision.yml` inválido ({short_text(loaded.error)}; ver `schemas`)"]
+        return _Hallazgos(
+            fails=[f"`{stage}/decision.yml` inválido ({short_text(loaded.error)}; ver `schemas`)"]
+        )
     decision: HumanDecision = loaded.value
     problems: list[str] = []
     if decision.request_sha256 != declared:
         problems.append(f"`{stage}`: decision.yml responde a otra solicitud")
     rel = f"{stage}/decision.yml"
     crudo = ctx.art.yaml(rel)
-    sha = None
-    if crudo.ok and _hash_acotado(crudo.value, texto=ctx.art.text(rel).value or "") is not None:
-        # El motor hashea el modelo validado (`_register`): se vuelca solo tras acotar el crudo.
+    sha, motivo = None, _NO_ES_JSON
+    if crudo.ok and not _cabe_en_el_fichero(crudo.value, texto=ctx.art.text(rel).value or ""):
+        motivo = _ALIAS_DESMESURADOS
+    elif crudo.ok:
+        # El motor hashea el modelo validado (`_register`), cuyo volcado convierte una fecha
+        # YAML en texto: se vuelca solo tras comprobar que el crudo no expande más que el fichero.
         try:
             sha = canonical_sha256(decision.model_dump(mode="json"))
         except (TypeError, ValueError, RecursionError, OverflowError):
             sha = None
     if sha is None:
-        problems.append(f"`{stage}`: decision.yml no se puede hashear ({_NO_HASHEABLE})")
+        problems.append(f"`{stage}`: decision.yml no se puede hashear ({motivo})")
     elif sha != gate.decision_sha256:
         problems.append(
             f"`{stage}`: decision.yml no es la decisión registrada en el ledger "
@@ -698,7 +852,7 @@ def _decision_yml(ctx: AuditContext, stage: str, gate: GateSummary, declared: ob
             f"`{stage}`: actor de decision.yml ({short_text(decision.actor)}) ≠ "
             f"ledger ({short_text(gate.actor)})"
         )
-    return problems
+    return _Hallazgos(fails=problems)
 
 
 def _ids_de_la_solicitud(request: dict) -> list[str | None] | None:
@@ -749,8 +903,10 @@ def _contenido(ctx: AuditContext, stage: str, gate: GateSummary, request: dict) 
         else:
             loaded = ctx.art.json(rel)
             if loaded.ok:
-                sha = _hash_acotado(loaded.value, texto=ctx.art.text(rel).value or "")
-                if sha != request["artifact_sha256"]:
+                sha, motivo = _hash_acotado(loaded.value, texto=ctx.art.text(rel).value or "")
+                if sha is None:
+                    problems.append(f"`{stage}`: {rel} no se puede hashear ({motivo})")
+                elif sha != request["artifact_sha256"]:
                     problems.append(
                         f"`{stage}`: {rel} no es el artefacto aprobado (su hash no es el "
                         "artifact_sha256 de la solicitud)"
@@ -787,11 +943,12 @@ def _contenido_del_reporte(ctx: AuditContext, request: dict) -> list[str]:
     return problems
 
 
-def _atada(ctx: AuditContext, stage: str, gate: GateSummary) -> list[str]:
+def _atada(ctx: AuditContext, stage: str, gate: GateSummary) -> _Hallazgos:
     """Relación 15 para la decisión efectiva ``gate`` de ``stage``."""
     request, problems = _solicitud(ctx, stage)
+    hallazgos = _Hallazgos(fails=problems)
     if request is None:
-        return problems
+        return hallazgos
     declared = request["request_sha256"]
     if gate.request_sha256 != declared:
         problems.append(f"`{stage}`: la decisión efectiva responde a otra solicitud")
@@ -814,9 +971,9 @@ def _atada(ctx: AuditContext, stage: str, gate: GateSummary) -> list[str]:
                 f"`{stage}`: etiquetas o adjudicaciones de la decisión efectiva con otra "
                 f"solicitud: {_ids(ajenas)}"
             )
-    problems += _decision_yml(ctx, stage, gate, declared)
+    hallazgos.sumar(_decision_yml(ctx, stage, gate, declared))
     problems += _contenido(ctx, stage, gate, request)
-    return problems
+    return hallazgos
 
 
 def check_request_hash(ctx: AuditContext) -> Verdict:
@@ -843,9 +1000,9 @@ def check_request_hash(ctx: AuditContext) -> Verdict:
             "no aplica: corrida anterior a la Ola 1 (sin run.json), sus decisiones no llevan "
             "request_sha256 (ver `protocol_snapshot`, D13)."
         )
-    fails: list[str] = []
+    hallazgos = _Hallazgos()
     if view.errors:
-        fails.append(
+        hallazgos.fails.append(
             f"{len(view.errors)} línea(s) ilegible(s) en el ledger: la decisión efectiva no es "
             "verificable (ver `ledger`)"
         )
@@ -854,27 +1011,33 @@ def check_request_hash(ctx: AuditContext) -> Verdict:
         gate = ctx.gates.get(stage)
         if gate is None or gate.action not in ("approve", "reject") or stage not in ctx.requests:
             continue
-        fails += _atada(ctx, stage, gate)
+        hallazgos.sumar(_atada(ctx, stage, gate))
         if is_human_actor(gate.actor):
             humanas += 1
         else:
             otras += 1
-    if fails:
-        return "FAIL", f"{_limitar(fails)}."
+    if hallazgos.fails:
+        return "FAIL", f"{_limitar(hallazgos.fails)}."
+    if hallazgos.warns:
+        return "WARN", f"{_limitar(hallazgos.warns)}."
     total = humanas + otras
     if total == 0:
         return "N/A", (
             "no aplica: ninguna decisión de gate con solicitud que verificar (ver `hitl` y "
             "`final_gate`)."
         )
+    notas = ["hash recalculado"]
     if otras:
-        return "PASS", (
-            f"{total} decisiones atadas a su solicitud (hash recalculado; {otras} no humanas: "
-            "ver `hitl`)."
-        )
+        notas.append(f"{otras} no humanas: ver `hitl`")
+    if hallazgos.reconstruidas:
+        etapas = ", ".join(f"`{s}`" for s in hallazgos.reconstruidas)
+        notas.append(f"decision.yml ausente en {etapas}: reconstruida del ledger")
+    resumen = "; ".join(notas)
+    if otras:
+        return "PASS", f"{total} decisiones atadas a su solicitud ({resumen})."
     if humanas == 1:
-        return "PASS", "1 decisión humana atada a su solicitud (hash recalculado)."
-    return "PASS", f"{humanas} decisiones humanas atadas a su solicitud (hash recalculado)."
+        return "PASS", f"1 decisión humana atada a su solicitud ({resumen})."
+    return "PASS", f"{humanas} decisiones humanas atadas a su solicitud ({resumen})."
 
 
 # ── final_gate: relaciones 17 y 18 ────────────────────────────────────
