@@ -211,6 +211,25 @@ def read_search_log(run_dir: Path) -> SearchLog:
         ) from exc
 
 
+def _read_frozen_records(path: Path) -> list[SearchRecord]:
+    """``01_search/records.json`` congelado, validado.
+
+    Raises:
+        JournalError: si falta, no es JSON o no son registros. Un artefacto congelado editado
+            a mano no es una caída que reintentar: el ``ValidationError``/``JSONDecodeError``
+            crudo salía como rc 3 «reanuda» y cada reanudación fallaba igual (revisión
+            final de la Ola 1, A6).
+    """
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        return [SearchRecord.model_validate(r) for r in raw]
+    except (OSError, ValueError, TypeError) as exc:
+        raise JournalError(
+            f"{path}: los registros de la búsqueda congelada están dañados "
+            f"({type(exc).__name__}); la corrida ya no es fiable: empieza una nueva."
+        ) from exc
+
+
 def run_search(
     protocol,
     *,
@@ -238,12 +257,12 @@ def run_search(
         # Se lee siempre, no solo cuando faltan los fallos: con `failures.json` presente un
         # log corrupto pasaba hasta el entregable y allí daba un rc 3 que se repetía.
         log = read_search_log(run_ctx.run_dir)
-        raw = json.loads((search_dir / "records.json").read_text(encoding="utf-8"))
+        records = _read_frozen_records(search_dir / "records.json")
         if not (search_dir / "failures.json").exists():
             # `log.json` se escribe antes que `failures.json`: una caída entre medias dejaría
             # los fallos sin registrar para siempre. Se re-derivan del log.
             _report_failures(run_ctx, log.entries)
-        return [SearchRecord.model_validate(r) for r in raw]
+        return records
 
     started = utc_now_iso()
     if search_fn is not None:

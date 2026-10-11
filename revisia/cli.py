@@ -238,12 +238,39 @@ def _damage_advice(exc: BaseException, fichero: str | None) -> str:
     return "Revisa ese fichero."
 
 
-def _run_guarded(command: Callable[[], int]) -> int:
+def _ctrl_c_message(exc: KeyboardInterrupt, run_dir: str | Path | None) -> str:
+    """Mensaje de Ctrl+C con la carpeta real y sin afirmar lo que no ocurrió (revisión final, A9).
+
+    ``run_pipeline`` lanza ``RunCancelled`` (un ``KeyboardInterrupt``) con la carpeta y con si
+    la interrupción quedó en ``run.json``; un ``KeyboardInterrupt`` sin más llega de fuera del
+    pipeline (preflight, instantánea…), donde no se registró nada. Antes se imprimía siempre
+    «queda registrado en run.json» con el marcador ``<carpeta de la corrida>``.
+    """
+    from revisia.orchestration.run_context import resume_command
+
+    carpeta = getattr(exc, "run_dir", None) or run_dir
+    if carpeta is not None and getattr(exc, "registered", False):
+        return (
+            f"\ninterrumpido (Ctrl+C): queda registrado en {Path(carpeta) / 'run.json'}. "
+            f"Reanuda con: {resume_command(carpeta)}"
+        )
+    if carpeta is not None:
+        return (
+            "\ninterrumpido (Ctrl+C) sin registrarlo en run.json. "
+            f"Reanuda con: {resume_command(carpeta)}"
+        )
+    return (
+        "\ninterrumpido (Ctrl+C) antes de que la corrida quedara registrada: no hay nada que "
+        "reanudar; vuelve a lanzarla con `revisia run <protocolo>`."
+    )
+
+
+def _run_guarded(command: Callable[[], int], *, run_dir: str | Path | None = None) -> int:
     """Traduce las excepciones de una corrida en códigos de salida (Ola 1, D14).
 
     ``RunInterrupted`` → 3, con la orden de reanudar; errores de configuración o
     de decisión humana → 2; Ctrl+C → 130. Un error esperable nunca llega como
-    traceback.
+    traceback. ``run_dir`` es la carpeta de la corrida cuando ya se conoce (``--resume``).
     """
     from revisia.llm.preflight import PreflightError
     from revisia.orchestration.hitl import DecisionFileError
@@ -254,6 +281,7 @@ def _run_guarded(command: Callable[[], int]) -> int:
         RunInterrupted,
     )
     from revisia.orchestration.snapshot import ProtocolMismatchError
+    from revisia.protocol_files import ProtocolFilesError
 
     try:
         return command()
@@ -266,6 +294,7 @@ def _run_guarded(command: Callable[[], int]) -> int:
     except (
         DecisionFileError,
         ProtocolMismatchError,
+        ProtocolFilesError,
         JournalError,
         LegacyRunError,
         RunDirExistsError,
@@ -289,12 +318,8 @@ def _run_guarded(command: Callable[[], int]) -> int:
             detalle = detalle[: _MAX_DETAIL_CHARS - 1] + "…"
         print(f"error: {detalle}\n{_damage_advice(exc, fichero)}", file=sys.stderr)
         return 2
-    except KeyboardInterrupt:
-        print(
-            "\ninterrumpido (Ctrl+C): queda registrado en run.json. "
-            "Reanuda con: revisia run --resume <carpeta de la corrida>",
-            file=sys.stderr,
-        )
+    except KeyboardInterrupt as exc:
+        print(_ctrl_c_message(exc, run_dir), file=sys.stderr)
         return 130
 
 
@@ -721,7 +746,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.protocol_dir is not None and not Path(args.protocol_dir).exists():
             print(f"error: la carpeta {args.protocol_dir!r} no existe.", file=sys.stderr)
             return 2
-        return _run_guarded(lambda: _cmd_run(args))
+        return _run_guarded(lambda: _cmd_run(args), run_dir=args.resume)
     protocol_dir = args.protocol_dir
     if protocol_dir is None:
         print(
@@ -741,6 +766,18 @@ def main(argv: list[str] | None = None) -> int:
             protocol = load_protocol(protocol_dir)
         except (ValidationError, yaml.YAMLError) as exc:
             print(f"error: protocol.yml inválido en {protocol_dir}:\n{exc}", file=sys.stderr)
+            return 2
+        except FileNotFoundError as exc:
+            # Sin `protocol.yml` en la carpeta: un error de uso, no un traceback (revisión
+            # final de la Ola 1, A7; `--resume` ya lo mapeaba a rc 2).
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        except (UnicodeDecodeError, OSError) as exc:
+            print(
+                f"error: {Path(protocol_dir) / 'protocol.yml'} no se puede leer como UTF-8 "
+                f"({type(exc).__name__}); guárdalo en UTF-8.",
+                file=sys.stderr,
+            )
             return 2
     if args.command == "validate":
         return _cmd_validate(protocol, protocol_dir)

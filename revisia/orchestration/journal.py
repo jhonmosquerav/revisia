@@ -40,14 +40,20 @@ class JournalError(ValueError):
     """Un diario (o ``llm_calls.jsonl``) inconsistente: no se puede reanudar con él."""
 
 
-def read_jsonl(path: Path, model: type[ModelT]) -> list[ModelT]:  # noqa: UP047
+def read_jsonl(  # noqa: UP047
+    path: Path,
+    model: type[ModelT],
+    *,
+    on_truncate: Callable[[int, str], None] | None = None,
+) -> list[ModelT]:
     """Lee un JSONL append-only y valida cada línea con ``model``.
 
     Una última línea que no valida es la huella de una caída a mitad de
     escritura: se recorta del fichero (para que la siguiente no se pegue a ella)
-    y se ignora. Una línea inválida antes de la última es corrupción y lanza
-    ``JournalError`` con su número de línea. Si la última línea es válida pero
-    le falta el salto final, se añade.
+    y se ignora; ``on_truncate(número de línea, motivo)`` lo avisa si se pasa. Una
+    línea inválida antes de la última es corrupción y lanza ``JournalError`` con su
+    número de línea. Si la última línea es válida pero le falta el salto final, se
+    añade.
     """
     if not path.exists():
         return []
@@ -64,11 +70,13 @@ def read_jsonl(path: Path, model: type[ModelT]) -> list[ModelT]:  # noqa: UP047
         try:
             items.append(model.model_validate_json(line))
         except ValidationError as exc:
+            motivo = exc.errors()[0]["msg"]
             if number != last:
-                motivo = exc.errors()[0]["msg"]
                 raise JournalError(f"{path}: línea {number + 1} corrupta ({motivo}).") from exc
             with path.open("r+b") as fh:
                 fh.truncate(start)
+            if on_truncate is not None:
+                on_truncate(number + 1, motivo)
             return items
     if data and not data.endswith(b"\n"):
         with path.open("ab") as fh:

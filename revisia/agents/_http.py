@@ -21,12 +21,39 @@ def user_agent(mailto: str | None = None) -> str:
     return f"{base} (mailto:{mailto})" if mailto else base
 
 
+class HttpxMissingError(RuntimeError):
+    """``httpx`` no está instalado (extra ``search``): no se puede consultar ninguna API."""
+
+
+class TransientHTTPError(RuntimeError):
+    """Fallo de red que no dice nada del recurso: excepción de transporte, 5xx o 429.
+
+    Revisión final de la Ola 1 (A5): Unpaywall, el ID Converter y BioC degradaban cualquier
+    fallo a «sin acceso abierto» y el motivo ``sin_url_oa`` (permanente) quedaba congelado en
+    el diario de la recuperación. Un 404, o un 200 sin URL ni texto, sí es «sin OA».
+    """
+
+
+# Códigos HTTP que significan «el recurso no existe ahí» (no hay OA), no un fallo de red.
+NOT_FOUND_STATUSES = frozenset({404, 410})
+
+
+def http_status(exc: BaseException) -> int | None:
+    """Código HTTP de un ``httpx.HTTPStatusError`` (``exc.response.status_code``) o ``None``."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status if isinstance(status, int) else None
+
+
 def make_client(timeout: float = 60.0, *, mailto: str | None = None) -> Any:
-    """Cliente httpx con timeout, follow_redirects y User-Agent."""
+    """Cliente httpx con timeout, follow_redirects y User-Agent.
+
+    Raises:
+        HttpxMissingError: si ``httpx`` no está instalado.
+    """
     try:
         import httpx
     except ImportError as exc:  # pragma: no cover - depende del entorno
-        raise RuntimeError(
+        raise HttpxMissingError(
             "Los backends de búsqueda requieren httpx. Instala el extra: `uv sync --extra search`."
         ) from exc
     return httpx.Client(

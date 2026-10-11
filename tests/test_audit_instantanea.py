@@ -564,7 +564,7 @@ def test_schemas_gold_json_con_clave_de_50000_caracteres_se_acota(corrida) -> No
 
 @pytest.mark.parametrize("valor", ["false", "true", "yes", 0, 1], ids=repr)
 def test_schemas_gold_json_exige_booleanos_estrictos(corrida, valor) -> None:
-    # El motor escribe `true`/`false` (`bool(...)` en `_load_gold`): un `"false"` o un `0` serían
+    # El motor escribe `true`/`false` (`protocol_files.GoldFile`): un `"false"` o un `0` serían
     # un gold distinto del que usó, y pydantic en modo laxo los aceptaría como booleanos.
     path = corrida / "03_screening" / "gold.json"
     edit_json(path, lambda gold: gold.update({"10.1000/llm-1": valor}))

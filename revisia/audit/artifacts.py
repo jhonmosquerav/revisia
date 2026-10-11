@@ -584,7 +584,7 @@ ARTIFACT_ADAPTERS: dict[str, TypeAdapter[Any]] = {
     "01_search/log.json": TypeAdapter(SearchLog),
     "02_dedup/records.json": TypeAdapter(list[SearchRecord]),
     "02_dedup/dedup.json": TypeAdapter(DedupReport),
-    # `StrictBool`: el motor escribe `true`/`false` (`bool(...)` en `_load_gold`); el modo laxo de
+    # `StrictBool`: el motor escribe `true`/`false` (`protocol_files.GoldFile`); el modo laxo de
     # pydantic aceptaría `"false"`, `0`, `1` o `"yes"` como booleanos, que no son su gold.
     "03_screening/gold.json": TypeAdapter(dict[str, StrictBool]),
     "04_fulltext/retrieval.json": TypeAdapter(list[RetrievalRow]),
@@ -655,8 +655,9 @@ class RunArtifacts:
         """Como :meth:`yaml`, pero un documento vacío (``None``) también es una raíz válida.
 
         El motor lee un fichero sin contenido (o solo con comentarios) como ``{}``
-        (``pipeline._load_yaml``: ``yaml.safe_load(...) or {}``); p. ej. el ``gold.yml`` de
-        la plantilla de ``revisia gold-template`` sin ninguna etiqueta descomentada.
+        (``protocol_files.load_protocol_files``: un documento vacío es su valor vacío); p. ej.
+        el ``gold.yml`` de la plantilla de ``revisia gold-template`` sin ninguna etiqueta
+        descomentada.
         """
         return self._memo(
             "yaml_o_vacio",

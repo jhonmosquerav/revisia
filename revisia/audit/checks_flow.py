@@ -374,7 +374,7 @@ class _GoldProtocolo:
 def _gold_del_protocolo(ctx: AuditContext) -> _GoldProtocolo:
     """Los ids del gold de la instantánea, leídos como los lee el motor.
 
-    ``pipeline._load_gold``: ``data.get("gold", data)`` (el mapa puede ir en la raíz o bajo
+    ``protocol_files.GoldFile``: ``data.get("gold", data)`` (el mapa puede ir en la raíz o bajo
     ``gold``) y un documento vacío o sin etiquetas es «sin gold». Es el gold del *protocolo*: las
     etiquetas que se pasan por código (``gold_labels=``, D6) las suma el motor en ``gold.json``,
     que por eso puede traer más ids y otros valores pero nunca menos ids.

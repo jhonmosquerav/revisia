@@ -25,7 +25,6 @@ from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 
-import yaml
 from pydantic import BaseModel
 
 from revisia.agents import _http
@@ -90,6 +89,7 @@ from revisia.orchestration.hitl import (
 from revisia.orchestration.journal import JournalError, StageJournal, entry_output, journaled
 from revisia.orchestration.run_context import (
     LegacyRunError,
+    RunCancelled,
     RunContext,
     RunDirExistsError,
     RunInterrupted,
@@ -108,6 +108,7 @@ from revisia.orchestration.snapshot import (
     read_run_info,
     write_run_info,
 )
+from revisia.protocol_files import ProtocolFiles, ProtocolFilesError, load_protocol_files
 from revisia.provenance.ledger import is_human_actor, summarize_gates
 from revisia.provenance.runmeta import RunMeta, canonical_sha256, sha256_text, utc_now_iso
 from revisia.rag.embed import Embedder, HashEmbedder
@@ -121,9 +122,8 @@ from revisia.schemas.artifacts import (
     RunInterruption,
     RunStatus,
 )
-from revisia.schemas.effects import EffectInput
 from revisia.schemas.extraction import ExtractionRecord
-from revisia.schemas.records import SearchRecord
+from revisia.schemas.records import SearchRecord, replace_surrogates
 from revisia.schemas.rob import RoBAssessment
 from revisia.schemas.screening import ScreeningDecision
 from revisia.schemas.verification import VerificationReport
@@ -141,6 +141,7 @@ _CONFIG_ERRORS: tuple[type[BaseException], ...] = (
     DecisionFileError,
     LegacyRunError,
     RunDirExistsError,
+    ProtocolFilesError,
 )
 
 # Tope del error que se guarda en `run.json.interruptions` (y en RunInterrupted): un
@@ -166,8 +167,8 @@ class PipelineResult:
     flags_adjudicated_by: str | None = None
 
 
-def _criteria_to_text(ie: dict) -> str:
-    criteria = ie.get("criteria", ie)
+def _criteria_to_text(criteria: dict) -> str:
+    """Los criterios (``ProtocolFiles.criteria``, ya validados) como texto para el prompt."""
     lines: list[str] = []
     for dim, spec in criteria.items():
         if isinstance(spec, dict):
@@ -177,12 +178,6 @@ def _criteria_to_text(ie: dict) -> str:
         else:
             lines.append(f"- {dim}: {spec}")
     return "\n".join(lines)
-
-
-def _load_yaml(path: Path) -> dict:
-    if not path.exists():
-        return {}
-    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
 def _multi_database_search(
@@ -243,10 +238,13 @@ class _Run:
     source_dir: Path | None
     ctx: RunContext
     question: str
-    criteria: str
-    form_fields: list[dict]
     auto_approve: bool
     mailto: str | None
+    # Ficheros auxiliares de `00_protocol/` ya validados (A3): los carga `run_pipeline` dentro
+    # de su `try`, así que llegan vacíos hasta entonces.
+    files: ProtocolFiles = field(default_factory=ProtocolFiles)
+    criteria: str = ""
+    form_fields: list[dict] = field(default_factory=list)
     metrics: ScreeningMetrics | None = None
     # Etapa en curso (la que queda en run.json si la corrida se interrumpe).
     stage: str | None = None
@@ -261,18 +259,19 @@ class _Run:
                 self.ctx.run_dir, info.model_copy(update={"status": status, "stage": stage})
             )
 
-    def interrupted(self, error: str) -> None:
+    def interrupted(self, error: str) -> bool:
         """Registra una interrupción en ``run.json`` (estado ``interrupted``, D14).
 
         Es contabilidad en el camino de error: si falla (``run.json`` bloqueado
         en Windows, disco lleno), se ignora para que la excepción original
         —un 429, un Ctrl+C— llegue intacta al CLI y no la tape un
-        ``PermissionError`` (revisión de B8, I1).
+        ``PermissionError`` (revisión de B8, I1). Devuelve si quedó registrada:
+        el mensaje de Ctrl+C solo lo afirma entonces (revisión final, A9).
         """
-        with contextlib.suppress(Exception):
+        try:
             info = read_run_info(self.ctx.run_dir)
             if info is None:
-                return
+                return False
             interruption = RunInterruption(utc=utc_now_iso(), stage=self.stage, error=error)
             write_run_info(
                 self.ctx.run_dir,
@@ -284,6 +283,9 @@ class _Run:
                     }
                 ),
             )
+        except Exception:
+            return False
+        return True
 
     def config_error(self) -> None:
         """Deshace el ``running`` de ``ensure_snapshot`` tras un error de configuración.
@@ -379,28 +381,61 @@ def _dedup(run: _Run, raw_records: list[SearchRecord]) -> tuple[list[SearchRecor
     """
     dedup_dir = run.ctx.run_dir / "02_dedup"
     if (dedup_dir / "dedup.json").exists():
-        raw = json.loads((dedup_dir / "records.json").read_text(encoding="utf-8"))
-        report = DedupReport.model_validate_json(
-            (dedup_dir / "dedup.json").read_text(encoding="utf-8")
-        )
-        return [SearchRecord.model_validate(r) for r in raw], len(report.duplicates)
+        # Un artefacto congelado editado a mano (JSON roto, otra forma) no es una caída que
+        # reintentar: cada reanudación fallaría igual (revisión final, A6).
+        try:
+            raw = json.loads((dedup_dir / "records.json").read_text(encoding="utf-8"))
+            report = DedupReport.model_validate_json(
+                (dedup_dir / "dedup.json").read_text(encoding="utf-8")
+            )
+            records = [SearchRecord.model_validate(r) for r in raw]
+        except (OSError, ValueError, TypeError) as exc:
+            raise JournalError(
+                f"{dedup_dir}: records.json o dedup.json dañado ({type(exc).__name__}); la "
+                "corrida ya no es fiable: empieza una nueva."
+            ) from exc
+        return records, len(report.duplicates)
     deduped, report = dedup_agent.deduplicate_with_report(raw_records)
     run.ctx.write_json("02_dedup/records.json", [r.model_dump(mode="json") for r in deduped])
     run.ctx.write_json("02_dedup/dedup.json", report.model_dump(mode="json"))
     return deduped, len(report.duplicates)
 
 
+_GOLD_JSON = "03_screening/gold.json"
+
+
 def _load_gold(run: _Run, gold_labels: dict[str, bool] | None) -> dict[str, bool]:
     """Gold standard humano: ``00_protocol/gold.yml`` + etiquetas por código.
 
-    Las pasadas por código tienen prioridad sobre las del fichero.
+    Las pasadas por código tienen prioridad sobre las del fichero. El fichero llega validado
+    (``ProtocolFiles.gold``: booleanos de verdad, ids como texto; A3): ``bool("false")`` leía
+    un ``"false"`` entre comillas como incluir. Al reanudar, si ya existe
+    ``03_screening/gold.json`` (el gold efectivo, D6) se usa ese: ``gold_labels=`` se pasa a
+    ``run_pipeline`` y no vive en ``run.json``, así que recalcularlo del fichero cambiaba la
+    solicitud de T/A en cuanto se reanudaba sin volver a pasarlo (A8).
     """
-    gold: dict[str, bool] = {}
-    gold_file = _load_yaml(run.snapshot_dir / "gold.yml")
-    for rid, val in (gold_file.get("gold", gold_file) or {}).items():
-        gold[rid] = bool(val)
+    path = run.ctx.run_dir / _GOLD_JSON
+    gold: dict[str, bool]
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise JournalError(
+                f"{path}: el gold efectivo no se puede leer ({type(exc).__name__}); la corrida "
+                "ya no es fiable: empieza una nueva."
+            ) from exc
+        if not isinstance(data, dict) or not all(
+            isinstance(k, str) and isinstance(v, bool) for k, v in data.items()
+        ):
+            raise JournalError(
+                f"{path}: el gold efectivo no es un mapa id → true/false; la corrida ya no es "
+                "fiable: empieza una nueva."
+            )
+        gold = dict(data)
+    else:
+        gold = dict(run.files.gold)
     if gold_labels:
-        gold.update(gold_labels)
+        gold.update({str(rid): bool(val) for rid, val in gold_labels.items()})
     return gold
 
 
@@ -500,21 +535,25 @@ def _fetch_one(run: _Run, fetch: FetchFn, record: SearchRecord) -> RetrievalOutc
     hash no dependa del fin de línea del sistema. Sin LLM: ninguna llamada.
     """
     ft = fetch(record)
+    # Un sustituto UTF-16 suelto (``json.loads`` de una respuesta con un sustituto escapado, o un
+    # PDF mal extraído) no se puede codificar en UTF-8: el texto y el diario reventarían (A4).
+    source_url = replace_surrogates(ft.source_url)
     if not ft.available:
         # Un fetch_fn inyectado puede no dar motivo: el genérico es no_disponible.
         return RetrievalOutcome(
             available=False,
-            source_url=ft.source_url,
+            source_url=source_url,
             reason=ft.reason or "no_disponible",
-            detail=ft.detail,
+            detail=replace_surrogates(ft.detail),
         )
+    text = replace_surrogates(ft.text)
     text_file = f"04_fulltext/texts/{sha256_text(record.record_id)[:16]}.txt"
-    _write_bytes_durably(run.ctx.run_dir / text_file, ft.text.encode("utf-8"))
+    _write_bytes_durably(run.ctx.run_dir / text_file, text.encode("utf-8"))
     return RetrievalOutcome(
         available=True,
-        source_url=ft.source_url,
-        n_chars=len(ft.text),
-        text_sha256=sha256_text(ft.text),
+        source_url=source_url,
+        n_chars=len(text),
+        text_sha256=sha256_text(text),
         text_file=text_file,
     )
 
@@ -841,14 +880,11 @@ def _meta_analysis(run: _Run) -> tuple[MetaAnalysisResult | None, str]:
     (efectos fijos + aleatorios, I²/τ², Egger); si no, solo síntesis narrativa.
     Devuelve el resultado y el modo de presentación del forest.
     """
-    effects_cfg = _load_yaml(run.snapshot_dir / "effects.yml")
-    meta_display = effects_cfg.get("display", "raw")  # "proportion" → forest en 0–1
-    raw_effects = effects_cfg.get("effects", [])
-    if not raw_effects:
-        return None, meta_display
-    measure = effects_cfg.get("measure", "precomputed")
-    effects = [EffectInput.model_validate(e) for e in raw_effects]
-    meta_result = meta_analyze(effects, measure)
+    effects = run.files.effects  # validado al cargar (A3): k ≥ 2, datos completos, vi > 0
+    if effects is None:
+        return None, "raw"
+    meta_display = effects.display  # "proportion" → forest en 0–1
+    meta_result = meta_analyze(effects.effects, effects.measure)
     run.ctx.write_json("08_meta/meta_analysis.json", meta_result.model_dump())
     return meta_result, meta_display
 
@@ -1206,10 +1242,11 @@ def run_pipeline(
     ``search_fn`` (no hay bases que comprobar), y ``"run"`` si no.
 
     Raises:
-        PreflightError, ProtocolMismatchError, JournalError, DecisionFileError:
-            errores de configuración o de entrada humana (rc 2 en el CLI).
+        PreflightError, ProtocolMismatchError, ProtocolFilesError, JournalError,
+            DecisionFileError: errores de configuración o de entrada humana (rc 2 en el CLI).
         RunInterrupted: cualquier otro error a mitad de corrida; queda en
             ``run.json`` (``status: interrupted``) y se reanuda (D14).
+        RunCancelled: Ctrl+C a mitad de corrida (un ``KeyboardInterrupt`` con la carpeta).
     """
     frozen = (run_ctx.run_dir / SEARCH_DIR / "log.json").exists()
     report = preflight(
@@ -1227,21 +1264,23 @@ def run_pipeline(
     snapshot_dir, run_info = ensure_snapshot(
         protocol_dir, run_ctx, max_results=max_results, mailto=mailto
     )
-    ie = _load_yaml(snapshot_dir / "inclusion_exclusion.yml")
-    form = _load_yaml(snapshot_dir / "extraction_form.yml")
     run = _Run(
         protocol=protocol,
         snapshot_dir=snapshot_dir,
         source_dir=Path(protocol_dir) if protocol_dir is not None else None,
         ctx=run_ctx,
         question=protocol.question.text,
-        criteria=_criteria_to_text(ie),
-        form_fields=form.get("fields", []),
         auto_approve=auto_approve,
         mailto=mailto,
         previous=previous,
     )
     try:
+        # Los ficheros auxiliares se validan sobre la instantánea, la única fuente desde aquí
+        # (D3): uno con otra forma es un error de configuración (rc 2), no una caída a mitad
+        # de corrida que se repetiría en cada reanudación (A3).
+        run.files = load_protocol_files(snapshot_dir)
+        run.criteria = _criteria_to_text(run.files.criteria)
+        run.form_fields = run.files.form_fields
         return _run_stages(
             run,
             max_results=run_info.max_results,
@@ -1253,9 +1292,11 @@ def run_pipeline(
     except _CONFIG_ERRORS:
         run.config_error()
         raise
-    except KeyboardInterrupt:
-        run.interrupted("KeyboardInterrupt")
-        raise
+    except KeyboardInterrupt as exc:
+        # La carpeta y si quedó registrado viajan con la excepción: el CLI no conoce la carpeta
+        # de una corrida nueva ni puede saber si `run.json` se pudo escribir (A9).
+        registered = run.interrupted("KeyboardInterrupt")
+        raise RunCancelled(run_ctx.run_dir, registered=registered) from exc
     except Exception as exc:
         # Redactar antes de recortar: un secreto cortado a medias ya no casaría con
         # el patrón y se filtraría.

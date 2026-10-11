@@ -943,15 +943,25 @@ def _read_decision(path: Path) -> HumanDecision | None:
     """Lee y valida ``decision.yml``; ``None`` si no existe.
 
     Raises:
-        DecisionFileError: si el fichero está vacío, no es YAML válido, su raíz
-            no es un mapa, falta ``request_sha256``, ``approved`` no es un
-            booleano o ``records``/``flags`` traen campos desconocidos o claves
-            que no son un id.
+        DecisionFileError: si el fichero no se puede leer como UTF-8, está vacío,
+            no es YAML válido, su raíz no es un mapa, falta ``request_sha256``,
+            ``approved`` no es un booleano o ``records``/``flags`` traen campos
+            desconocidos o claves que no son un id.
     """
     if not path.exists():
         return None
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        texto = path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError) as exc:
+        # El Bloc de notas en «ANSI» guarda `reason: revisión` en cp1252: sin esto era un
+        # `UnicodeDecodeError` que salía como rc 3 «reanuda» y fallaba igual en cada
+        # reanudación (revisión final de la Ola 1, A1).
+        raise DecisionFileError(
+            f"{path}: no se puede leer como UTF-8 ({type(exc).__name__}); guárdalo en UTF-8 "
+            f"(en el Bloc de notas: Guardar como → Codificación UTF-8). {_DECISION_HINT}"
+        ) from exc
+    try:
+        raw = yaml.safe_load(texto)
     except yaml.YAMLError as exc:
         raise DecisionFileError(f"{path}: YAML inválido ({exc}). {_DECISION_HINT}") from exc
     if raw is None:

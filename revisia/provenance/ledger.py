@@ -10,6 +10,7 @@ toman las mismas decisiones aunque el LLM no sea determinista a nivel token.
 from __future__ import annotations
 
 import unicodedata
+import warnings
 from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -93,30 +94,50 @@ class DecisionEntry(BaseModel):
 
 
 class DecisionLedger:
-    """Escritura/lectura append-only de un ledger de decisiones en JSONL."""
+    """Escritura/lectura append-only de un ledger de decisiones en JSONL.
+
+    Con la disciplina de los diarios (``orchestration.journal``; revisión final de la Ola 1,
+    A2): cada ``append`` escribe los saltos como LF (también en Windows) y llega a disco
+    (``fsync``) antes de volver, y ``read_all`` recorta una última línea truncada por una caída
+    a mitad de escritura (con un aviso) y da ``JournalError`` (rc 2) si la línea dañada está en
+    medio. Antes, el ``ValidationError`` crudo de esa última línea salía como rc 3 «reanuda» y
+    cada reanudación fallaba igual.
+    """
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
 
     def append(self, entry: DecisionEntry) -> None:
-        """Añade una decisión al final del ledger (crea el archivo si falta)."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as fh:
-            fh.write(entry.model_dump_json() + "\n")
+        """Añade una decisión al final del ledger (crea el archivo si falta), ya en disco."""
+        # Import diferido: `orchestration.journal` importa `schemas.artifacts`, que importa este
+        # paquete (ver el comentario de `TYPE_CHECKING` arriba).
+        from revisia.orchestration.journal import append_jsonl
+
+        append_jsonl(self.path, entry)
 
     def read_all(self) -> list[DecisionEntry]:
-        """Lee todas las decisiones registradas, en orden de aparición."""
-        if not self.path.exists():
-            return []
-        entries: list[DecisionEntry] = []
-        # Se parte por el salto de línea y no con `splitlines()`: `model_dump_json` escribe
-        # U+2028/U+2029/U+0085 crudos dentro de las cadenas y `splitlines()` partiría la
-        # entrada por la mitad. `read_text` ya pliega el CRLF; `strip()` quita el resto.
-        for line in self.path.read_text(encoding="utf-8").split("\n"):
-            stripped = line.strip()
-            if stripped:
-                entries.append(DecisionEntry.model_validate_json(stripped))
-        return entries
+        """Lee todas las decisiones registradas, en orden de aparición.
+
+        ``read_jsonl`` parte por el byte del salto de línea y no con ``splitlines()``:
+        ``model_dump_json`` escribe U+2028/U+2029/U+0085 crudos dentro de las cadenas y
+        ``splitlines()`` partiría la entrada por la mitad.
+
+        Raises:
+            JournalError: si una línea que no es la última está dañada (rc 2 en el CLI).
+        """
+        from revisia.orchestration.journal import read_jsonl
+
+        return read_jsonl(self.path, DecisionEntry, on_truncate=self._avisar_recorte)
+
+    def _avisar_recorte(self, numero: int, motivo: str) -> None:
+        """Avisa de que la última línea del ledger estaba incompleta y se recortó."""
+        warnings.warn(
+            f"{self.path}: la línea {numero} (la última) estaba incompleta ({motivo}), huella "
+            "de una caída a mitad de escritura, y se recortó: esa decisión no llegó a "
+            "registrarse y el gate la volverá a pedir.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
 
 
 def summarize_gates(entries: Iterable[DecisionEntry]) -> dict[str, GateSummary]:

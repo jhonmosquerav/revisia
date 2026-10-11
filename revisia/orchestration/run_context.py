@@ -80,6 +80,24 @@ class RunInterrupted(RuntimeError):
         )
 
 
+class RunCancelled(KeyboardInterrupt):
+    """Ctrl+C a mitad de corrida, con su carpeta y si quedó registrado en ``run.json``.
+
+    Sigue siendo un ``KeyboardInterrupt`` (nadie lo atrapa con ``except Exception``); lo lanza
+    ``run_pipeline`` para que el CLI imprima la ruta real de la corrida y solo afirme que la
+    interrupción quedó en ``run.json`` si de verdad se pudo escribir (revisión final, A9).
+
+    Attributes:
+        run_dir: carpeta de la corrida.
+        registered: la interrupción quedó en ``run.json`` (``status: interrupted``).
+    """
+
+    def __init__(self, run_dir: str | Path, *, registered: bool) -> None:
+        self.run_dir = Path(run_dir)
+        self.registered = registered
+        super().__init__(f"corrida interrumpida con Ctrl+C: {self.run_dir}")
+
+
 class RunContext:
     """Estado y rutas de una ejecución concreta del pipeline."""
 
@@ -156,7 +174,13 @@ class RunContext:
         path = self.run_dir / relpath
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(content, encoding="utf-8")
+        try:
+            tmp.write_text(content, encoding="utf-8")
+        except BaseException:
+            # Un texto que no se puede codificar (un sustituto suelto) dejaba un `.tmp`
+            # huérfano a medio escribir junto al artefacto (revisión final, A4).
+            tmp.unlink(missing_ok=True)
+            raise
         os.replace(tmp, path)
         return path
 
