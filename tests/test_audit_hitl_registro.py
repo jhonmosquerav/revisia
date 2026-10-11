@@ -52,7 +52,7 @@ from hitl_helpers import correr_hasta, leer_solicitud, responder_gate
 
 from revisia.audit import CHECKS
 from revisia.audit.artifacts import AuditContext, load_run
-from revisia.audit.checks_hitl import _hash_acotado, effective_autonomy
+from revisia.audit.checks_hitl import _hash_acotado, autonomia_efectiva_de_la_corrida
 from revisia.config import load_protocol
 from revisia.llm.registry import ProviderConfig
 from revisia.orchestration import pipeline as pipeline_mod
@@ -169,9 +169,9 @@ def test_ledger_manifiesto_de_la_ola_1_sin_autonomy_effective_falla(corrida) -> 
     assert "manifest.yml sin `autonomy_effective`" in ledger.detail
 
 
-def test_effective_autonomy_de_una_corrida_v07_es_la_del_protocolo(tmp_path) -> None:
+def test_autonomia_efectiva_de_una_corrida_v07_es_la_del_protocolo(tmp_path) -> None:
     ctx = AuditContext(load_run(write_legacy_v07(tmp_path)))
-    autonomia = effective_autonomy(ctx)
+    autonomia = autonomia_efectiva_de_la_corrida(ctx)
     assert autonomia is not None
     assert autonomia["screening_ta"] == "A1"
     assert autonomia["reporte"] == "A1"
@@ -357,6 +357,52 @@ def test_request_hash_etiqueta_de_la_decision_efectiva_con_otra_solicitud_falla(
     assert (
         "`screening_ft`: etiquetas o adjudicaciones de la decisión efectiva con otra solicitud: "
         "10.1000/asreview"
+    ) in request.detail
+
+
+def _etiquetas_del_ledger(run: Path, stage: str) -> int:
+    """Cuántas ``label`` de ``stage`` hay en el ledger de ``run``."""
+    lineas = (run / "decisions_ledger.jsonl").read_text(encoding="utf-8").splitlines()
+    return sum(1 for e in map(json.loads, lineas) if (e["stage"], e["action"]) == (stage, "label"))
+
+
+@pytest.mark.parametrize("declarado", [9, 0, None, True, "4"], ids=repr)
+def test_request_hash_n_labels_distinto_de_las_etiquetas_del_ledger_falla(
+    corrida, declarado: object
+) -> None:
+    # El `approve` declara cuántas etiquetas escribió (spec §4.3): contarlas en el ledger delata
+    # una etiqueta añadida o borrada a mano, aunque `decisions.json` ya no se pueda contrastar.
+    reales = _etiquetas_del_ledger(corrida, "screening_ft")
+    assert reales > 0
+
+    def _declarar(entries: list[dict]) -> None:
+        detail = entries[_indice(entries, "screening_ft", "approve")]["detail"]
+        if declarado is None:
+            del detail["n_labels"]
+        else:
+            detail["n_labels"] = declarado
+
+    edit_ledger(corrida, _declarar)
+    request = fila(auditar(corrida), "request_hash")
+    assert request.status == "FAIL"
+    assert (
+        f"`screening_ft`: la decisión declara n_labels={declarado!r} y el ledger tiene "
+        f"{reales} etiqueta(s) de esa decisión"
+    ) in request.detail
+
+
+def test_request_hash_etiqueta_borrada_del_ledger_no_cuadra_con_n_labels(corrida) -> None:
+    reales = _etiquetas_del_ledger(corrida, "screening_ft")
+
+    def _borrar(entries: list[dict]) -> None:
+        del entries[_indice(entries, "screening_ft", "label")]
+
+    edit_ledger(corrida, _borrar)
+    request = fila(auditar(corrida), "request_hash")
+    assert request.status == "FAIL"
+    assert (
+        f"`screening_ft`: la decisión declara n_labels={reales} y el ledger tiene {reales - 1} "
+        "etiqueta(s) de esa decisión"
     ) in request.detail
 
 
@@ -793,16 +839,147 @@ def test_final_gate_run_json_completed_sin_aprobar_el_reporte_falla(corrida) -> 
     )
 
 
+@pytest.mark.parametrize(
+    ("estado", "etapa"),
+    [
+        pytest.param("paused", "screening_ft", id="paused"),
+        pytest.param("interrupted", "extraccion", id="interrupted"),
+        pytest.param("running", "rob", id="running"),
+    ],
+)
+def test_final_gate_run_json_sin_terminar_con_el_reporte_aprobado_falla(
+    corrida, estado: str, etapa: str
+) -> None:
+    # El `approve` del reporte puede ser de una vuelta anterior: si `run.json` dice que la corrida
+    # no terminó (pausada, interrumpida o con el proceso muerto), no hay decisión final.
+    path = corrida / "run.json"
+    info = json.loads(path.read_text(encoding="utf-8"))
+    info.update(status=estado, stage=etapa)
+    path.write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+    report = auditar(corrida)
+    final_gate = fila(report, "final_gate")
+    assert final_gate.status == "FAIL"
+    assert f"run.json dice `{estado}` en `{etapa}`: la corrida no terminó" in final_gate.detail
+    assert not report.publishable
+
+
+def test_final_gate_aprobacion_del_reporte_de_otra_solicitud_falla(corrida) -> None:
+    # Un `approve` cuyo `request_sha256` no es el de la `review_request.yml` de ahora no es la
+    # decisión final efectiva: es de una solicitud que ya no existe.
+    def _otra(entries: list[dict]) -> None:
+        entries[_indice(entries, "reporte", "approve")]["detail"]["request_sha256"] = "0" * 64
+
+    edit_ledger(corrida, _otra)
+    report = auditar(corrida)
+    final_gate = fila(report, "final_gate")
+    assert final_gate.status == "FAIL"
+    assert "responde a otra solicitud que la vigente" in final_gate.detail
+    assert not report.publishable
+
+
+def test_final_gate_corrida_completada_y_reanudada_sigue_publicable(
+    corrida, protocolo_auditoria: Path, tmp_path: Path
+) -> None:
+    # Reanudar una corrida terminada pasa por `running` y vuelve a `completed`; el ledger no
+    # cambia y el reporte sigue aprobado: no es una corrida sin terminar.
+    _, result = _correr(corrida, tmp_path, protocolo_auditoria)
+    assert result.status == "completed", result.message
+    assert json.loads((corrida / "run.json").read_text(encoding="utf-8"))["status"] == "completed"
+    report = auditar(corrida)
+    assert fila(report, "final_gate").status == "PASS"
+    assert report.n_fail == 0
+    assert report.publishable
+
+
+def test_final_gate_reinclusion_tras_completar_deja_la_corrida_sin_terminar(
+    corrida, protocolo_auditoria: Path, tmp_path: Path
+) -> None:
+    # Caso real: completada la corrida, la revisora reincluye un registro en T/A y reanuda; la
+    # corrida se detiene en texto completo (otra solicitud) con el `approve` viejo del reporte
+    # todavía en el ledger. `final_gate` no puede dar PASS: `run.json` dice `paused`.
+    solicitud = leer_solicitud(corrida, "screening_ta")
+    reincluido = (
+        "10.1000/cocina"
+        if "10.1000/cocina" in solicitud["ai_excluded"]
+        else (solicitud["ai_excluded"][0])
+    )
+    responder_gate(
+        corrida,
+        "screening_ta",
+        records={reincluido: {"label": "include", "reason": "relevante: habla de cribado"}},
+    )
+    _, result = _correr(corrida, tmp_path, protocolo_auditoria, parar_en="screening_ft")
+    assert result.status == "paused", result.message
+    report = auditar(corrida)
+    final_gate = fila(report, "final_gate")
+    assert final_gate.status == "FAIL"
+    assert "run.json dice `paused` en `screening_ft`: la corrida no terminó" in final_gate.detail
+    assert not report.publishable
+
+
 # ── thresholds (D7) y grounding (D8) con etiquetas humanas ───────────
 
 
-def test_thresholds_recall_bajo_con_todas_las_exclusiones_ia_etiquetadas_advierte(corrida) -> None:
-    def _etiquetar(decisions: list[dict]) -> None:
-        for decision in decisions:
-            if decision["ensemble_label"] == "exclude":
-                decision.update(human_label="exclude", human_reason="revisada a mano")
+def _etiquetar_exclusiones_ia(
+    run: Path,
+    *,
+    solo: tuple[str, ...] | None = None,
+    en_el_ledger: bool = True,
+    decision_sha256: str | None = None,
+    actor: str | None = None,
+) -> list[str]:
+    """La revisora etiqueta en T/A las exclusiones de la IA (``solo``: algunas) como las escribe
+    el motor: ``human_label`` en ``decisions.json`` y, con ``en_el_ledger``, una ``label`` por
+    registro antes del ``approve`` (``decision_sha256`` y ``actor`` fuerzan una etiqueta ajena)."""
+    ids: list[str] = []
 
-    edit_json(corrida / TA, _etiquetar)
+    def _en_decisions(decisions: list[dict]) -> None:
+        for decision in decisions:
+            if decision["ensemble_label"] == "exclude" and (
+                solo is None or decision["record_id"] in solo
+            ):
+                decision.update(
+                    human_label="exclude",
+                    human_reason="revisada a mano",
+                    human_actor="human:revisora",
+                )
+                ids.append(decision["record_id"])
+
+    edit_json(run / TA, _en_decisions)
+    if not en_el_ledger:
+        return ids
+
+    def _en_el_ledger(entries: list[dict]) -> list[dict]:
+        i = _indice(entries, "screening_ta", "approve")
+        aprobacion = entries[i]
+        hashes = {k: aprobacion["detail"][k] for k in ("request_sha256", "decision_sha256")}
+        if decision_sha256 is not None:
+            hashes["decision_sha256"] = decision_sha256
+        etiquetas = [
+            {
+                **aprobacion,
+                "actor": actor or aprobacion["actor"],
+                "action": "label",
+                "target": rid,
+                "detail": {
+                    "from": "exclude",
+                    "to": "exclude",
+                    "reason": "revisada a mano",
+                    "rescue": False,
+                    **hashes,
+                },
+            }
+            for rid in ids
+        ]
+        aprobacion["detail"]["n_labels"] = len(ids)
+        return [*entries[:i], *etiquetas, *entries[i:]]
+
+    edit_ledger(run, _en_el_ledger)
+    return ids
+
+
+def test_thresholds_recall_bajo_con_todas_las_exclusiones_ia_etiquetadas_advierte(corrida) -> None:
+    _etiquetar_exclusiones_ia(corrida)
     escribir_metricas(corrida, metricas_validas(18, 0, 2, 10))
     thresholds = fila(auditar(corrida), "thresholds")
     assert thresholds.status == "WARN"
@@ -813,11 +990,41 @@ def test_thresholds_recall_bajo_con_todas_las_exclusiones_ia_etiquetadas_adviert
 
 
 def test_thresholds_recall_bajo_con_una_exclusion_ia_sin_etiquetar_sigue_fallando(corrida) -> None:
-    edit_json(corrida / TA, _decision("10.1000/cocina", human_label="exclude", human_reason="sí"))
+    _etiquetar_exclusiones_ia(corrida, solo=("10.1000/cocina",))
     escribir_metricas(corrida, metricas_validas(18, 0, 2, 10))
     thresholds = fila(auditar(corrida), "thresholds")
     assert thresholds.status == "FAIL"
     assert "1 exclusiones IA de T/A sin etiqueta humana" in thresholds.detail
+
+
+def test_thresholds_human_label_solo_en_decisions_json_no_rebaja_el_recall(corrida) -> None:
+    # `decisions.json` es una copia: una `human_label` sin su `label` en el ledger no la puso
+    # nadie. Antes `thresholds` daba WARN y `hitl` FAIL sobre el mismo hecho; ahora coinciden.
+    _etiquetar_exclusiones_ia(corrida, en_el_ledger=False)
+    escribir_metricas(corrida, metricas_validas(18, 0, 2, 10))
+    report = auditar(corrida)
+    thresholds = fila(report, "thresholds")
+    assert thresholds.status == "FAIL"
+    assert "2 exclusiones IA de T/A sin etiqueta humana" in thresholds.detail
+    assert fila(report, "hitl").status == "FAIL"
+    assert not report.publishable
+
+
+@pytest.mark.parametrize(
+    ("cambio", "motivo"),
+    [
+        pytest.param({"decision_sha256": "a" * 64}, "de otra decisión", id="otra-decision"),
+        pytest.param({"actor": "agent:cribador"}, "no humana", id="agente"),
+    ],
+)
+def test_thresholds_etiquetas_que_no_son_humanas_de_la_decision_efectiva_no_cuentan(
+    corrida, cambio: dict, motivo: str
+) -> None:
+    _etiquetar_exclusiones_ia(corrida, **cambio)
+    escribir_metricas(corrida, metricas_validas(18, 0, 2, 10))
+    thresholds = fila(auditar(corrida), "thresholds")
+    assert thresholds.status == "FAIL", motivo
+    assert "2 exclusiones IA de T/A sin etiqueta humana" in thresholds.detail
 
 
 def test_grounding_marca_real_adjudicada_por_la_revisora_advierte(
@@ -1127,7 +1334,7 @@ def test_corrida_a2_forzada_registra_a1_en_el_ledger_y_el_manifiesto(escenario) 
     manifest = yaml.safe_load((run / "manifest.yml").read_text(encoding="utf-8"))
     assert manifest["autonomy_effective"]["reporte"] == "A1"
     assert manifest["final_gate"]["forced_human"] is True
-    autonomia = effective_autonomy(AuditContext(load_run(run)))
+    autonomia = autonomia_efectiva_de_la_corrida(AuditContext(load_run(run)))
     assert autonomia is not None and autonomia["reporte"] == "A1"
 
 

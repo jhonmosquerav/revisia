@@ -417,11 +417,7 @@ def rob_payload(
 
 def _flagged(verification: VerificationReport) -> list[tuple[int, CitationCheck]]:
     """Citas marcadas, con su posición en ``verification.checks``."""
-    return [
-        (i, c)
-        for i, c in enumerate(verification.checks)
-        if not c.exists_in_corpus or not c.grounded
-    ]
+    return [(i, verification.checks[i]) for i in verification.flagged_indices()]
 
 
 def report_payload(

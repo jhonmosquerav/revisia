@@ -159,12 +159,38 @@ def potencia_minima(target: float) -> int | None:
     return math.ceil(round(1 / (1 - target), 9))
 
 
+def _etiquetados_por_un_humano(ctx: AuditContext) -> set[str | None]:
+    """Registros de T/A con una ``label`` humana de la decisión efectiva del gate (en el ledger)."""
+    gate = ctx.gates.get("screening_ta")
+    if gate is None or gate.action != "approve":
+        return set()
+    return {
+        entry.target
+        for entry in ctx.ledger.decisions
+        if entry.stage == "screening_ta"
+        and entry.action == "label"
+        and entry.detail.get("to") in ("include", "exclude")
+        and is_human_actor(entry.actor)
+        and de_la_decision_efectiva(ctx, entry)
+    }
+
+
 def ai_exclusions_without_label(ctx: AuditContext) -> int | None:
-    """Exclusiones IA de T/A sin etiqueta humana (``None`` si no se leen las decisiones)."""
+    """Exclusiones IA de T/A sin etiqueta humana (``None`` si no se leen las decisiones).
+
+    La etiqueta humana es una ``label`` del ledger puesta por un humano en la decisión efectiva
+    del gate (``de_la_decision_efectiva``, la regla de ``hitl``), no la ``human_label`` de
+    ``decisions.json``: esa es una copia que ``hitl`` contrasta con el ledger, y rebajar D7 a
+    WARN con ella sola dejaría a ``thresholds`` y a ``hitl`` diciendo cosas contrarias sobre una
+    ``human_label`` falsificada.
+    """
     loaded = ctx.art.artifact(TA)
     if not loaded.ok:
         return None
-    return sum(1 for d in loaded.value if d.ensemble_label == "exclude" and d.human_label is None)
+    etiquetados = _etiquetados_por_un_humano(ctx)
+    return sum(
+        1 for d in loaded.value if d.ensemble_label == "exclude" and d.record_id not in etiquetados
+    )
 
 
 def _ic(k: int, n: int) -> str:
@@ -410,7 +436,7 @@ def check_grounding(ctx: AuditContext) -> Verdict:
                 + _con_resto(phantom, _MAX_FANTASMAS)
             )
 
-    flagged = [i for i, c in enumerate(checks) if not c.exists_in_corpus or not c.grounded]
+    flagged = report.flagged_indices()
     adjudicated = _adjudications(ctx)
     missing = [i for i in flagged if i not in adjudicated]
     actors = sorted({actor for i in flagged for actor in adjudicated.get(i, [])})

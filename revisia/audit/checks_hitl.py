@@ -97,7 +97,7 @@ def _forzado(ctx: AuditContext) -> bool | None:
     return block.value.forced_human if block.ok else None
 
 
-def effective_autonomy(ctx: AuditContext) -> dict[str, str] | None:
+def autonomia_efectiva_de_la_corrida(ctx: AuditContext) -> dict[str, str] | None:
     """Autonomía con la que se aplica cada gate: la del protocolo y la regla única de M5.
 
     Con citas marcadas el motor fuerza el gate final a humano y una A2/A3 declarada para
@@ -235,7 +235,7 @@ def check_ledger(ctx: AuditContext) -> Verdict:
     Una línea corrupta ya no se descarta en silencio (antes, ``audit.py:85-86``)
     y una acción que ``review_gate`` nunca emite (``propose``/``exclude``/
     ``verify`` en la reconstrucción C3) delata un ledger escrito a mano. La autonomía de
-    cada entrada es la efectiva (:func:`effective_autonomy`, con M5) y las etiquetas y
+    cada entrada es la efectiva (:func:`autonomia_efectiva_de_la_corrida`, con M5) y las etiquetas y
     adjudicaciones cumplen la relación 16.
     """
     view = ctx.ledger
@@ -265,7 +265,7 @@ def check_ledger(ctx: AuditContext) -> Verdict:
     if ordered != sorted(ordered, key=STAGES.index):
         problems.append("gates fuera del orden de STAGES: " + " → ".join(ordered))
 
-    autonomy = effective_autonomy(ctx)
+    autonomy = autonomia_efectiva_de_la_corrida(ctx)
     if autonomy is not None:
         for number, entry in view.entries:
             expected = autonomy.get(entry.stage)
@@ -461,7 +461,7 @@ def _reglas_ft(ctx: AuditContext, gate: GateSummary, decisions: list[Any]) -> li
     texto completo nunca se fuerza); sin protocolo legible, la del ledger.
     """
     problems: list[str] = []
-    autonomy = (effective_autonomy(ctx) or {}).get("screening_ft", gate.autonomy)
+    autonomy = (autonomia_efectiva_de_la_corrida(ctx) or {}).get("screening_ft", gate.autonomy)
     sin_etiqueta = [
         d.record_id for d in decisions if d.fulltext_status == "retrieved" and d.human_label is None
     ]
@@ -929,11 +929,7 @@ def _contenido_del_reporte(ctx: AuditContext, request: dict) -> list[str]:
             )
     verification = ctx.art.artifact(VERIFICATION)
     if verification.ok:
-        marcadas = [
-            i
-            for i, c in enumerate(verification.value.checks)
-            if not c.exists_in_corpus or not c.grounded
-        ]
+        marcadas = verification.value.flagged_indices()
         pedidas = request.get("must_adjudicate")
         if pedidas != marcadas:
             problems.append(
@@ -941,6 +937,31 @@ def _contenido_del_reporte(ctx: AuditContext, request: dict) -> list[str]:
                 f"{VERIFICATION} {short_text(marcadas)}"
             )
     return problems
+
+
+def _n_labels(ctx: AuditContext, stage: str) -> list[str]:
+    """El ``n_labels`` del ``approve`` o ``reject`` es el número de ``label`` de su decisión.
+
+    El motor escribe ``n_labels = len(labels)`` en la decisión (``_register``) y una ``label``
+    por etiqueta antes de ella (spec §4.3): contar las del ledger (``summarize_gates`` cuenta por
+    ``decision_sha256``; aquí, además, con su solicitud) y contrastarlas con lo declarado delata
+    una etiqueta borrada o añadida al ledger a mano, también cuando no hay ``decisions.json``.
+    """
+    entrada = _entrada_efectiva(ctx, stage)
+    if entrada is None:
+        return []
+    declarado = entrada.detail.get("n_labels")
+    reales = sum(
+        1
+        for e in ctx.ledger.decisions
+        if e.stage == stage and e.action == "label" and de_la_decision_efectiva(ctx, e)
+    )
+    if type(declarado) is int and declarado == reales:
+        return []
+    return [
+        f"`{stage}`: la decisión declara n_labels={short_repr(declarado)} y el ledger tiene "
+        f"{reales} etiqueta(s) de esa decisión"
+    ]
 
 
 def _atada(ctx: AuditContext, stage: str, gate: GateSummary) -> _Hallazgos:
@@ -971,6 +992,7 @@ def _atada(ctx: AuditContext, stage: str, gate: GateSummary) -> _Hallazgos:
                 f"`{stage}`: etiquetas o adjudicaciones de la decisión efectiva con otra "
                 f"solicitud: {_ids(ajenas)}"
             )
+        problems += _n_labels(ctx, stage)
     hallazgos.sumar(_decision_yml(ctx, stage, gate, declared))
     problems += _contenido(ctx, stage, gate, request)
     return hallazgos
@@ -982,10 +1004,14 @@ def check_request_hash(ctx: AuditContext) -> Verdict:
     Por cada gate con decisión efectiva (``approve`` o ``reject``) y ``review_request.yml``: el
     ``request_sha256`` se recalcula desde el contenido de la solicitud y es el de la decisión
     efectiva, el de cada ``label``/``flag_review`` suya y el de su ``decision.yml``, que es la
-    decisión registrada (``decision_sha256``) y del mismo actor; y lo aprobado (ids, artefactos,
-    documento, citas a adjudicar) es lo que hay en disco. Una solicitud editada tras aprobarla,
-    una decisión de otra solicitud o un artefacto cambiado después delatan una aprobación que no
-    es la que se registró.
+    decisión registrada (``decision_sha256``) y del mismo actor; el ``n_labels`` del ``approve``
+    es el número de ``label`` de esa decisión; y lo aprobado (ids, artefactos, documento, citas a
+    adjudicar) es lo que hay en disco. Una solicitud editada tras aprobarla, una decisión de otra
+    solicitud o un artefacto cambiado después delatan una aprobación que no es la que se
+    registró.
+
+    ``decision.yml`` es el canal de entrada: sin él (el motor reanuda igual) la decisión se
+    rehace del ledger y se recalcula su hash (PASS con nota; WARN si no cuadra).
 
     Un gate sin ``review_request.yml`` no se mira aquí: esa decisión no pasó por el gate y el
     FAIL lo dan ``hitl`` o ``final_gate`` (la reconstrucción C3 queda con una sola vía por
@@ -1072,11 +1098,7 @@ def _relacion_17(ctx: AuditContext, gate: GateSummary) -> list[str]:
             f"la decisión final {forzada} a humana (forced_human={gate.forced_human}) y "
             f"hallucination_flagged={flagged} (relación 17)"
         )
-    marcadas = [
-        i
-        for i, c in enumerate(verification.value.checks)
-        if not c.exists_in_corpus or not c.grounded
-    ]
+    marcadas = verification.value.flagged_indices()
     adjudicadas = {
         indice_de_bandera(e.target)
         for e in ctx.ledger.decisions
@@ -1102,6 +1124,33 @@ def _ids_numericos(items: list[int]) -> str:
     shown = ", ".join(str(i) for i in items[:_MAX_LISTADOS])
     more = len(items) - _MAX_LISTADOS
     return shown + (f" (+{more} más)" if more > 0 else "")
+
+
+def _sin_terminar(ctx: AuditContext) -> str | None:
+    """El ledger tiene una decisión final del reporte pero ``run.json`` no dice ``completed``.
+
+    ``derive_state`` da ``completed`` a quien tiene un ``approve`` del reporte (así se audita
+    entero), pero ese ``approve`` puede ser de una vuelta anterior: tras reincluir un registro
+    en T/A la corrida se detiene de nuevo en un gate y ``run.json`` dice ``paused`` (o
+    ``interrupted``, o ``running`` si el proceso murió) mientras el ledger conserva el reporte
+    aprobado. Una corrida que no terminó no tiene decisión final (auditoría de la Tarea 15).
+    Una corrida terminada y reanudada otra vez vuelve a ``completed`` y no entra aquí.
+    """
+    info = ctx.run_info
+    gate = ctx.gates.get("reporte")
+    if info is None or info.status == "completed":
+        return None
+    if gate is None or gate.action not in ("approve", "auto-proceed"):
+        return None
+    donde = f" en `{short_text(info.stage)}`" if info.stage else ""
+    return f"run.json dice `{info.status}`{donde}: la corrida no terminó."
+
+
+def _solicitud_vigente(ctx: AuditContext) -> str | None:
+    """El ``request_sha256`` declarado en el ``reporte/review_request.yml`` de ahora."""
+    loaded = ctx.art.yaml("reporte/review_request.yml")
+    declarado = loaded.value.get("request_sha256") if loaded.ok else None
+    return declarado if isinstance(declarado, str) else None
 
 
 def check_final_gate(ctx: AuditContext) -> Verdict:
@@ -1151,6 +1200,9 @@ def check_final_gate(ctx: AuditContext) -> Verdict:
 
     if gate is None:
         return "FAIL", f"Sin decisión sobre el reporte final.{nota}"
+    sin_terminar = _sin_terminar(ctx)
+    if sin_terminar is not None:
+        return "FAIL", sin_terminar
     if gate.action != "approve" or not is_human_actor(gate.actor):
         return "FAIL", (
             f"El reporte final no lo aprobó un humano: {short_text(gate.actor)}/"
@@ -1160,6 +1212,11 @@ def check_final_gate(ctx: AuditContext) -> Verdict:
         return "FAIL", (
             "aprobación humana sin solicitud: falta `reporte/review_request.yml` "
             "(la decisión no pasó por el gate)."
+        )
+    if _ola1(ctx) and gate.request_sha256 != _solicitud_vigente(ctx):
+        return "FAIL", (
+            "la aprobación del reporte responde a otra solicitud que la vigente "
+            "(`reporte/review_request.yml`): no es la decisión final efectiva."
         )
     problems = _relacion_17(ctx, gate)
     if problems:

@@ -96,6 +96,10 @@ def derive_state(
     ``auto-proceed``: quién decidió lo juzga ``final_gate``);
     ``interrupted`` si ``run.json`` lo dice; si no, el primer gate sin
     decisión: ``paused`` con solicitud, ``interrupted`` sin ella.
+
+    ``completed`` lo decide el ledger, para que se audite todo, pero el ``approve`` del reporte
+    puede ser de una vuelta anterior: si ``run.json`` dice ``paused``, ``interrupted`` o
+    ``running`` (o ``rejected``), la corrida no terminó y ``final_gate`` da el FAIL.
     """
     everything = frozenset(STAGES)
     if not ledger_ok and run_info is None:
