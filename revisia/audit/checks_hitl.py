@@ -19,9 +19,9 @@ from revisia.orchestration.hitl import HumanDecision
 from revisia.provenance.ledger import (
     AUTO_APPROVE_ACTOR,
     GATE_DECISION_ACTIONS,
-    HUMAN_ACTOR_PREFIX,
     LEDGER_ACTIONS,
     DecisionEntry,
+    is_human_actor,
 )
 from revisia.schemas.artifacts import GATED_STAGES, GateSummary
 
@@ -164,14 +164,17 @@ def _es_exclusion_humana(label: DecisionEntry) -> bool:
 
     Solo estas respaldan el ``excluded_human`` de ``exclusions.json`` (C3): una ``label`` de un
     agente o de ``auto-approve (demo)``, o una que incluye, no cuenta como exclusión humana.
+    «Humano» es ``is_human_actor``, la definición única del motor (PR-D): un ``human:`` sin
+    nombre visible no dice quién decidió.
     """
-    return label.detail.get("to") == "exclude" and label.actor.startswith(HUMAN_ACTOR_PREFIX)
+    return label.detail.get("to") == "exclude" and is_human_actor(label.actor)
 
 
 def check_hitl(ctx: AuditContext) -> Verdict:
     """trAIce M8/R1 / PRISMA 8: decide un humano en cada etapa de juicio.
 
-    Una etapa de juicio con decisión efectiva debe tenerla de un actor ``human:`` y con
+    Una etapa de juicio con decisión efectiva debe tenerla de un humano (``is_human_actor``:
+    ``human:`` y un nombre visible, la misma regla que aplica el motor) y con
     su ``review_request.yml`` (si no, no pasó por el gate: así era la reconstrucción
     C3); si falta una y hay otra posterior, se saltó un gate. Cualquier
     ``auto-approve (demo)`` del ledger es FAIL (D8). Además, las exclusiones humanas
@@ -211,7 +214,7 @@ def check_hitl(ctx: AuditContext) -> Verdict:
             elif stage in ctx.state.reached:
                 fails.append(f"`{stage}` alcanzada sin decisión")
             continue
-        if not gate.actor.startswith(HUMAN_ACTOR_PREFIX):
+        if not is_human_actor(gate.actor):
             fails.append(
                 f"`{stage}`: decisión efectiva de `{short_text(gate.actor)}` "
                 f"({short_text(gate.action)}), no humana"
@@ -300,7 +303,7 @@ def check_final_gate(ctx: AuditContext) -> Verdict:
     gate = ctx.gates.get("reporte")
     if gate is None:
         return "FAIL", "Sin decisión sobre el reporte final."
-    if gate.action != "approve" or not gate.actor.startswith(HUMAN_ACTOR_PREFIX):
+    if gate.action != "approve" or not is_human_actor(gate.actor):
         return "FAIL", (
             f"El reporte final no lo aprobó un humano: {short_text(gate.actor)}/"
             f"{short_text(gate.action)} (D8: el gate final exige una decisión humana)."

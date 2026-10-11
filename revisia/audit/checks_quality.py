@@ -33,7 +33,7 @@ from revisia.audit.checks_hitl import de_la_decision_efectiva
 from revisia.audit.model import Verdict
 from revisia.config import KNOWN_THRESHOLDS
 from revisia.metrics import ScreeningMetrics, wilson_interval
-from revisia.provenance.ledger import HUMAN_ACTOR_PREFIX
+from revisia.provenance.ledger import is_human_actor
 
 METRICS = "03_screening/metrics.json"
 VERIFICATION = "06_synthesis/verification.json"
@@ -403,7 +403,7 @@ def check_grounding(ctx: AuditContext) -> Verdict:
     adjudicated = _adjudications(ctx)
     missing = [i for i in flagged if i not in adjudicated]
     actors = sorted({actor for i in flagged for actor in adjudicated.get(i, [])})
-    non_human = [a for a in actors if not a.startswith(HUMAN_ACTOR_PREFIX)]
+    non_human = [a for a in actors if not is_human_actor(a)]
     if missing:
         fails.append(
             f"{len(missing)} cita(s) marcada(s) sin adjudicar por un humano (D8): índices "

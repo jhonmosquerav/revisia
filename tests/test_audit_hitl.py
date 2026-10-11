@@ -221,6 +221,51 @@ def test_final_gate_actor_human_sin_dos_puntos_falla(corrida) -> None:
     assert "no lo aprobó un humano: human/approve" in final_gate.detail
 
 
+# Un `human:` sin nombre visible no dice quién decidió. «Humano» es `is_human_actor` (PR-D), la
+# misma definición que aplica el motor; con `startswith("human:")` todos estos pasaban.
+_SIN_NOMBRE_VISIBLE = {
+    "vacio": "human:",
+    "espacios": "human:   ",
+    "zwsp": "human:" + chr(0x200B),  # U+200B, una marca de formato (Cf) que no se ve
+}
+
+
+@pytest.mark.parametrize("actor", list(_SIN_NOMBRE_VISIBLE.values()), ids=list(_SIN_NOMBRE_VISIBLE))
+def test_hitl_actor_human_sin_nombre_visible_en_un_gate_de_juicio_falla(corrida, actor) -> None:
+    edit_ledger(corrida, _actor("extraccion", actor))
+    report = auditar(corrida)
+    hitl = fila(report, "hitl")
+    assert hitl.status == "FAIL"
+    assert "`extraccion`: decisión efectiva de `human:" in hitl.detail
+    assert "(approve), no humana" in hitl.detail
+    assert not report.publishable
+
+
+@pytest.mark.parametrize("actor", list(_SIN_NOMBRE_VISIBLE.values()), ids=list(_SIN_NOMBRE_VISIBLE))
+def test_final_gate_actor_human_sin_nombre_visible_falla(corrida, actor) -> None:
+    edit_ledger(corrida, _actor("reporte", actor))
+    final_gate = fila(auditar(corrida), "final_gate")
+    assert final_gate.status == "FAIL"
+    assert "El reporte final no lo aprobó un humano: human:" in final_gate.detail
+
+
+def test_hitl_exclusion_de_un_humano_sin_nombre_visible_no_respalda_exclusiones(corrida) -> None:
+    # La `label` `exclude` del texto completo, firmada por `human:` + U+200B, ya no respalda la
+    # exclusión humana que declara exclusions.json (C3).
+    def _sin_nombre(entries: list[dict]) -> None:
+        for entry in entries:
+            if entry["action"] == "label":
+                entry["actor"] = _SIN_NOMBRE_VISIBLE["zwsp"]
+
+    edit_ledger(corrida, _sin_nombre)
+    hitl = fila(auditar(corrida), "hitl")
+    assert hitl.status == "FAIL"
+    assert (
+        f"exclusions.json declara {_EXCLUSIONES_FT} exclusiones humanas y el ledger solo "
+        "registra 0 etiqueta(s) `exclude`"
+    ) in hitl.detail
+
+
 def test_hitl_rechazo_no_humano_en_un_gate_intermedio_falla(corrida) -> None:
     # La etapa rechazada no cuenta como "alcanzada" para el estado, pero su decisión
     # efectiva tampoco puede ser de un actor que no sea humano.
