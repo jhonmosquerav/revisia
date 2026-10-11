@@ -123,7 +123,9 @@ class DecisionLedger:
         ``splitlines()`` partiría la entrada por la mitad.
 
         Raises:
-            JournalError: si una línea que no es la última está dañada (rc 2 en el CLI).
+            JournalError: si una línea que no es la última está dañada, o la última está
+                completa (termina en salto de línea y es JSON) pero no valida: no es la huella
+                de una caída, se editó a mano o el modelo cambió (rc 2 en el CLI).
         """
         from revisia.orchestration.journal import read_jsonl
 

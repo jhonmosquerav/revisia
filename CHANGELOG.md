@@ -186,6 +186,14 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   muy anidado, bombas de alias y de claves de fusión, escalares numéricos
   gigantes, claves que colisionan en el hash), y los textos que vienen de la
   corrida llegan al informe acotados y con los caracteres invisibles a la vista.
+- Un 5xx, un 429 o un fallo de red del ID Converter o de BioC ya no corta las otras
+  vías de acceso abierto: un registro con `oa_url`/`fulltext_url` (o con DOI y
+  Unpaywall) recupera su texto aunque NCBI esté caído. Si ninguna vía da texto,
+  el motivo es `error_http` (se reintenta al reanudar) y no `sin_url_oa`.
+- El ledger de decisiones y los diarios solo recortan una última línea que es la
+  huella de una caída (sin su salto final o con JSON cortado). Una última línea
+  completa que no valida es un `JournalError` (código 2): se editó a mano o el
+  modelo cambió, y recortarla borraba evidencia en silencio.
 
 ### Changed
 - `MANUAL_ONLY` incluye CINAHL, Cochrane/CENTRAL, ProQuest, EconLit, JSTOR,

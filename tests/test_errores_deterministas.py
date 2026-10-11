@@ -158,6 +158,57 @@ def test_ledger_con_una_linea_corrupta_en_medio_es_journal_error(tmp_path: Path)
         ledger.read_all()
 
 
+def test_ledger_con_una_ultima_linea_completa_pero_invalida_es_journal_error(
+    tmp_path: Path,
+) -> None:
+    # Una caída a mitad de escritura deja una línea SIN su salto final (o JSON cortado). Una línea
+    # terminada con `\n` que es JSON pero no valida como decisión no es esa huella: se editó a
+    # mano (o el modelo cambió) y recortarla borraría evidencia en silencio.
+    ledger = DecisionLedger(tmp_path / "decisions_ledger.jsonl")
+    ledger.append(_entrada(1))
+    original = ledger.path.read_bytes()
+    ledger.path.write_bytes(original + b'{"stage": "screening_ta", "actor": "human:ana"}\n')
+    escrito = ledger.path.read_bytes()
+
+    with pytest.raises(JournalError, match="línea 2.*completa"):
+        ledger.read_all()
+
+    assert ledger.path.read_bytes() == escrito  # no se tocó el fichero
+
+
+def test_ledger_con_una_ultima_linea_sin_salto_que_no_valida_se_recorta(tmp_path: Path) -> None:
+    # Misma línea, pero sin el `\n` final: sí es la huella de una escritura a medias.
+    ledger = DecisionLedger(tmp_path / "decisions_ledger.jsonl")
+    ledger.append(_entrada(1))
+    original = ledger.path.read_bytes()
+    ledger.path.write_bytes(original + b'{"stage": "screening_ta", "actor": "human:ana"}')
+
+    with pytest.warns(RuntimeWarning, match="se recortó"):
+        entradas = ledger.read_all()
+
+    assert [e.action for e in entradas] == ["a1"]
+    assert ledger.path.read_bytes() == original
+
+
+def test_resume_con_ultima_linea_completa_pero_invalida_sale_2_sin_tocar_el_ledger(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    run_dir = _corrida_en_pausa(tmp_path)
+    responder_gate(run_dir, "screening_ta")
+    assert cli.main(["run", "--resume", str(run_dir)]) == 0  # pausa en screening_ft
+    ledger = run_dir / "decisions_ledger.jsonl"
+    alterado = ledger.read_bytes() + b'{"stage": "screening_ft", "actor": "human:ana"}\n'
+    ledger.write_bytes(alterado)
+    capsys.readouterr()
+
+    rc = cli.main(["run", "--resume", str(run_dir)])
+
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "decisions_ledger.jsonl" in err and "Traceback" not in err
+    assert ledger.read_bytes() == alterado
+
+
 def test_resume_con_ledger_truncado_sigue_y_con_ledger_corrupto_sale_2(
     tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
@@ -363,9 +414,18 @@ def test_busqueda_y_texto_completo_con_sustitutos_no_tumban_la_corrida(
 
 
 class _Resp:
-    def __init__(self, status: int = 200, data: object = None) -> None:
+    def __init__(
+        self,
+        status: int = 200,
+        data: object = None,
+        *,
+        content: bytes = b"",
+        content_type: str = "",
+    ) -> None:
         self.status_code = status
         self._data = data
+        self.content = content
+        self.headers = {"content-type": content_type}
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
@@ -422,11 +482,87 @@ def test_fallo_de_red_del_id_converter_o_bioc_es_error_http(
     monkeypatch: pytest.MonkeyPatch, _ncbi_sin_esperas: None, respuesta: object
 ) -> None:
     monkeypatch.setattr(ncbi, "_client", lambda timeout=60.0: _Cliente(respuesta))
+    # El DOI sin `oa_url` pasa también por Unpaywall (vía 2): ahí no hay nada (404), así que el
+    # fallo de NCBI sigue mandando y es `error_http` (antes ni se llegaba a mirar Unpaywall).
+    monkeypatch.setitem(sys.modules, "httpx", _httpx_unpaywall(_Resp(404)))
     por_doi = SearchRecord(record_id="r", title="t", doi="10.1/abc")
     por_pmcid = SearchRecord(record_id="p", title="t", extra={"pmcid": "PMC1"})
 
     assert fulltext.fetch_fulltext(por_doi, mailto="ana@example.org").reason == "error_http"
     assert fulltext.fetch_fulltext(por_pmcid).reason == "error_http"
+
+
+_PAGINA_OA = _Resp(
+    200, content=b"<html><body>Texto abierto</body></html>", content_type="text/html"
+)
+
+
+def test_oa_url_con_id_converter_caido_recupera_el_texto(
+    monkeypatch: pytest.MonkeyPatch, _ncbi_sin_esperas: None
+) -> None:
+    # Antes de la ronda A5 un 503 del ID Converter no cortaba la vía de `extra.oa_url`; con A5
+    # escapaba antes del paso 2 y el registro salía `error_http` aunque la URL abierta existía.
+    monkeypatch.setattr(ncbi, "_client", lambda timeout=60.0: _Cliente(_Resp(503)))
+    monkeypatch.setitem(sys.modules, "httpx", _httpx_unpaywall(_PAGINA_OA))
+    record = SearchRecord(
+        record_id="r", title="t", doi="10.1/abc", extra={"oa_url": "https://repo.org/p.html"}
+    )
+
+    ft = fulltext.fetch_fulltext(record, mailto="ana@example.org")
+
+    assert (ft.available, ft.reason) == (True, None)
+    assert ft.text == "Texto abierto" and ft.source_url == "https://repo.org/p.html"
+
+
+def test_oa_url_con_bioc_caido_recupera_el_texto(
+    monkeypatch: pytest.MonkeyPatch, _ncbi_sin_esperas: None
+) -> None:
+    monkeypatch.setattr(ncbi, "_client", lambda timeout=60.0: _Cliente(_Resp(500)))
+    monkeypatch.setitem(sys.modules, "httpx", _httpx_unpaywall(_PAGINA_OA))
+    record = SearchRecord(
+        record_id="r", title="t", extra={"pmcid": "PMC1", "oa_url": "https://repo.org/p.html"}
+    )
+
+    ft = fulltext.fetch_fulltext(record)
+
+    assert (ft.available, ft.reason) == (True, None)
+    assert ft.text == "Texto abierto"
+
+
+def test_solo_doi_con_id_converter_503_y_unpaywall_404_es_error_http(
+    monkeypatch: pytest.MonkeyPatch, _ncbi_sin_esperas: None
+) -> None:
+    monkeypatch.setattr(ncbi, "_client", lambda timeout=60.0: _Cliente(_Resp(503)))
+    monkeypatch.setitem(sys.modules, "httpx", _httpx_unpaywall(_Resp(404)))
+    record = SearchRecord(record_id="r", title="t", doi="10.1/abc", abstract="resumen")
+
+    ft = fulltext.fetch_fulltext(record, mailto="ana@example.org")
+
+    assert (ft.available, ft.reason) == (False, "error_http")
+    assert "ID Converter" in (ft.detail or "")  # el fallo de NCBI, no un «sin_url_oa» mudo
+
+
+def test_fallo_de_ncbi_gana_a_un_paso_2_sin_texto(
+    monkeypatch: pytest.MonkeyPatch, _ncbi_sin_esperas: None
+) -> None:
+    # La vía 2 llega a una página sin texto (`texto_vacio`) o sin `httpx` (`sin_httpx`), pero
+    # BioC pudo tenerlo: el fallo transitorio previo manda y se reintenta al reanudar.
+    monkeypatch.setattr(ncbi, "_client", lambda timeout=60.0: _Cliente(_Resp(500)))
+    vacia = _Resp(200, content=b"<html><body> </body></html>", content_type="text/html")
+    monkeypatch.setitem(sys.modules, "httpx", _httpx_unpaywall(vacia))
+    record = SearchRecord(
+        record_id="r", title="t", extra={"pmcid": "PMC1", "oa_url": "https://repo.org/p.html"}
+    )
+
+    ft = fulltext.fetch_fulltext(record)
+
+    assert (ft.available, ft.reason) == (False, "error_http")
+    assert "BioC-PMC" in (ft.detail or "")
+
+    monkeypatch.setitem(sys.modules, "httpx", None)
+    sin_httpx = fulltext.fetch_fulltext(record)
+
+    assert (sin_httpx.available, sin_httpx.reason) == (False, "error_http")
 
 
 def test_404_de_bioc_es_sin_acceso_abierto(
