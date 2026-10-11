@@ -27,6 +27,7 @@ from typing import Any
 from revisia.audit.artifacts import (
     ARTIFACT_ADAPTERS,
     JSONL_ADAPTERS,
+    LLM_CALLS_ILEGIBLE,
     MANIFEST_ADAPTERS,
     NA_MANIFIESTO,
     AuditContext,
@@ -152,6 +153,40 @@ def _ruta(rel: str) -> str:
     return f"`{SNAPSHOT_DIR}/{short_text(rel, limit=_LIMITE_RUTA)}`"
 
 
+def _existe(path: Path) -> bool:
+    """``path`` existe (aunque no sea un fichero); un error al comprobarlo cuenta como que no."""
+    try:
+        return path.exists()
+    except Exception:  # fail-closed hacia «ausente», que también es un FAIL
+        return False
+
+
+def _es_carpeta(ruta: object) -> bool:
+    try:
+        return isinstance(ruta, str | Path) and Path(ruta).is_dir()
+    except Exception:  # una ruta que no se puede consultar no se da por carpeta
+        return False
+
+
+def _causa_huella(exc: Exception) -> str:
+    """Qué falló al calcular la huella de ``00_protocol/``, por el tipo de la excepción.
+
+    Se distinguen la codificación, una carpeta donde se esperaba un fichero y la falta de permiso.
+    En Windows leer una carpeta lanza ``PermissionError`` (en POSIX, ``IsADirectoryError``), así
+    que ante un ``OSError`` se mira si la ruta que trae es una carpeta. El mensaje de la excepción
+    no se cita: puede llevar rutas o texto del fichero.
+    """
+    if isinstance(exc, UnicodeDecodeError):
+        return "un fichero no es texto UTF-8 legible"
+    if isinstance(exc, OSError):
+        if isinstance(exc, IsADirectoryError) or _es_carpeta(exc.filename):
+            return "hay una carpeta donde se esperaba un fichero"
+        if isinstance(exc, PermissionError):
+            return "un fichero no se puede leer: sin permiso"
+        return "un fichero no se pudo leer"
+    return "un fichero no se pudo leer o interpretar"
+
+
 def _fuera_de_la_lista(snapshot: Path, registered: dict[str, str]) -> list[str] | str:
     """Ficheros de ``00_protocol/`` que ``run.json`` no registra (o el tipo del error si falla)."""
     try:
@@ -187,16 +222,21 @@ def check_protocol_snapshot(ctx: AuditContext) -> Verdict:
     snapshot = ctx.run_dir / SNAPSHOT_DIR
     try:
         actual = protocol_fingerprint(snapshot) if snapshot.is_dir() else {}
-    except Exception as exc:  # un fichero que no es texto UTF-8 o no se puede leer
+    except Exception as exc:  # un fichero que no es texto UTF-8, una carpeta o sin permiso
         return "FAIL", (
-            f"no se pudo calcular la huella de {SNAPSHOT_DIR}/ ({type(exc).__name__}): un "
-            "fichero no es texto UTF-8 legible."
+            f"no se pudo calcular la huella de {SNAPSHOT_DIR}/ ({type(exc).__name__}): "
+            f"{_causa_huella(exc)}."
         )
     ausentes = [rel for rel in sorted(registered) if rel not in actual]
     distintos = [
         rel for rel in sorted(registered) if rel in actual and actual[rel] != registered[rel]
     ]
-    fails = [f"{_ruta(rel)} ausente" for rel in ausentes[:_MAX_FICHEROS]]
+    # Lo que `run.json` registra y existe sin ser un fichero (una carpeta con ese nombre) no está
+    # «ausente»: se dice lo que es, y no se repite luego como «no valida».
+    fails = [
+        f"{_ruta(rel)} {'no es un fichero' if _existe(snapshot / rel) else 'ausente'}"
+        for rel in ausentes[:_MAX_FICHEROS]
+    ]
     fails += [f"{_ruta(rel)}: hash distinto del de run.json" for rel in distintos[:_MAX_FICHEROS]]
     resto = max(len(ausentes) - _MAX_FICHEROS, 0) + max(len(distintos) - _MAX_FICHEROS, 0)
     if "protocol.yml" not in registered:
@@ -210,8 +250,11 @@ def check_protocol_snapshot(ctx: AuditContext) -> Verdict:
         if "protocol.yml" not in registered:  # si lo registra, ya consta como ausente
             fails.append(f"{_ruta('protocol.yml')} ausente")
     elif not snap.ok:
-        error = short_text(snap.error, limit=_LIMITE_ERROR)
-        fails.append(f"{_ruta('protocol.yml')} no valida ({error})")
+        # Si `run.json` lo registra y no está entre los ficheros leídos (falta o no es un
+        # fichero), ya consta arriba: repetirlo como «no valida» solapaba los dos mensajes.
+        if "protocol.yml" not in registered or "protocol.yml" in actual:
+            error = short_text(snap.error, limit=_LIMITE_ERROR)
+            fails.append(f"{_ruta('protocol.yml')} no valida ({error})")
     elif manifest is not None:
         if "protocol" not in manifest:
             fails.append("el manifiesto no trae `protocol` con el que contrastar la instantánea")
@@ -247,6 +290,9 @@ def check_prompts(ctx: AuditContext) -> Verdict:
     """trAIce M6: cada llamada con el hash de su prompt y de su respuesta."""
     if ctx.manifest_dict is None:
         return "N/A", NA_MANIFIESTO
+    if ctx.llm_calls_ilegible is not None:
+        # No se audita la copia del manifiesto en su lugar: daría por verificado lo no leído.
+        return "WARN", f"no se pueden auditar los hashes: {LLM_CALLS_ILEGIBLE}."
     calls = ctx.llm_calls
     if not calls:
         return "WARN", "Sin llamadas IA que auditar."

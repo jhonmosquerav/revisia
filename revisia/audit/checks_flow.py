@@ -30,7 +30,13 @@ fila ``deliverable``.
 
 Lo que el motor aún no ha escrito no se exige (``state.py``): ``arithmetic`` y ``deliverable``
 solo corren con ``reporte`` alcanzado, y ``exclusions``, que corre desde ``screening_ft``,
-exige el manifiesto solo desde entonces (se escribe al evaluar el gate final).
+exige el manifiesto solo desde entonces (se escribe al evaluar el gate final). Tampoco se exige lo
+que el motor crea al primer uso: con 0 registros tras la deduplicación no hay diario de T/A ni
+llamadas a la IA hasta la síntesis (``_cribado_con_trabajo``).
+
+Un ``llm_calls.jsonl`` que existe y no se puede leer no se sustituye por la copia del manifiesto
+(``AuditContext.llm_calls_ilegible``): las relaciones que lo necesitan son no verificables y
+``schemas`` da el FAIL.
 """
 
 from __future__ import annotations
@@ -44,7 +50,13 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
-from revisia.audit.artifacts import NA_MANIFIESTO, AuditContext, short_repr, short_text
+from revisia.audit.artifacts import (
+    LLM_CALLS_ILEGIBLE,
+    NA_MANIFIESTO,
+    AuditContext,
+    short_repr,
+    short_text,
+)
 from revisia.audit.model import Verdict
 from revisia.config import STAGES, ReviewProtocol
 from revisia.exclusions import compute_exclusion_breakdown
@@ -82,18 +94,21 @@ STAGE_ARTIFACTS: dict[str, tuple[str, ...]] = {
     "sintesis": ("06_synthesis/verification.json",),
     "reporte": ("manifest.yml",),
 }
-# Artefactos de la Ola 1 (spec §4.2): solo se exigen con run.json. El diario de la recuperación
-# (`04_fulltext/retrieval.jsonl`) no está aquí sino en `_journals_ola1`: el motor no escribe en él
-# los fallos transitorios, así que una corrida legítima cuyas recuperaciones fallaron todas por la
-# red no lo tiene.
+# Artefactos de la Ola 1 (spec §4.2): solo se exigen con run.json. Los diarios que dependen de que
+# la etapa tuviera trabajo no están aquí sino en `_journals_ola1`: el de la recuperación
+# (`04_fulltext/retrieval.jsonl`; el motor no escribe en él los fallos transitorios, así que una
+# corrida cuyas recuperaciones fallaron todas por la red no lo tiene) y el de T/A con
+# `llm_calls.jsonl` (el motor los crea al cribar el primer registro y con 0 registros no existen).
 STAGE_ARTIFACTS_OLA1: dict[str, tuple[str, ...]] = {
     "protocolo": ("run.json", "00_protocol/protocol.yml"),
     "busqueda": ("01_search/records.json", "01_search/log.json"),
     "dedup": ("02_dedup/records.json", "02_dedup/dedup.json"),
-    "screening_ta": ("03_screening/journal.jsonl", "llm_calls.jsonl"),
     "screening_ft": (RETRIEVAL, "04_fulltext/excluded.json"),
     "sintesis": ("06_synthesis/journal.jsonl", "06_synthesis/verification.jsonl"),
 }
+SCREENING_JOURNAL = "03_screening/journal.jsonl"
+LLM_CALLS = "llm_calls.jsonl"
+DEDUP_RECORDS = "02_dedup/records.json"
 RETRIEVAL_JOURNAL = "04_fulltext/retrieval.jsonl"
 # Artefactos que existen si el manifiesto registra su copia.
 CONDITIONAL_ARTIFACTS: dict[str, tuple[str, str]] = {
@@ -241,12 +256,35 @@ def _recuperacion_con_diario(ctx: AuditContext) -> bool:
     return any(row.reason not in TRANSIENT_FULLTEXT_REASONS for row in retrieval.value)
 
 
+def _cribado_con_trabajo(ctx: AuditContext) -> bool:
+    """El cribado T/A tuvo algún registro que cribar (o no se puede saber que no).
+
+    El motor crea el diario de T/A al cribar el primer registro y la primera llamada a la IA la
+    registra ahí mismo: con 0 registros tras la deduplicación («0 estudios incluidos») no se
+    cribó nada y no existe ninguno de los dos. Si ``02_dedup/records.json`` no se carga (falta,
+    es ilegible o no valida) se supone que hubo registros (fail-closed; ``schemas`` y ``dedup``
+    marcan el fichero).
+    """
+    dedup = ctx.art.artifact(DEDUP_RECORDS)
+    return not dedup.ok or bool(dedup.value)
+
+
 def _journals_ola1(ctx: AuditContext) -> list[tuple[str, str]]:
-    """Diarios que existen si su etapa tuvo trabajo: la recuperación con algún resultado
-    definitivo, FT con algún recuperado, extracción y RoB con algún incluido, 2.º extractor con
-    doble extracción."""
+    """Diarios y llamadas que existen si su etapa tuvo trabajo: el cribado T/A con algún
+    registro (su diario y ``llm_calls.jsonl``), la recuperación con algún resultado definitivo,
+    FT con algún recuperado, extracción y RoB con algún incluido, 2.º extractor con doble
+    extracción.
+
+    ``llm_calls.jsonl`` existe una vez que hubo una llamada a la IA: con registros la hace el
+    cribado y sin ellos la primera es la síntesis, que el motor siempre hace (se exige entonces
+    con la síntesis alcanzada).
+    """
     required: list[tuple[str, str]] = []
     reached = ctx.state.reached
+    if "screening_ta" in reached and _cribado_con_trabajo(ctx):
+        required += [("screening_ta", SCREENING_JOURNAL), ("screening_ta", LLM_CALLS)]
+    elif "sintesis" in reached:
+        required.append(("sintesis", LLM_CALLS))
     ft = ctx.art.artifact(FT)
     if "screening_ft" in reached:
         if _recuperacion_con_diario(ctx):
@@ -639,6 +677,9 @@ def _csv(ctx: AuditContext, rel: _Relations) -> None:
 def _calls(ctx: AuditContext, rel: _Relations) -> None:
     manifest = ctx.manifest_dict or {}
     calls = ctx.llm_calls
+    # Con `llm_calls.jsonl` ilegible `calls` está vacío (no se cae a la copia del manifiesto): las
+    # relaciones que se apoyan en las llamadas quedan no verificables, y `schemas` da el FAIL.
+    ilegible = ctx.llm_calls_ilegible is not None
     name = "§9.3 · models_used == modelos de llm_calls"
     # `models_used` y las llamadas no pasan por un modelo aquí: una cadena, un mapa o una
     # lista anidada (bomba de alias) no se compara ni se ordena, `schemas` ya lo marca.
@@ -658,6 +699,8 @@ def _calls(ctx: AuditContext, rel: _Relations) -> None:
     elif not declared_section.ok:
         # Presente pero de otro tipo: `schemas` valida `models_used` y marca FAIL.
         rel.unverifiable(name, "models_used no es una lista de cadenas (ver `schemas`)")
+    elif ilegible:
+        rel.unverifiable(name, LLM_CALLS_ILEGIBLE)
     elif malformed:
         # Una llamada sin provider/model textuales no valida `RunMeta`: lo marca `schemas`.
         rel.unverifiable(
@@ -670,20 +713,28 @@ def _calls(ctx: AuditContext, rel: _Relations) -> None:
             sorted(declared) == sorted(models),
             f"declarados {_ids(sorted(declared))}; en llamadas {_ids(sorted(models))}",
         )
-    rel.eq(
-        "§9.3 · deterministic_token_level == all(deterministic)",
-        manifest.get("deterministic_token_level"),
-        all(c.get("deterministic") is True for c in calls) if calls else True,
-    )
-    if ctx.art.exists("llm_calls.jsonl"):
+    name_det = "§9.3 · deterministic_token_level == all(deterministic)"
+    if ilegible:
+        rel.unverifiable(name_det, LLM_CALLS_ILEGIBLE)
+    else:
+        rel.eq(
+            name_det,
+            manifest.get("deterministic_token_level"),
+            all(c.get("deterministic") is True for c in calls) if calls else True,
+        )
+    if ctx.art.exists(LLM_CALLS):
         # Los demás checks leen `llm_calls.jsonl` (la fuente) y `manifest` lee la copia del
         # manifiesto: sin esta igualdad, editar una de las dos pasaría desapercibido. `==` y no un
         # volcado: con un valor hostil (bomba de alias) termina cuando las formas difieren.
-        rel.check(
-            "§4.3 · manifest.llm_calls == líneas de llm_calls.jsonl",
-            bool(manifest.get("llm_calls") == calls),
-            "distintas (o en otro orden)",
-        )
+        name_copia = "§4.3 · manifest.llm_calls == líneas de llm_calls.jsonl"
+        if ilegible:  # sin leer el fichero no hay con qué comparar la copia
+            rel.unverifiable(name_copia, LLM_CALLS_ILEGIBLE)
+        else:
+            rel.check(
+                name_copia,
+                bool(manifest.get("llm_calls") == calls),
+                "distintas (o en otro orden)",
+            )
     c = _seccion(ctx, rel, "counts", "§9.3 · cota inferior de llamadas")
     if c is None:
         return
@@ -707,8 +758,12 @@ def _calls(ctx: AuditContext, rel: _Relations) -> None:
         rescued = c.fulltext_rescued
     by_ai = c.fulltext_assessed - rescued
     floor = c.screened * members + by_ai + 2 * c.included + doubles + 1
+    name_cota = "§9.3 · llamadas ≥ cota inferior de las decisiones"
+    if ilegible:
+        rel.unverifiable(name_cota, LLM_CALLS_ILEGIBLE)
+        return
     rel.check(
-        "§9.3 · llamadas ≥ cota inferior de las decisiones",
+        name_cota,
         len(calls) >= floor,
         f"{len(calls)} llamadas < {_n(floor)} = {_n(c.screened)}·{members} + {_n(by_ai)} + "
         f"2·{_n(c.included)} + {_n(doubles)} + 1",

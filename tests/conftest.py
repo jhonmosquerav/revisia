@@ -158,17 +158,24 @@ def protocolo_auditoria(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return destino
 
 
+def busqueda_vacia(_query: str, _n: int) -> list[SearchRecord]:
+    """``search_fn`` de una búsqueda que no devuelve ningún registro."""
+    return []
+
+
 def _correr(
     base_dir: Path,
     protocol_dir: Path,
     *,
     parar_en: str | None,
     rechazar: str | None = None,
+    search_fn: Callable[[str, int], list[SearchRecord]] = busqueda_auditoria,
 ) -> Path:
     """Corre el pipeline real con la revisora de ``etiquetar_auditoria``.
 
     Se detiene en la pausa de ``parar_en`` o, con ``rechazar``, cuando la revisora
     rechaza ese gate (``approved: false`` atado a su solicitud, como en la vida real).
+    ``search_fn`` es la búsqueda simulada (por defecto, los siete registros de la auditoría).
     """
     protocol = load_protocol(protocol_dir)
     # Timestamp UTC real: el auditor lo usa como límite inferior de las marcas
@@ -187,7 +194,7 @@ def _correr(
             protocol,
             protocol_dir,
             ctx,
-            search_fn=busqueda_auditoria,
+            search_fn=search_fn,
             fetch_fn=fetch_disponible,
             etiquetar=_revisora,
             parar_en=parar_en,
@@ -214,6 +221,19 @@ def _corrida_en_pausa_ft(
     )
 
 
+@pytest.fixture(scope="session")
+def _corrida_sin_registros(
+    tmp_path_factory: pytest.TempPathFactory, protocolo_auditoria: Path
+) -> Path:
+    """Corrida real completada cuya búsqueda no devuelve ningún registro (0 incluidos)."""
+    return _correr(
+        tmp_path_factory.mktemp("sin-registros"),
+        protocolo_auditoria,
+        parar_en=None,
+        search_fn=busqueda_vacia,
+    )
+
+
 def _copia(origen: Path, tmp_path: Path) -> Path:
     destino = tmp_path / "runs" / origen.name
     shutil.copytree(origen, destino)
@@ -230,6 +250,34 @@ def corrida(_corrida_auditoria: Path, tmp_path: Path) -> Path:
 def corrida_en_pausa_ft(_corrida_en_pausa_ft: Path, tmp_path: Path) -> Path:
     """Copia propia de la corrida en pausa en ``screening_ft``."""
     return _copia(_corrida_en_pausa_ft, tmp_path)
+
+
+@pytest.fixture
+def corrida_sin_registros(_corrida_sin_registros: Path, tmp_path: Path) -> Path:
+    """Copia propia de la corrida completada de una búsqueda sin registros."""
+    return _copia(_corrida_sin_registros, tmp_path)
+
+
+@pytest.fixture
+def rechazar_sin_registros(
+    tmp_path_factory: pytest.TempPathFactory, protocolo_auditoria: Path
+) -> Callable[[str], Path]:
+    """Fábrica de corridas reales de búsqueda vacía rechazadas en un gate (``rechazar``).
+
+    Una corrida rechazada antes de la síntesis no hizo ninguna llamada a la IA (sin registros
+    no hay nada que cribar): no tiene ``llm_calls.jsonl`` ni el diario de T/A.
+    """
+
+    def _rechazar(etapa: str) -> Path:
+        return _correr(
+            tmp_path_factory.mktemp("sin-registros-rechazada"),
+            protocolo_auditoria,
+            parar_en=None,
+            rechazar=etapa,
+            search_fn=busqueda_vacia,
+        )
+
+    return _rechazar
 
 
 @pytest.fixture

@@ -7,6 +7,7 @@ Spec 2026-10-04 §9.3 (filas 3, 4, 11, 14 y 20) y §9.4 (familias
 from __future__ import annotations
 
 import json
+import re
 import shutil
 
 import pytest
@@ -22,7 +23,7 @@ from audit_fixtures import (
     write_legacy_v07,
 )
 
-from revisia.audit import CHECKS
+from revisia.audit import CHECKS, checks_provenance
 from revisia.audit.artifacts import JSONL_ADAPTERS, AuditContext, load_run
 from revisia.audit.checks_provenance import LEGACY_RUN
 from revisia.orchestration.snapshot import protocol_fingerprint
@@ -386,26 +387,88 @@ def test_protocol_snapshot_protocolo_de_50000_caracteres_se_acota(corrida) -> No
 
 
 @pytest.mark.parametrize(
-    "preparar",
+    ("preparar", "tipo", "causa"),
     [
         pytest.param(
             lambda c: (c / "00_protocol" / "effects.yml").write_bytes(b"\xff\xfe\x00 no es utf-8"),
+            r"UnicodeDecodeError",
+            "un fichero no es texto UTF-8 legible",
             id="fichero-que-no-es-utf-8",
         ),
         pytest.param(
             lambda c: (c / "00_protocol" / "search_strings" / "trampa.txt").mkdir(),
+            # En Windows leer una carpeta lanza `PermissionError`; en POSIX, `IsADirectoryError`.
+            r"(PermissionError|IsADirectoryError)",
+            "hay una carpeta donde se esperaba un fichero",
             id="directorio-con-nombre-de-cadena-de-busqueda",
         ),
     ],
 )
-def test_protocol_snapshot_instantanea_ilegible_falla_sin_reventar(corrida, preparar) -> None:
+def test_protocol_snapshot_instantanea_ilegible_falla_sin_reventar(
+    corrida, preparar, tipo: str, causa: str
+) -> None:
     preparar(corrida)
     report = auditar(corrida)
     snapshot = fila(report, "protocol_snapshot")
     assert snapshot.status == "FAIL"
-    assert "no se pudo calcular la huella de 00_protocol/" in snapshot.detail
+    assert re.fullmatch(
+        rf"no se pudo calcular la huella de 00_protocol/ \({tipo}\): {re.escape(causa)}\.",
+        snapshot.detail,
+    ), snapshot.detail
     assert _sin_error_interno(report) == []
     assert len(report.checks) == len(CHECKS)
+
+
+@pytest.mark.parametrize(
+    ("error", "causa"),
+    [
+        pytest.param(
+            PermissionError(13, "Permission denied", "/ruta/que/no/es/una/carpeta"),
+            "un fichero no se puede leer: sin permiso",
+            id="sin-permiso",
+        ),
+        pytest.param(
+            OSError(5, "Input/output error", "/ruta/que/no/es/una/carpeta"),
+            "un fichero no se pudo leer",
+            id="error-de-lectura",
+        ),
+        pytest.param(
+            MemoryError("fichero enorme"),
+            "un fichero no se pudo leer o interpretar",
+            id="otra-excepcion",
+        ),
+    ],
+)
+def test_protocol_snapshot_distingue_la_causa_de_la_huella_imposible(
+    corrida, monkeypatch: pytest.MonkeyPatch, error: Exception, causa: str
+) -> None:
+    def _falla(_carpeta) -> dict[str, str]:
+        raise error
+
+    monkeypatch.setattr(checks_provenance, "protocol_fingerprint", _falla)
+    snapshot = fila(auditar(corrida), "protocol_snapshot")
+    assert snapshot.status == "FAIL"
+    assert snapshot.detail == (
+        f"no se pudo calcular la huella de 00_protocol/ ({type(error).__name__}): {causa}."
+    )
+    assert "UTF-8" not in snapshot.detail
+
+
+def test_protocol_snapshot_protocol_yml_que_es_una_carpeta_da_un_solo_motivo(corrida) -> None:
+    # `run.json` registra `protocol.yml`: ni «ausente» (existe) ni, además, «no valida» (solapados).
+    protocolo = corrida / "00_protocol" / "protocol.yml"
+    protocolo.unlink()
+    protocolo.mkdir()
+    snapshot = fila(auditar(corrida), "protocol_snapshot")
+    assert snapshot.status == "FAIL"
+    assert snapshot.detail == "`00_protocol/protocol.yml` no es un fichero."
+
+
+def test_protocol_snapshot_protocol_yml_ausente_sigue_diciendo_ausente(corrida) -> None:
+    (corrida / "00_protocol" / "protocol.yml").unlink()
+    snapshot = fila(auditar(corrida), "protocol_snapshot")
+    assert snapshot.status == "FAIL"
+    assert snapshot.detail == "`00_protocol/protocol.yml` ausente."
 
 
 def test_protocol_snapshot_miles_de_ficheros_extra_se_acotan(corrida) -> None:
@@ -497,6 +560,25 @@ def test_schemas_gold_json_con_clave_de_50000_caracteres_se_acota(corrida) -> No
     assert "03_screening/gold.json" in schemas.detail
     assert len(schemas.detail) < 1_500
     assert _sin_error_interno(report) == []
+
+
+@pytest.mark.parametrize("valor", ["false", "true", "yes", 0, 1], ids=repr)
+def test_schemas_gold_json_exige_booleanos_estrictos(corrida, valor) -> None:
+    # El motor escribe `true`/`false` (`bool(...)` en `_load_gold`): un `"false"` o un `0` serían
+    # un gold distinto del que usó, y pydantic en modo laxo los aceptaría como booleanos.
+    path = corrida / "03_screening" / "gold.json"
+    edit_json(path, lambda gold: gold.update({"10.1000/llm-1": valor}))
+    schemas = fila(auditar(corrida), "schemas")
+    assert schemas.status == "FAIL"
+    assert "03_screening/gold.json" in schemas.detail
+    assert "10.1000/llm-1" in schemas.detail
+
+
+def test_schemas_gold_json_con_booleanos_de_verdad_valida(corrida) -> None:
+    gold = json.loads((corrida / "03_screening" / "gold.json").read_text(encoding="utf-8"))
+    assert gold
+    assert all(isinstance(v, bool) for v in gold.values())
+    assert fila(auditar(corrida), "schemas").status == "PASS"
 
 
 @pytest.mark.parametrize(
@@ -663,6 +745,77 @@ def test_stage_artifacts_cuantas_etapas_dice_el_pass(corrida) -> None:
     )
 
 
+def test_stage_artifacts_busqueda_sin_registros_no_exige_el_diario_de_ta_y_es_publicable(
+    corrida_sin_registros,
+) -> None:
+    # Con 0 registros el motor completa («0 estudios incluidos») sin cribar nada: el diario de T/A
+    # se crea al primer registro y no existe. No es manipulación (falso FAIL de la revisión).
+    run = corrida_sin_registros
+    assert not (run / "03_screening" / "journal.jsonl").exists()
+    report = auditar(run)
+    stage = fila(report, "stage_artifacts")
+    assert stage.status == "PASS"
+    assert "03_screening/journal.jsonl" not in stage.detail
+    assert report.n_fail == 0
+    assert report.publishable
+
+
+@pytest.mark.parametrize("rechazada_en", ["screening_ft", "extraccion", "rob"])
+def test_stage_artifacts_sin_registros_rechazada_antes_de_la_sintesis_no_exige_llamadas(
+    rechazar_sin_registros, rechazada_en: str
+) -> None:
+    # Sin registros nada llama a la IA hasta la síntesis: una corrida rechazada antes no tiene
+    # `llm_calls.jsonl` ni diario de T/A, y las dos ausencias son legítimas.
+    run = rechazar_sin_registros(rechazada_en)
+    assert not (run / "llm_calls.jsonl").exists()
+    assert not (run / "03_screening" / "journal.jsonl").exists()
+    assert fila(auditar(run), "stage_artifacts").status == "PASS"
+
+
+@pytest.mark.parametrize("rel", ["03_screening/journal.jsonl", "llm_calls.jsonl"])
+def test_stage_artifacts_con_registros_el_diario_de_ta_y_las_llamadas_siguen_exigidos(
+    corrida, rel: str
+) -> None:
+    (corrida / rel).unlink()
+    stage = fila(auditar(corrida), "stage_artifacts")
+    assert stage.status == "FAIL"
+    assert f"screening_ta: {rel}" in stage.detail
+
+
+@pytest.mark.parametrize("estropear", ["ilegible", "invalido", "ausente"])
+def test_stage_artifacts_exige_diario_y_llamadas_si_dedup_records_no_se_lee(
+    corrida, estropear: str
+) -> None:
+    # Fail-closed: sin saber cuántos registros se cribaron, se exige lo que el motor escribe con
+    # alguno (y `schemas` marca el fichero estropeado).
+    dedup = corrida / "02_dedup" / "records.json"
+    if estropear == "ilegible":
+        dedup.write_bytes("[]".encode("utf-16"))
+    elif estropear == "invalido":
+        dedup.write_text("{no es json", encoding="utf-8")
+    else:
+        dedup.unlink()
+    (corrida / "03_screening" / "journal.jsonl").unlink()
+    (corrida / "llm_calls.jsonl").unlink()
+    stage = fila(auditar(corrida), "stage_artifacts")
+    assert stage.status == "FAIL"
+    assert "screening_ta: 03_screening/journal.jsonl" in stage.detail
+    assert "screening_ta: llm_calls.jsonl" in stage.detail
+
+
+def test_stage_artifacts_sin_registros_las_llamadas_de_la_sintesis_siguen_exigidas(
+    corrida_sin_registros,
+) -> None:
+    # La síntesis siempre llama a la IA: en una corrida con la síntesis hecha `llm_calls.jsonl`
+    # existe aunque no hubiera nada que cribar, y quitarlo no puede dejar al manifiesto como
+    # única fuente de las llamadas.
+    (corrida_sin_registros / "llm_calls.jsonl").unlink()
+    stage = fila(auditar(corrida_sin_registros), "stage_artifacts")
+    assert stage.status == "FAIL"
+    assert "sintesis: llm_calls.jsonl" in stage.detail
+    assert "screening_ta" not in stage.detail
+
+
 # ── Las llamadas IA: la fuente es llm_calls.jsonl y el manifiesto es su copia ─────────────────
 
 
@@ -696,6 +849,57 @@ def test_arithmetic_llm_calls_jsonl_editado_sin_el_manifiesto_falla(corrida) -> 
     arithmetic = fila(auditar(corrida), "arithmetic")
     assert arithmetic.status == "FAIL"
     assert "manifest.llm_calls == líneas de llm_calls.jsonl" in arithmetic.detail
+
+
+def _llm_calls_en_utf16(run) -> None:
+    (run / "llm_calls.jsonl").write_bytes("hola".encode("utf-16"))
+
+
+def test_llm_calls_solo_cae_al_manifiesto_si_llm_calls_jsonl_falta(corrida) -> None:
+    (corrida / "llm_calls.jsonl").unlink()
+    ctx = AuditContext(load_run(corrida))
+    assert ctx.llm_calls_ilegible is None
+    assert ctx.llm_calls == ctx.manifest_llm_calls != []
+
+
+def test_llm_calls_jsonl_ilegible_no_cae_al_manifiesto(corrida) -> None:
+    _llm_calls_en_utf16(corrida)
+    ctx = AuditContext(load_run(corrida))
+    assert ctx.llm_calls == []
+    assert ctx.llm_calls_ilegible == "no es texto UTF-8 (¿UTF-16 o binario?)"
+    assert ctx.manifest_llm_calls != []  # la copia sigue ahí: solo `manifest` la lee
+
+
+def test_arithmetic_llm_calls_jsonl_ilegible_deja_las_relaciones_no_verificables(corrida) -> None:
+    # Con el fichero ilegible la igualdad «manifest.llm_calls == llm_calls.jsonl» era trivial
+    # (ambos lados salían del manifiesto): ahora es no verificable, y `schemas` da el FAIL.
+    _llm_calls_en_utf16(corrida)
+    report = auditar(corrida)
+    schemas = fila(report, "schemas")
+    assert schemas.status == "FAIL"
+    assert "llm_calls.jsonl: no es texto UTF-8" in schemas.detail
+    arithmetic = fila(report, "arithmetic")
+    assert arithmetic.status == "WARN"
+    assert "no verificables" in arithmetic.detail
+    for relacion in (
+        "§4.3 · manifest.llm_calls == líneas de llm_calls.jsonl",
+        "§9.3 · models_used == modelos de llm_calls",
+        "§9.3 · deterministic_token_level == all(deterministic)",
+        "§9.3 · llamadas ≥ cota inferior de las decisiones",
+    ):
+        assert f"{relacion} (llm_calls.jsonl ilegible" in arithmetic.detail
+    assert _sin_error_interno(report) == []
+    assert not report.publishable
+
+
+@pytest.mark.parametrize("check_id", ["prompts", "timing", "response_overlap"])
+def test_llm_calls_jsonl_ilegible_no_se_da_por_verificado_con_la_copia_del_manifiesto(
+    corrida, check_id: str
+) -> None:
+    _llm_calls_en_utf16(corrida)
+    check = fila(auditar(corrida), check_id)
+    assert check.status == "WARN"
+    assert "llm_calls.jsonl ilegible" in check.detail
 
 
 def test_manifest_comprueba_las_llamadas_que_el_manifiesto_dice_tener(corrida) -> None:

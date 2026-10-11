@@ -124,45 +124,47 @@ _YAML_ERR_DEPTH = (
     f"estructura YAML demasiado anidada (más de {_YAML_MAX_DEPTH} niveles de colecciones "
     "anidadas); no se carga para no desbordar la pila del intérprete"
 )
-_YAML_ERR_MERGE = (
-    "claves de fusión YAML (<<) no admitidas en artefactos del motor; no se carga para no "
-    "multiplicar sus pares en memoria"
-)
-_YAML_ERR_NUMERO = (
-    f"escalar numérico de más de {_YAML_MAX_ESCALAR_NUMERICO} caracteres no admitido en "
-    "artefactos del motor; no se carga porque construirlo cuesta tiempo cuadrático"
-)
-_YAML_ERR_CLAVES = (
-    f"más de {_YAML_MAX_CLAVES_ENTERAS} claves enteras en el documento, no admitidas en "
-    "artefactos del motor; no se carga porque las que colisionan en el hash cuestan tiempo "
-    "cuadrático"
-)
-_YAML_ERR_ALIAS_CLAVE = (
-    "alias como clave de mapping: no admitido en artefactos del motor; no se carga porque los "
-    "alias de enteros que colisionan en el hash cuestan tiempo cuadrático"
-)
 
-# `00_protocol/protocol.yml` es una copia literal del `protocol.yml` de la persona que revisa, no
-# un artefacto del motor: «no admitido en artefactos del motor» sería un mensaje engañoso (el
-# motor sí lo escribió tal cual, y quien debe corregirlo es su autora). El motor rechaza las claves
-# de fusión al cargar el protocolo (`config.load_protocol`), así que una corrida real no las trae;
-# las demás guardas solo saltan con un protocolo hostil o editado a mano. Mismo veredicto, texto
-# neutro (Tarea 12, adaptación 1).
-_YAML_ERR_MERGE_USUARIO = (
-    "claves de fusión YAML (<<) no admitidas por el auditor: riesgo de expansión exponencial"
-)
-_YAML_ERR_NUMERO_USUARIO = (
-    f"escalar numérico de más de {_YAML_MAX_ESCALAR_NUMERICO} caracteres no admitido por el "
-    "auditor: construirlo cuesta tiempo cuadrático"
-)
-_YAML_ERR_CLAVES_USUARIO = (
-    f"más de {_YAML_MAX_CLAVES_ENTERAS} claves enteras en el documento, no admitidas por el "
-    "auditor: las que colisionan en el hash cuestan tiempo cuadrático"
-)
-_YAML_ERR_ALIAS_CLAVE_USUARIO = (
-    "alias como clave de mapping no admitido por el auditor: los alias de enteros que "
-    "colisionan en el hash cuestan tiempo cuadrático"
-)
+# Por qué `_yaml_guard` rechaza un YAML → (texto para un artefacto del motor, texto para la copia
+# del protocolo de quien revisa). `00_protocol/protocol.yml` es una copia literal del
+# `protocol.yml` de la persona que revisa, no un artefacto del motor: «no admitido en artefactos
+# del motor» sería un mensaje engañoso (el motor sí lo escribió tal cual, y quien debe corregirlo
+# es su autora). El motor rechaza las claves de fusión al cargar el protocolo
+# (`config.load_protocol`), así que una corrida real no las trae; las demás guardas solo saltan
+# con un protocolo hostil o editado a mano. Mismo veredicto, texto neutro (Tarea 12, adaptación
+# 1). El anidamiento dice lo mismo en los dos (no menciona al motor).
+_YAML_MOTIVOS: dict[str, tuple[str, str]] = {
+    "profundidad": (_YAML_ERR_DEPTH, _YAML_ERR_DEPTH),
+    "fusion": (
+        "claves de fusión YAML (<<) no admitidas en artefactos del motor; no se carga para no "
+        "multiplicar sus pares en memoria",
+        "claves de fusión YAML (<<) no admitidas por el auditor: riesgo de expansión exponencial",
+    ),
+    "numero": (
+        f"escalar numérico de más de {_YAML_MAX_ESCALAR_NUMERICO} caracteres no admitido en "
+        "artefactos del motor; no se carga porque construirlo cuesta tiempo cuadrático",
+        f"escalar numérico de más de {_YAML_MAX_ESCALAR_NUMERICO} caracteres no admitido por el "
+        "auditor: construirlo cuesta tiempo cuadrático",
+    ),
+    "claves": (
+        f"más de {_YAML_MAX_CLAVES_ENTERAS} claves enteras en el documento, no admitidas en "
+        "artefactos del motor; no se carga porque las que colisionan en el hash cuestan tiempo "
+        "cuadrático",
+        f"más de {_YAML_MAX_CLAVES_ENTERAS} claves enteras en el documento, no admitidas por el "
+        "auditor: las que colisionan en el hash cuestan tiempo cuadrático",
+    ),
+    "alias_clave": (
+        "alias como clave de mapping: no admitido en artefactos del motor; no se carga porque "
+        "los alias de enteros que colisionan en el hash cuestan tiempo cuadrático",
+        "alias como clave de mapping no admitido por el auditor: los alias de enteros que "
+        "colisionan en el hash cuestan tiempo cuadrático",
+    ),
+}
+
+
+def _motivo_yaml(motivo: str, de_usuario: bool) -> str:
+    """El texto de ``motivo`` (clave de :data:`_YAML_MOTIVOS`) para el motor o para el usuario."""
+    return _YAML_MOTIVOS[motivo][1 if de_usuario else 0]
 
 
 @dataclass(frozen=True)
@@ -327,6 +329,11 @@ def short_text(value: object, *, limit: int = 120) -> str:
 # `response_overlap`.
 NA_MANIFIESTO = "no aplica: el manifiesto no se pudo leer (ver `manifest`)."
 
+# Lo que dicen los checks que leen las llamadas IA cuando `llm_calls.jsonl` existe y no se pudo
+# leer (`AuditContext.llm_calls_ilegible`): no se verifica con la copia del manifiesto y la causa
+# la da la fila `schemas`.
+LLM_CALLS_ILEGIBLE = "llm_calls.jsonl ilegible (ver `schemas`)"
+
 # Ídem para los checks que leen el protocolo de la corrida (``thresholds``, ``search_window`` y
 # ``registration``): sin instantánea ``00_protocol/`` ni protocolo legible en el manifiesto, la
 # causa ya está en otra fila (``manifest``, ``schemas`` o ``protocol_snapshot``) y aquí es un
@@ -444,25 +451,25 @@ def _yaml_guard(text: str, *, de_usuario: bool = False) -> str | None:
                 abiertas[-1][0] += 1
             if isinstance(event, yaml.AliasEvent):
                 if es_clave:
-                    return _YAML_ERR_ALIAS_CLAVE_USUARIO if de_usuario else _YAML_ERR_ALIAS_CLAVE
+                    return _motivo_yaml("alias_clave", de_usuario)
             elif isinstance(event, yaml.ScalarEvent):
                 if event.tag == _YAML_MERGE_TAG or (event.value == "<<" and not event.style):
-                    return _YAML_ERR_MERGE_USUARIO if de_usuario else _YAML_ERR_MERGE
+                    return _motivo_yaml("fusion", de_usuario)
                 largo = len(event.value) > _YAML_MAX_ESCALAR_NUMERICO
                 if largo or (es_clave and (event.tag or event.value[:1] in _YAML_INICIO_ENTERO)):
                     tag = _etiqueta_escalar(loader, event)
                     if largo and tag in (_YAML_INT_TAG, _YAML_FLOAT_TAG):
-                        return _YAML_ERR_NUMERO_USUARIO if de_usuario else _YAML_ERR_NUMERO
+                        return _motivo_yaml("numero", de_usuario)
                     if es_clave and tag == _YAML_INT_TAG:
                         claves_enteras += 1
                         if claves_enteras > _YAML_MAX_CLAVES_ENTERAS:
-                            return _YAML_ERR_CLAVES_USUARIO if de_usuario else _YAML_ERR_CLAVES
+                            return _motivo_yaml("claves", de_usuario)
             elif isinstance(event, yaml.SequenceStartEvent | yaml.MappingStartEvent):
                 if event.tag == _YAML_MERGE_TAG:
-                    return _YAML_ERR_MERGE_USUARIO if de_usuario else _YAML_ERR_MERGE
+                    return _motivo_yaml("fusion", de_usuario)
                 abiertas.append(None if isinstance(event, yaml.SequenceStartEvent) else [0])
                 if len(abiertas) > _YAML_MAX_DEPTH:
-                    return _YAML_ERR_DEPTH
+                    return _motivo_yaml("profundidad", de_usuario)
             elif isinstance(event, yaml.SequenceEndEvent | yaml.MappingEndEvent):
                 abiertas.pop()
         return None
@@ -577,7 +584,9 @@ ARTIFACT_ADAPTERS: dict[str, TypeAdapter[Any]] = {
     "01_search/log.json": TypeAdapter(SearchLog),
     "02_dedup/records.json": TypeAdapter(list[SearchRecord]),
     "02_dedup/dedup.json": TypeAdapter(DedupReport),
-    "03_screening/gold.json": TypeAdapter(dict[str, bool]),
+    # `StrictBool`: el motor escribe `true`/`false` (`bool(...)` en `_load_gold`); el modo laxo de
+    # pydantic aceptaría `"false"`, `0`, `1` o `"yes"` como booleanos, que no son su gold.
+    "03_screening/gold.json": TypeAdapter(dict[str, StrictBool]),
     "04_fulltext/retrieval.json": TypeAdapter(list[RetrievalRow]),
     "04_fulltext/excluded.json": TypeAdapter(list[ExcludedReport]),
 }
@@ -776,14 +785,32 @@ class AuditContext:
     def llm_calls(self) -> list[dict[str, Any]]:
         """Las llamadas IA de la corrida, como mapas.
 
-        Las de ``llm_calls.jsonl`` si existe (la fuente, escrita en cada llamada, D3); si no,
-        las del manifiesto (una corrida anterior a la Ola 1). Las que no son mapas las marca
-        ``schemas``. Que el manifiesto las copie bien lo comprueba ``arithmetic``.
+        Las de ``llm_calls.jsonl`` si existe (la fuente, escrita en cada llamada, D3); si no
+        existe, las del manifiesto (una corrida anterior a la Ola 1). Las que no son mapas las
+        marca ``schemas``. Que el manifiesto las copie bien lo comprueba ``arithmetic``.
+
+        Si el fichero existe y no se puede leer (:attr:`llm_calls_ilegible`) no se cae a la copia
+        del manifiesto: leer la misma copia por los dos lados daría por verificado lo que no se
+        ha podido leer. Devuelve ``[]`` y cada check dice que el fichero está ilegible.
         """
         raw = self.art.jsonl("llm_calls.jsonl")
-        if raw.present and raw.value is not None:
-            return [c for _, c in raw.value if isinstance(c, dict)]
-        return self.manifest_llm_calls
+        if not raw.present:
+            return self.manifest_llm_calls
+        if raw.value is None:
+            return []
+        return [c for _, c in raw.value if isinstance(c, dict)]
+
+    @cached_property
+    def llm_calls_ilegible(self) -> str | None:
+        """Por qué ``llm_calls.jsonl`` existe y no se pudo leer (``None`` si se lee o no existe).
+
+        Un fichero con líneas que no son JSON sí se lee (las inválidas las marca ``schemas``);
+        aquí solo cae el que no es texto UTF-8, no es un fichero o falla al abrirse.
+        """
+        raw = self.art.jsonl("llm_calls.jsonl")
+        if raw.present and raw.value is None:
+            return raw.error or "no se pudo leer"
+        return None
 
     @cached_property
     def ledger(self) -> LedgerView:

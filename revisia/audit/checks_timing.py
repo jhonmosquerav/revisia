@@ -37,7 +37,13 @@ import statistics
 from datetime import UTC, datetime, timedelta
 from itertools import combinations
 
-from revisia.audit.artifacts import NA_MANIFIESTO, AuditContext, short_repr, short_text
+from revisia.audit.artifacts import (
+    LLM_CALLS_ILEGIBLE,
+    NA_MANIFIESTO,
+    AuditContext,
+    short_repr,
+    short_text,
+)
 from revisia.audit.model import Verdict
 
 TOLERANCIA = timedelta(seconds=2)
@@ -163,6 +169,10 @@ def check_timing(ctx: AuditContext) -> Verdict:
             ledger_marks.append((number, parsed))
             marks.append((f"ledger línea {number}", parsed))
 
+    if ctx.llm_calls_ilegible is not None:
+        # Sin llamadas que leer no se cae a la copia del manifiesto: sus marcas no se comprobaron.
+        warns.append(f"no se pueden comprobar las marcas de las llamadas: {LLM_CALLS_ILEGIBLE}")
+
     lower, lower_warn, lower_fail = _limite_inferior(ctx)
     warns += [lower_warn] if lower_warn else []
     fails += [lower_fail] if lower_fail else []
@@ -241,6 +251,8 @@ def check_response_overlap(ctx: AuditContext) -> Verdict:
     """trAIce M2: dos modelos distintos no devuelven las mismas respuestas."""
     if ctx.manifest_dict is None:
         return "N/A", NA_MANIFIESTO
+    if ctx.llm_calls_ilegible is not None:
+        return "WARN", f"no se pueden comparar las respuestas: {LLM_CALLS_ILEGIBLE}."
     hashes: dict[str, list[str]] = {}
     for call in ctx.llm_calls:
         response = call.get("response_sha256")
