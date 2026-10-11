@@ -179,6 +179,13 @@ def _revisar_entrada(
             fails.append(f"{name}: `failed` y no está en {FAILURES} (relación 2)")
     elif e.status == "manual_only" and not importados:
         warns.append(f"{name} es de importación manual y no hay registros importados")
+    if e.status == "manual_only" and e.query is None:
+        # PRISMA-S 8 pide la estrategia de cada base, también de las que se buscaron fuera del
+        # motor; que haya importaciones de otras bases no la sustituye (revisión final, E6).
+        warns.append(
+            f"{name} es de importación manual y no declara su cadena "
+            "(00_protocol/search_strings/<base>.txt; PRISMA-S 8)"
+        )
 
     if e.query_origin == "question_fallback":
         warns.append(

@@ -38,6 +38,7 @@ from revisia.audit.artifacts import AuditContext, load_run
 from revisia.audit.checks_flow import collect_relations
 from revisia.config import load_protocol
 from revisia.exclusions import compute_exclusion_breakdown
+from revisia.exports import PrismaCounts, render_flow_diagram, render_flow_markdown
 from revisia.llm.base import LLMRequest
 from revisia.llm.registry import ProviderConfig
 from revisia.orchestration import pipeline as pipeline_mod
@@ -1390,6 +1391,12 @@ def _registro_cribado_disfrazado_de_duplicado(run: Path) -> None:
     _csv("duplicates", str(counts["duplicates_removed"]))(run)
     _csv("records_screened", str(counts["screened"]))(run)
     _csv("records_excluded", str(counts["excluded_ta"]))(run)
+    # El diagrama del entregable, rehecho con los conteos nuevos (lo compara la relación 16a).
+    nuevos = PrismaCounts.model_validate(counts)
+    (run / "deliverable" / "prisma_flow.md").write_text(
+        render_flow_diagram(nuevos) + "\n\n" + render_flow_markdown(nuevos) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _posicion(items: list[dict], rid: str) -> int:

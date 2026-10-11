@@ -1414,3 +1414,23 @@ def test_real_interrumpida_y_reanudada_deja_un_timing_sin_fail(
     informe = auditar(ctx.run_dir)
     assert fila(informe, "timing").status == "PASS", fila(informe, "timing").detail
     assert fila(informe, "search_log").status == "WARN"
+
+
+def test_manual_only_sin_cadena_avisa_aunque_haya_importaciones_de_otra_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # PRISMA-S 8 pide la estrategia de cada base, también de las buscadas fuera del motor: el
+    # RIS de Scopus no excusa a CINAHL, que no declara la suya (revisión final de la Ola 1, E6).
+    run = _correr_real(
+        tmp_path,
+        monkeypatch,
+        databases=["OpenAlex", "Scopus", "CINAHL"],
+        ris=True,
+        parar_en="screening_ta",
+    )
+
+    search_log = fila(auditar(run), "search_log")
+
+    assert search_log.status == "WARN"
+    assert "`CINAHL` es de importación manual y no declara su cadena" in search_log.detail
+    assert "`Scopus` es de importación manual y no declara" not in search_log.detail

@@ -395,6 +395,7 @@ AVISOS_DE_LA_DEMO = {
     "grounding",  # la síntesis del doble no cita ningún estudio
     "search_log",  # búsqueda inyectada (`search_fn`): no corresponde a las bases declaradas
     "search_window",  # `executed` del protocolo difiere de la fecha del motor
+    "deliverable",  # el meta-análisis del demo (k = 4 en effects.yml) no sale de sus incluidos
 }
 
 

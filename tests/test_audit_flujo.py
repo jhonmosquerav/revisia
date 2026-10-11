@@ -451,11 +451,13 @@ def test_arithmetic_corrida_real_cuenta_sus_relaciones_verificadas(corrida) -> N
     # de T/A (orden y buscados), 15 del texto completo (7-10), 6 de búsqueda y dedup (1, 4), la
     # matriz desde `gold.json`, 16 de los ocho diarios (12) y 8 de los consolidados (13). La
     # corrección tras la revisión suma dos: `gold.json` con el gold del protocolo y el diario de
-    # T/A dentro del dedup (96 + 2).
+    # T/A dentro del dedup (96 + 2). La revisión final de la Ola 1 suma cinco: el meta-análisis
+    # recalculado de `effects.yml` y `total_studies_ma`/`total_reports_ma` del CSV (E1), los
+    # textos en caché frente a `retrieval.json` (FG2) y `prisma_flow.md` (FG6): 98 + 5.
     relaciones = _relaciones(corrida)
     assert [n for n, (ok, _) in relaciones.items() if ok is not True] == []
-    assert len(relaciones) == 98
-    assert "98 relaciones verificadas" in fila(auditar(corrida), "arithmetic").detail
+    assert len(relaciones) == 103
+    assert "103 relaciones verificadas" in fila(auditar(corrida), "arithmetic").detail
 
 
 def test_arithmetic_manifiesto_sin_counts_falla(corrida) -> None:
@@ -732,13 +734,13 @@ def test_arithmetic_fichero_y_copia_que_el_motor_siempre_escribe_ausentes_son_re
     ("clave", "ruta"),
     [
         pytest.param("screening_metrics", "03_screening/metrics.json", id="screening_metrics"),
-        pytest.param("meta_analysis", "08_meta/meta_analysis.json", id="meta_analysis"),
     ],
 )
 def test_arithmetic_copia_opcional_sin_fichero_ni_copia_no_es_relacion(
     corrida, clave: str, ruta: str
 ) -> None:
-    # Sin gold no hay métricas y sin `effects.yml` no hay metaanálisis: son opcionales.
+    # Sin gold no hay métricas: son opcionales. El meta-análisis ya no lo es con efectos en
+    # `00_protocol/effects.yml` (E1; tests/test_auditor_meta_y_estados.py).
     (corrida / ruta).unlink()
     edit_yaml(corrida / "manifest.yml", _sin_clave(clave))
     assert f"§9.3 · copia `{clave}` del manifiesto" not in _relaciones(corrida)
@@ -1034,8 +1036,10 @@ def test_deliverable_fichero_binario_falla_sin_reventar(corrida) -> None:
     assert "error interno" not in deliverable.detail
 
 
-def test_deliverable_completo_pasa(corrida) -> None:
+def test_deliverable_completo_avisa_del_meta_analisis_ajeno_a_los_incluidos(corrida) -> None:
     deliverable = fila(auditar(corrida), "deliverable")
-    assert deliverable.status == "PASS"
-    # Los 11 de siempre + meta_analisis.md + la lista 16b de la Ola 1.
-    assert "13 artefactos" in deliverable.detail
+    # Completo, pero el demo declara k = 4 efectos con 3 incluidos: WARN, no FAIL (E1).
+    assert deliverable.status == "WARN"
+    assert "k = 4" in deliverable.detail and "incluyó 3" in deliverable.detail
+    # Los 11 de siempre + meta_analisis.md + effects_metafor.csv + la lista 16b de la Ola 1.
+    assert "14 artefactos" in deliverable.detail

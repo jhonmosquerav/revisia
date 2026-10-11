@@ -68,6 +68,13 @@ El gold del protocolo (``00_protocol/gold.yml``, la instantánea) ancla las mét
 vacío, el motor escribe ``03_screening/gold.json`` (con esas claves como mínimo; ``gold_labels=``
 solo cambia valores o añade ids, D6) y ``metrics.json``, así que borrarlos no puede ser la forma de
 no recalcular un recall bajo el umbral (D7).
+
+Los efectos del protocolo (``00_protocol/effects.yml``) anclan igual el meta-análisis (revisión
+final de la Ola 1, E1): con efectos declarados, ``08_meta/meta_analysis.json``, su copia en el
+manifiesto, ``deliverable/meta_analisis.md`` y ``interop/effects_metafor.csv`` son obligatorios,
+el resultado se recalcula con ``meta_analyze`` sobre esos efectos y el CSV PRISMA2020 declara
+``k`` estudios en el meta-análisis. Antes, borrar los cuatro o multiplicar la estimación dejaba la
+corrida APTA. Sin efectos, un meta-análisis en disco es inventado.
 """
 
 from __future__ import annotations
@@ -93,11 +100,14 @@ from revisia.audit.artifacts import (
 from revisia.audit.model import Verdict
 from revisia.config import STAGES, ReviewProtocol
 from revisia.exclusions import compute_exclusion_breakdown, compute_ft_excluded
-from revisia.exports import PrismaCounts
+from revisia.exports import PrismaCounts, render_flow_diagram, render_flow_markdown
 from revisia.extraction_agreement import select_double_extraction_subset
 from revisia.llm.ensemble import recall_biased_label
+from revisia.meta_analysis import meta_analyze
 from revisia.metrics import confusion, kappa_from_matrix, mcc, wmcc
 from revisia.orchestration.snapshot import SNAPSHOT_DIR
+from revisia.protocol_files import EffectsFile
+from revisia.provenance.runmeta import sha256_text
 from revisia.schemas.artifacts import JOURNAL_PATHS, TRANSIENT_FULLTEXT_REASONS, JournalEntry
 from revisia.schemas.records import SearchRecord
 from revisia.schemas.screening import ScreeningDecision
@@ -120,6 +130,15 @@ GOLD_Y_METRICAS = "§9.3 · metrics.json junto a gold.json"
 METRICS = "03_screening/metrics.json"
 VERIFICATION = "06_synthesis/verification.json"
 DOCUMENTO = "deliverable/documento.md"
+EFECTOS_PROTOCOLO = f"{SNAPSHOT_DIR}/effects.yml"
+META = "08_meta/meta_analysis.json"
+META_MD = "deliverable/meta_analisis.md"
+METAFOR_CSV = "deliverable/interop/effects_metafor.csv"
+PRISMA_FLOW = "deliverable/prisma_flow.md"
+TEXTOS = "04_fulltext/texts"
+# Campos del resultado del meta-análisis que dependen de si `scipy` está instalado (p-valores
+# exactos o aproximados): el auditor puede correr en otro entorno que el motor y no los compara.
+_META_SEGUN_ENTORNO = {"p_value", "p_method"}
 
 # Campos que el humano (o el gate) añade a una decisión de cribado: el diario guarda la propuesta
 # de la IA sin ellos y el consolidado se compara con él quitándolos (relación 13 de §4.4).
@@ -397,6 +416,46 @@ def _gold_del_protocolo(ctx: AuditContext) -> _GoldProtocolo:
     return _GoldProtocolo(claves)
 
 
+@dataclass(frozen=True)
+class _EfectosProtocolo:
+    """Los efectos del meta-análisis de la instantánea (``00_protocol/effects.yml``).
+
+    Attributes:
+        efectos: los efectos validados como los valida el motor (``EffectsFile``), o ``None`` si
+            el protocolo no declara ninguno (sin fichero, o ``effects`` vacío) o no se pudo leer.
+        problema: por qué un fichero que existe no se pudo leer o no valida (acotado).
+    """
+
+    efectos: EffectsFile | None = None
+    problema: str = ""
+
+
+def _efectos_del_protocolo(ctx: AuditContext) -> _EfectosProtocolo:
+    """Los efectos de la instantánea, leídos y validados como los lee el motor (E1).
+
+    ``protocol_files.EffectsFile`` es el mismo modelo con el que el motor valida el fichero al
+    cargar el protocolo (k ≥ 2, datos de la medida, varianza positiva): el auditor no puede dar
+    por bueno un ``effects.yml`` que el motor habría rechazado. Solo con ``run.json``: sin
+    instantánea (una corrida v0.7) no hay protocolo congelado con el que anclar nada.
+    """
+    if not _ola1(ctx):
+        return _EfectosProtocolo()
+    cargado = ctx.art.yaml_o_vacio(EFECTOS_PROTOCOLO)
+    if not cargado.present:
+        return _EfectosProtocolo()
+    if not cargado.ok:
+        motivo = short_text(cargado.error, limit=_LIMITE_ERROR)
+        return _EfectosProtocolo(problema=f"{EFECTOS_PROTOCOLO} ilegible ({motivo})")
+    try:
+        efectos = EffectsFile.model_validate(cargado.value)
+    except ValueError as exc:  # `ValidationError` es un `ValueError`
+        # Solo el tipo: el mensaje de pydantic citaría el valor hostil.
+        return _EfectosProtocolo(
+            problema=f"{EFECTOS_PROTOCOLO} no valida como lo valida el motor ({type(exc).__name__})"
+        )
+    return _EfectosProtocolo(efectos if efectos.effects else None)
+
+
 def _journals_ola1(ctx: AuditContext) -> list[tuple[str, str]]:
     """Diarios y llamadas que existen si su etapa tuvo trabajo: el cribado T/A con algún
     registro (su diario y ``llm_calls.jsonl``), la recuperación con algún resultado definitivo,
@@ -459,6 +518,14 @@ def check_stage_artifacts(ctx: AuditContext) -> Verdict:
                 for rel in (GOLD, METRICS)
                 if ("screening_ta", rel) not in required
             ]
+        # Con efectos en la instantánea el motor escribe el meta-análisis (en la síntesis) y su
+        # entregable (en el reporte): se exigen aunque el manifiesto no registre la copia (E1).
+        if _efectos_del_protocolo(ctx).efectos is not None:
+            ya = {rel for _, rel in required}
+            if "sintesis" in ctx.state.reached and META not in ya:
+                required.append(("sintesis", META))
+            if "reporte" in ctx.state.reached:
+                required += [("reporte", rel) for rel in (META_MD, METAFOR_CSV) if rel not in ya]
     missing = [f"{stage}: {rel}" for stage, rel in required if not ctx.art.exists(rel)]
     if missing:
         return "FAIL", f"faltan artefactos de etapas alcanzadas: {_limitar(missing)}."
@@ -900,6 +967,35 @@ def _recuperacion(
 
     malos = [d.record_id for d in ft if not _coherente(d)]
     rel.check(name, not malos, _ids(malos))
+    _textos_en_cache(ctx, rel, retrieval)
+
+
+def _textos_en_cache(ctx: AuditContext, rel: _Relations, retrieval: list[Any]) -> None:
+    """Los textos de ``04_fulltext/texts/`` son los que registra ``retrieval.json`` (E5, FG2).
+
+    Un texto recuperado se guarda en ``04_fulltext/texts/<sha256(id)[:16]>.txt`` (bytes UTF-8) y
+    ``retrieval.json`` lleva su ``text_file``, ``text_sha256`` y ``n_chars``: un texto editado o
+    borrado después cambia lo que la IA cribó, extrajo y verificó sin que nada lo viera. La ruta se
+    calcula del ``record_id`` (nunca se abre la del artefacto, que es entrada no confiable) y el
+    texto se lee en bytes (sin traducir saltos de línea), como lo escribe el motor.
+    """
+    name = f"7 · textos de {TEXTOS} == text_sha256/n_chars de {RETRIEVAL}"
+    malos: list[str] = []
+    for row in retrieval:
+        if not row.available:
+            continue
+        esperado = f"{TEXTOS}/{sha256_text(row.record_id)[:16]}.txt"
+        if row.text_file != esperado:
+            malos.append(row.record_id)
+            continue
+        try:
+            texto = (ctx.run_dir / esperado).read_bytes().decode("utf-8")
+        except (OSError, UnicodeDecodeError):
+            malos.append(row.record_id)
+            continue
+        if sha256_text(texto) != row.text_sha256 or len(texto) != row.n_chars:
+            malos.append(row.record_id)
+    rel.check(name, not malos, f"texto ausente, ilegible o distinto: {_ids(malos)}")
 
 
 def _propuestas_ft(rel: _Relations, ft: list[ScreeningDecision]) -> None:
@@ -1105,6 +1201,14 @@ def _csv(ctx: AuditContext, rel: _Relations) -> None:
     }
     for key, value in expected.items():
         rel.eq(f"11 · CSV {key}", leido.values.get(key), str(value))
+    if ola1:
+        protocolo = _efectos_del_protocolo(ctx)
+        if protocolo.problema:
+            rel.unverifiable("11 · CSV total_studies_ma/total_reports_ma", protocolo.problema)
+            return
+        k = len(protocolo.efectos.effects) if protocolo.efectos is not None else 0
+        for key in ("total_studies_ma", "total_reports_ma"):
+            rel.eq(f"11 · CSV {key} == k de {EFECTOS_PROTOCOLO}", leido.values.get(key), str(k))
 
 
 def _calls(ctx: AuditContext, rel: _Relations) -> None:
@@ -1326,6 +1430,10 @@ def _copies(ctx: AuditContext, rel: _Relations) -> None:
                     nombre,
                     False,
                     f"{path} y su copia ausentes (el protocolo declara un 2.º extractor)",
+                )
+            elif key == "meta_analysis" and _efectos_del_protocolo(ctx).efectos is not None:
+                rel.check(
+                    nombre, False, f"{path} y su copia ausentes ({EFECTOS_PROTOCOLO} con efectos)"
                 )
             continue
         if key not in manifest:
@@ -1693,6 +1801,91 @@ def _documento(ctx: AuditContext, rel: _Relations) -> None:
         rel.check(name, False, f"ninguna de las {len(narrativas)} narrativas del diario")
 
 
+def _meta_distinto(actual: Any, esperado: Any, donde: str = "") -> str | None:
+    """Primer campo en que el meta-análisis en disco difiere del recalculado (o ``None``).
+
+    Los números se comparan con tolerancia relativa (la misma cuenta en otra plataforma puede
+    diferir en el último bit) y se ignoran los p-valores que dependen de ``scipy``.
+    """
+    if isinstance(esperado, dict):
+        if not isinstance(actual, dict):
+            return donde or "raíz"
+        for clave, valor in esperado.items():
+            if clave in _META_SEGUN_ENTORNO:
+                continue
+            if clave not in actual:
+                return f"{donde}.{clave}".lstrip(".")
+            diferencia = _meta_distinto(actual[clave], valor, f"{donde}.{clave}")
+            if diferencia is not None:
+                return diferencia
+        return None
+    if isinstance(esperado, list):
+        if not isinstance(actual, list) or len(actual) != len(esperado):
+            return donde or "raíz"
+        for i, (a, e) in enumerate(zip(actual, esperado, strict=True)):
+            diferencia = _meta_distinto(a, e, f"{donde}[{i}]")
+            if diferencia is not None:
+                return diferencia
+        return None
+    if isinstance(esperado, float) and isinstance(actual, int | float):
+        if isinstance(actual, bool) or not math.isclose(
+            actual, esperado, rel_tol=1e-9, abs_tol=1e-12
+        ):
+            return donde
+        return None
+    return None if actual == esperado and type(actual) is type(esperado) else donde
+
+
+def _meta_analisis(ctx: AuditContext, rel: _Relations) -> None:
+    """§8.1 (E1): el meta-análisis en disco es ``meta_analyze`` de los efectos del protocolo.
+
+    Con efectos en ``00_protocol/effects.yml``, ``08_meta/meta_analysis.json`` se recalcula y se
+    compara campo a campo (una estimación multiplicada por 3 deja de pasar); sin efectos, un
+    meta-análisis en disco no lo escribió el motor. Su copia en el manifiesto la comparan las
+    relaciones de copias.
+    """
+    name = f"§8.1 · {META} == meta_analyze({EFECTOS_PROTOCOLO})"
+    protocolo = _efectos_del_protocolo(ctx)
+    if protocolo.problema:
+        rel.unverifiable(name, protocolo.problema)
+        return
+    loaded = ctx.art.json(META)
+    if protocolo.efectos is None:
+        if loaded.present:
+            rel.check(name, False, f"{META} sin efectos en {EFECTOS_PROTOCOLO}")
+        return
+    if not loaded.present:
+        rel.ausente(name, f"{META} ausente con efectos en {EFECTOS_PROTOCOLO}")
+        return
+    if not loaded.ok:
+        rel.unverifiable(name, f"{META} ilegible")
+        return
+    efectos = protocolo.efectos
+    esperado = meta_analyze(efectos.effects, efectos.measure).model_dump()
+    diferencia = _meta_distinto(loaded.value, esperado)
+    rel.check(name, diferencia is None, f"distinto en `{short_text(diferencia)}`")
+
+
+def _diagrama_prisma(ctx: AuditContext, rel: _Relations) -> None:
+    """16a (E5, FG6): ``prisma_flow.md`` es el diagrama y la tabla de ``manifest.counts``.
+
+    El motor lo escribe con ``render_flow_diagram`` y ``render_flow_markdown`` de los mismos
+    conteos que van al manifiesto: un diagrama editado a mano (otra cifra en una caja) lo
+    leería quien abre el entregable sin que ninguna relación lo viera.
+    """
+    name = f"16a · {PRISMA_FLOW} == render(manifest.counts)"
+    counts = _seccion(ctx, rel, "counts", name)
+    if counts is None:
+        return
+    texto = ctx.art.text(PRISMA_FLOW)
+    if not texto.ok:
+        estado = "ausente" if not texto.present else "ilegible"
+        rel.unverifiable(name, f"{PRISMA_FLOW} {estado} (ver `deliverable`)")
+        return
+    esperado = render_flow_diagram(counts) + "\n\n" + render_flow_markdown(counts) + "\n"
+    rel.check(name, _normalizar(texto.value) == esperado, "distinto del que escribe el motor")
+
+
 def _doble_extraccion_en_diario(ctx: AuditContext, rel: _Relations) -> None:
     """Relación 13 para el 2.º extractor: ``agreement.json`` se apoya en ``journal_2.jsonl``.
 
@@ -1748,6 +1941,8 @@ def collect_relations(ctx: AuditContext) -> list[_Relation]:
         families += [
             ("relaciones de los diarios (12)", _diarios),
             ("relaciones de los consolidados (13)", _consolidados),
+            ("relaciones del meta-análisis (§8.1)", _meta_analisis),
+            ("relaciones del diagrama PRISMA (16a)", _diagrama_prisma),
         ]
     for family, fn in families:
         rel.guard(family, partial(fn, ctx, rel))
@@ -1843,8 +2038,16 @@ def check_deliverable(ctx: AuditContext) -> Verdict:
     required = list(DELIVERABLE_FILES)
     if ctx.art.exists("run.json"):
         required.append("excluidos_texto_completo.md")  # 16b (desde la Ola 1)
-    if "meta_analysis" in (ctx.manifest_dict or {}) or ctx.art.exists("08_meta/meta_analysis.json"):
+    protocolo = _efectos_del_protocolo(ctx)
+    if (
+        "meta_analysis" in (ctx.manifest_dict or {})
+        or ctx.art.exists(META)
+        or protocolo.efectos is not None
+    ):
         required.append("meta_analisis.md")
+    if protocolo.efectos is not None:
+        # Con efectos en la instantánea el motor escribe siempre el CSV de metafor (E1).
+        required.append("interop/effects_metafor.csv")
     problems: list[str] = []
     for name in required:
         loaded = ctx.art.text(f"deliverable/{name}")
@@ -1855,4 +2058,27 @@ def check_deliverable(ctx: AuditContext) -> Verdict:
             problems.append(f"{name} ({reason})")
     if problems:
         return "FAIL", f"Entregable incompleto: {_limitar(problems)}."
+    aviso = _meta_sin_incluidos(ctx, protocolo)
+    if aviso is not None:
+        return "WARN", f"Entregable completo ({len(required)} artefactos); {aviso}."
     return "PASS", f"Entregable completo ({len(required)} artefactos)."
+
+
+def _meta_sin_incluidos(ctx: AuditContext, protocolo: _EfectosProtocolo) -> str | None:
+    """WARN si el meta-análisis tiene más estudios que la revisión incluidos (E1).
+
+    El meta-análisis usa los efectos declarados en ``effects.yml``, no los derivados de la
+    extracción: ligarlo a los incluidos queda para la Ola 2. No es un FAIL (el demo tiene k = 4
+    con menos incluidos), pero el entregable presenta un meta-análisis ajeno a la selección y
+    hay que declararlo.
+    """
+    if protocolo.efectos is None:
+        return None
+    k = len(protocolo.efectos.effects)
+    ids = included_ids(ctx)
+    if ids is None or k <= len(ids):
+        return None
+    return (
+        f"el meta-análisis declara k = {k} estudios en {EFECTOS_PROTOCOLO} y la revisión "
+        f"incluyó {len(ids)}: no salen de la extracción de esta corrida (Ola 2); decláralo"
+    )

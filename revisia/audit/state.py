@@ -60,16 +60,18 @@ class RunState:
         return f"no aplica: corrida {self.describe()}; se verificará al reanudar."
 
 
-def _reached_until(pending: str) -> frozenset[str]:
-    """Etapas anteriores al gate pendiente (más ``reporte`` si es ese gate).
+def _reached_until(pending: str, *, gate_evaluated: bool = True) -> frozenset[str]:
+    """Etapas anteriores al gate pendiente (más ``reporte`` si se llegó a evaluar ese gate).
 
     El manifiesto y el entregable se escriben al evaluar el gate final, con
     cualquier resultado (spec §4.2): una corrida en pausa o rechazada en
-    ``reporte`` se audita entera.
+    ``reporte`` se audita entera. Una interrumpida dentro de ``reporte``
+    (``gate_evaluated=False``) puede no haberlos escrito todavía: exigirlos daría
+    FAIL falsos (revisión final de la Ola 1, E2b).
     """
     idx = STAGES.index(pending)
     reached = set(STAGES[:idx])
-    if pending == "reporte":
+    if pending == "reporte" and gate_evaluated:
         reached.add("reporte")
     return frozenset(reached)
 
@@ -100,6 +102,12 @@ def derive_state(
     ``completed`` lo decide el ledger, para que se audite todo, pero el ``approve`` del reporte
     puede ser de una vuelta anterior: si ``run.json`` dice ``paused``, ``interrupted`` o
     ``running`` (o ``rejected``), la corrida no terminó y ``final_gate`` da el FAIL.
+
+    Por eso, si ``run.json`` dice ``paused`` en un gate (o ``interrupted`` en una etapa), esa es la
+    etapa pendiente aunque el ledger conserve el ``approve`` del reporte de una vuelta anterior:
+    una reinclusión D14 tras completar reabre ``screening_ft`` y el estado ya no es
+    ``completed`` (revisión final de la Ola 1, E2a). Es seguro: en ese estado ``final_gate`` es
+    siempre FAIL, así que los ``N/A`` de lo posterior no pueden esconder nada.
     """
     everything = frozenset(STAGES)
     if not ledger_ok and run_info is None:
@@ -110,18 +118,28 @@ def derive_state(
         if summary is not None and summary.action == "reject":
             return RunState("rejected", _reached_until(gate), gate)
 
+    pending = next((g for g in GATED_STAGES if g not in gates), None)
+    if run_info is not None and run_info.status == "paused" and run_info.stage in GATED_STAGES:
+        # Una pausa deja la solicitud del gate en disco: sin ella, como en la regla general,
+        # la corrida se audita como interrumpida en ese gate (sin el entregable que no se
+        # llegó a escribir).
+        stage = run_info.stage
+        if stage in requests:
+            return RunState("paused", _reached_until(stage), stage)
+        return RunState("interrupted", _reached_until(stage, gate_evaluated=False), stage)
+    if run_info is not None and run_info.status == "interrupted":
+        stage = run_info.stage if run_info.stage in STAGES else pending
+        if stage is not None:
+            return RunState("interrupted", _reached_until(stage, gate_evaluated=False), stage)
+
     reporte = gates.get("reporte")
     if reporte is not None and reporte.action in _PASSED:
         return RunState("completed", everything)
 
-    pending = next((g for g in GATED_STAGES if g not in gates), None)
     if run_info is not None and run_info.status == "interrupted":
-        stage = run_info.stage if run_info.stage in STAGES else pending
-        if stage is None:
-            return RunState("unknown", everything)
-        return RunState("interrupted", _reached_until(stage), stage)
+        return RunState("unknown", everything)
     if pending is None:
         return RunState("unknown", everything)
     if pending in requests:
         return RunState("paused", _reached_until(pending), pending)
-    return RunState("interrupted", _reached_until(pending), pending)
+    return RunState("interrupted", _reached_until(pending, gate_evaluated=False), pending)

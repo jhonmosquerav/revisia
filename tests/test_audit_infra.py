@@ -7,6 +7,7 @@ Spec 2026-10-04 §9.1-§9.2. Las corridas salen de las fixtures ``corrida`` y
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated
@@ -16,6 +17,7 @@ import yaml
 from audit_fixtures import (
     auditar,
     auditar_en_subproceso,
+    auditar_varias_en_subproceso,
     bomba_de_alias,
     edit_yaml,
     fila,
@@ -201,14 +203,25 @@ _VECTORES_ANIDADOS = [
 ]
 
 
-@pytest.mark.parametrize("texto", _VECTORES_ANIDADOS)
-def test_manifiesto_muy_anidado_no_tumba_el_proceso_del_auditor(corrida, texto) -> None:
-    (corrida / "manifest.yml").write_text(texto(), encoding="utf-8")
-    filas = auditar_en_subproceso(corrida, timeout=300)
-    assert filas["manifest"][0] == "FAIL"
-    assert "anidada" in filas["manifest"][1]
-    assert [i for i, (_, detalle) in filas.items() if "error interno" in detalle] == []
-    assert len(filas) == len(CHECKS)
+def test_manifiesto_muy_anidado_no_tumba_el_proceso_del_auditor(corrida, tmp_path) -> None:
+    # Una copia de la corrida por vector, todas auditadas en un solo subproceso (revisión final
+    # de la Ola 1, E7: un proceso por vector costaba ~2 s cada uno). Si la guarda falla, el
+    # proceso muere con el nombre del vector en curso al final de su stderr.
+    corridas: dict[str, Path] = {}
+    for vector in _VECTORES_ANIDADOS:
+        (texto,) = vector.values
+        copia = tmp_path / str(vector.id) / corrida.name
+        shutil.copytree(corrida, copia)
+        (copia / "manifest.yml").write_text(texto(), encoding="utf-8")
+        corridas[str(vector.id)] = copia
+
+    resultados = auditar_varias_en_subproceso(list(corridas.values()), timeout=600)
+
+    for vector, filas in zip(corridas, resultados, strict=True):
+        assert filas["manifest"][0] == "FAIL", vector
+        assert "anidada" in filas["manifest"][1], vector
+        assert [i for i, (_, detalle) in filas.items() if "error interno" in detalle] == [], vector
+        assert len(filas) == len(CHECKS), vector
 
 
 def test_guarda_de_anidamiento_respeta_sus_limites(tmp_path) -> None:

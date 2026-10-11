@@ -30,7 +30,8 @@ def test_audit_corrida_completa_es_publicable(corrida) -> None:
     assert statuses["ledger"] == "PASS"
     assert statuses["prompts"] == "PASS"
     assert statuses["hitl"] == "PASS"
-    assert statuses["deliverable"] == "PASS"
+    # Completo, con el aviso del meta-análisis de `effects.yml` ajeno a los incluidos (E1).
+    assert statuses["deliverable"] == "WARN"
     assert statuses["gold"] == "PASS"
     assert statuses["registration"] == "PASS"
     assert statuses["final_gate"] == "PASS"

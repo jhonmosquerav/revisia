@@ -864,15 +864,30 @@ def test_final_gate_run_json_completed_sin_aprobar_el_reporte_falla(corrida) -> 
 
 
 @pytest.mark.parametrize(
-    ("estado", "etapa"),
+    ("estado", "etapa", "esperado"),
     [
-        pytest.param("paused", "screening_ft", id="paused"),
-        pytest.param("interrupted", "extraccion", id="interrupted"),
-        pytest.param("running", "rob", id="running"),
+        pytest.param(
+            "paused",
+            "screening_ft",
+            "corrida en pausa en `screening_ft`: sin decisión final",
+            id="paused",
+        ),
+        pytest.param(
+            "interrupted",
+            "extraccion",
+            "corrida interrumpida en `extraccion`: sin decisión final",
+            id="interrupted",
+        ),
+        pytest.param(
+            "running",
+            "rob",
+            "run.json dice `running` en `rob`: la corrida no terminó",
+            id="running",
+        ),
     ],
 )
 def test_final_gate_run_json_sin_terminar_con_el_reporte_aprobado_falla(
-    corrida, estado: str, etapa: str
+    corrida, estado: str, etapa: str, esperado: str
 ) -> None:
     # El `approve` del reporte puede ser de una vuelta anterior: si `run.json` dice que la corrida
     # no terminó (pausada, interrumpida o con el proceso muerto), no hay decisión final.
@@ -883,7 +898,9 @@ def test_final_gate_run_json_sin_terminar_con_el_reporte_aprobado_falla(
     report = auditar(corrida)
     final_gate = fila(report, "final_gate")
     assert final_gate.status == "FAIL"
-    assert f"run.json dice `{estado}` en `{etapa}`: la corrida no terminó" in final_gate.detail
+    # En pausa o interrumpida, ese es el estado aunque el ledger conserve el `approve` del
+    # reporte (revisión final de la Ola 1, E2a); `running` sigue siendo «no terminó».
+    assert esperado in final_gate.detail
     assert not report.publishable
 
 
@@ -935,9 +952,12 @@ def test_final_gate_reinclusion_tras_completar_deja_la_corrida_sin_terminar(
     _, result = _correr(corrida, tmp_path, protocolo_auditoria, parar_en="screening_ft")
     assert result.status == "paused", result.message
     report = auditar(corrida)
+    # E2a: el estado es la pausa en texto completo, no `completed` por el `approve` viejo.
+    assert report.state is not None
+    assert (report.state.status, report.state.pending_stage) == ("paused", "screening_ft")
     final_gate = fila(report, "final_gate")
     assert final_gate.status == "FAIL"
-    assert "run.json dice `paused` en `screening_ft`: la corrida no terminó" in final_gate.detail
+    assert "corrida en pausa en `screening_ft`: sin decisión final" in final_gate.detail
     assert not report.publishable
 
 

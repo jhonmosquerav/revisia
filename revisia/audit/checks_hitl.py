@@ -29,7 +29,15 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from revisia.audit.artifacts import AuditContext, short_repr, short_text
-from revisia.audit.checks_flow import ASSESSMENTS, DOCUMENTO, EXTRACTIONS, FT, TA, VERIFICATION
+from revisia.audit.checks_flow import (
+    AGREEMENT,
+    ASSESSMENTS,
+    DOCUMENTO,
+    EXTRACTIONS,
+    FT,
+    TA,
+    VERIFICATION,
+)
 from revisia.audit.model import Verdict
 from revisia.config import JUDGMENT_STAGES, STAGES
 from revisia.config import effective_autonomy as autonomia_aplicada
@@ -56,8 +64,11 @@ _ETAPAS_DE_CRIBADO = tuple(s for s in GATED_STAGES if s.startswith("screening_")
 DECISIONES_DE_CRIBADO = {"screening_ta": TA, "screening_ft": FT}
 # Artefacto aprobado en bloque y su `artifact_sha256` en la solicitud (D1, spec §4.3).
 ARTEFACTOS_APROBADOS = {"extraccion": EXTRACTIONS, "rob": ASSESSMENTS}
-# Actor de un `decision.yml` que no declara `actor:`: un humano sin nombre.
-_ACTOR_POR_DEFECTO: str = HumanDecision.model_fields["actor"].default
+# Actor de un `decision.yml` que no declara `actor:`: un humano sin nombre. Público: `hitl`,
+# `final_gate` y `grounding` dan el mismo WARN con él (revisión final de la Ola 1, E3).
+ACTOR_POR_DEFECTO: str = HumanDecision.model_fields["actor"].default
+# El WARN de ese actor, igual en todas las filas que lo dan.
+CONSEJO_ACTOR = f"actor `{ACTOR_POR_DEFECTO}` (declara `actor:` en decision.yml)"
 # Objetivo de una `flag_review`: `flag:<índice>` con dígitos ASCII (un `²` no es un índice).
 _BANDERA = re.compile(r"flag:([0-9]{1,9})", re.ASCII)
 # Caracteres de JSON canónico (cada alias expandido cuenta entero: cadenas, claves y separadores)
@@ -559,10 +570,8 @@ def check_hitl(ctx: AuditContext) -> Verdict:
             fails.append(
                 f"`{stage}`: decisión humana sin solicitud (falta `{stage}/review_request.yml`)"
             )
-        elif gate.actor == _ACTOR_POR_DEFECTO:
-            warns.append(
-                f"`{stage}`: actor `{_ACTOR_POR_DEFECTO}` (declara `actor:` en decision.yml)"
-            )
+        elif gate.actor == ACTOR_POR_DEFECTO:
+            warns.append(f"`{stage}`: {CONSEJO_ACTOR}")
 
     propias, ajenas = _etiquetas_de_cribado(ctx)
     declared = _excluded_human(ctx)
@@ -942,6 +951,8 @@ def _contenido(ctx: AuditContext, stage: str, gate: GateSummary, request: dict) 
             problems.append(f"`{stage}`: etiquetas fuera de la solicitud: {_ids(fuera)}")
     elif stage in ARTEFACTOS_APROBADOS:
         rel = ARTEFACTOS_APROBADOS[stage]
+        if stage == "extraccion":
+            problems += _acuerdo_de_la_solicitud(ctx, request)
         if "artifact_sha256" not in request:
             problems.append(f"`{stage}`: la solicitud no lleva artifact_sha256")
         else:
@@ -958,6 +969,40 @@ def _contenido(ctx: AuditContext, stage: str, gate: GateSummary, request: dict) 
     elif stage == "reporte":
         problems += _contenido_del_reporte(ctx, request)
     return problems
+
+
+# Campos de `agreement.json` que la solicitud de extracción copia en `second_extraction`.
+_CAMPOS_ACUERDO = ("n_studies", "n_field_pairs", "value_agreement", "presence_kappa")
+
+
+def _acuerdo_de_la_solicitud(ctx: AuditContext, request: dict) -> list[str]:
+    """``agreement.json`` es el acuerdo que vio el humano al aprobar la extracción (E5, FG5).
+
+    La solicitud de ``extraccion`` (hasheada en ``request_sha256``) copia el acuerdo entre
+    extractores en ``second_extraction``; ``agreement.json`` y su copia del manifiesto se podían
+    editar a la vez sin que nada lo viera (la relación de copias solo los compara entre sí). Un
+    ``agreement.json`` sin ese bloque, o el bloque sin el fichero, tampoco salen del motor. Sin la
+    clave en la solicitud no se compara (una solicitud anterior a PR-D).
+    """
+    if "second_extraction" not in request:
+        return []
+    bloque = request["second_extraction"]
+    loaded = ctx.art.json(AGREEMENT)
+    if bloque is None:
+        if loaded.present:
+            return [f"`extraccion`: {AGREEMENT} existe y la solicitud no tiene `second_extraction`"]
+        return []
+    if not loaded.present:
+        return [f"`extraccion`: la solicitud tiene `second_extraction` y falta {AGREEMENT}"]
+    if not loaded.ok or not isinstance(loaded.value, dict) or not isinstance(bloque, dict):
+        return []  # ilegible o con otra forma: lo marca `schemas`
+    distintos = [c for c in _CAMPOS_ACUERDO if loaded.value.get(c) != bloque.get(c)]
+    if distintos:
+        return [
+            f"`extraccion`: {AGREEMENT} no es el acuerdo de la solicitud aprobada "
+            f"(`second_extraction`; distinto en {', '.join(distintos)})"
+        ]
+    return []
 
 
 def _contenido_del_reporte(ctx: AuditContext, request: dict) -> list[str]:
@@ -1207,6 +1252,14 @@ def check_final_gate(ctx: AuditContext) -> Verdict:
     adjudicó; relación 18: ``run.json`` no dice ``completed`` sin un ``approve`` del reporte.
     """
     view = ctx.ledger
+    state = ctx.state
+    detenida = ctx.run_info is not None and ctx.run_info.status in ("paused", "interrupted")
+    if not view.entries and detenida and state.status in ("paused", "interrupted"):
+        # En pausa en el primer gate el ledger aún está vacío: un `N/A` diría «no aplica» de una
+        # corrida que no tiene decisión final (§9.2; revisión final de la Ola 1, E2c). Lo dice
+        # `run.json`: un ledger borrado de una corrida completada sigue siendo `N/A` aquí (el
+        # FAIL lo da `ledger`, sin duplicarlo).
+        return "FAIL", f"corrida {state.describe()}: sin decisión final."
     if not view.entries:
         return "N/A", _NA_LEDGER
     if view.errors:
@@ -1232,7 +1285,6 @@ def check_final_gate(ctx: AuditContext) -> Verdict:
     if completada and (gate is None or gate.action != "approve"):
         nota = " run.json dice `completed` sin un `approve` del reporte (relación 18)."
 
-    state = ctx.state
     if state.status in ("paused", "interrupted"):
         return "FAIL", f"corrida {state.describe()}: sin decisión final.{nota}"
     if state.status == "rejected":
@@ -1265,4 +1317,6 @@ def check_final_gate(ctx: AuditContext) -> Verdict:
     problems = _relacion_17(ctx, gate)
     if problems:
         return "FAIL", f"{_limitar(problems)}."
+    if gate.actor == ACTOR_POR_DEFECTO:
+        return "WARN", f"Reporte final aprobado por humano, pero con el {CONSEJO_ACTOR}."
     return "PASS", f"Reporte final aprobado por humano ({short_text(gate.actor)})."

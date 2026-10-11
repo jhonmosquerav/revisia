@@ -619,6 +619,42 @@ def auditar_en_subproceso(corrida: Path, *, timeout: int) -> dict[str, tuple[str
     return {i: (status, detalle) for i, status, detalle in json.loads(proceso.stdout)}
 
 
+_SCRIPT_AUDITAR_VARIAS = (
+    "import json, sys\n"
+    "from revisia.audit import run_audit\n"
+    "salida = []\n"
+    "for corrida in sys.argv[1:]:\n"
+    "    print(f'auditando {corrida}', file=sys.stderr, flush=True)\n"
+    "    informe = run_audit(corrida)\n"
+    "    salida.append([[c.check_id, c.status, c.detail] for c in informe.checks])\n"
+    "print(json.dumps(salida))\n"
+)
+
+
+def auditar_varias_en_subproceso(
+    corridas: list[Path], *, timeout: int
+) -> list[dict[str, tuple[str, str]]]:
+    """Como :func:`auditar_en_subproceso`, pero varias corridas en un solo proceso.
+
+    Arrancar un intérprete por corrida costaba más que auditarla (revisión final de la Ola 1,
+    E7). Un crash nativo sigue sin tirar la sesión de pytest: el código de salida y la última
+    línea de stderr dicen en qué corrida murió.
+    """
+    proceso = subprocess.run(
+        [sys.executable, "-c", _SCRIPT_AUDITAR_VARIAS, *map(str, corridas)],
+        cwd=_REPO,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    mensaje = f"el auditor murió (código {proceso.returncode}): {proceso.stderr[-500:]}"
+    assert proceso.returncode == 0, mensaje
+    return [
+        {i: (status, detalle) for i, status, detalle in filas}
+        for filas in json.loads(proceso.stdout)
+    ]
+
+
 # Una bomba de alias (`*a` nueve veces por nivel, diez niveles) carga en milisegundos porque
 # PyYAML comparte los nodos; lo que cuelga es recorrerla (`repr`, `str`, validar): 9**10
 # hojas. El auditor no puede imprimir el valor hostil del manifiesto (segunda revisión de

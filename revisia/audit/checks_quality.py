@@ -32,7 +32,12 @@ from revisia.audit.checks_flow import TA, included_ids
 # a la decisión efectiva con el mismo criterio (`decision_sha256` + `request_sha256`), y una sola
 # regla, la de `hitl`, evita que se contradigan. El índice de una `flag_review` también se lee
 # igual aquí y en la relación 17 de `final_gate`.
-from revisia.audit.checks_hitl import de_la_decision_efectiva, indice_de_bandera
+from revisia.audit.checks_hitl import (
+    ACTOR_POR_DEFECTO,
+    CONSEJO_ACTOR,
+    de_la_decision_efectiva,
+    indice_de_bandera,
+)
 from revisia.audit.model import Verdict
 from revisia.config import KNOWN_THRESHOLDS
 from revisia.metrics import ScreeningMetrics, wilson_interval
@@ -441,7 +446,15 @@ def check_grounding(ctx: AuditContext) -> Verdict:
     missing = [i for i in flagged if i not in adjudicated]
     actors = sorted({actor for i in flagged for actor in adjudicated.get(i, [])})
     non_human = [a for a in actors if not is_human_actor(a)]
-    if missing:
+    reporte = ctx.gates.get("reporte")
+    if missing and reporte is not None and reporte.action == "reject":
+        # Rechazar el reporte es justo lo que se hace si una marca es real (D8): pedir que se
+        # adjudiquen «o rechaza el reporte» no tenía sentido (revisión final de la Ola 1, E4).
+        fails.append(
+            f"{len(missing)} cita(s) marcada(s) quedaron sin aprobar: el reporte se rechazó "
+            f"(decisión efectiva `reject`), índices {_indices(missing)}"
+        )
+    elif missing:
         fails.append(
             f"{len(missing)} cita(s) marcada(s) sin adjudicar por un humano (D8): índices "
             f"{_indices(missing)}; adjudícalas en `reporte/decision.yml` (`flags`) o rechaza el "
@@ -462,9 +475,11 @@ def check_grounding(ctx: AuditContext) -> Verdict:
         )
     if flagged:
         quienes = _con_resto([short_text(a, limit=_LIMITE_ID) for a in actors], _MAX_ACTORES)
+        # Las adjudicó el actor por defecto de la plantilla: el mismo aviso que `hitl` (E3).
+        sin_nombre = f"; {CONSEJO_ACTOR}" if ACTOR_POR_DEFECTO in actors else ""
         return "WARN", (
             f"{len(flagged)} citas marcadas, adjudicadas como falsos positivos por "
-            f"{quienes}: decláralo."
+            f"{quienes}: decláralo{sin_nombre}."
         )
     if not checks:
         if ids:

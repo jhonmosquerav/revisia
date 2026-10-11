@@ -25,6 +25,7 @@ final se fuerza a humano y la revisora la adjudica como falso positivo en
 
 from __future__ import annotations
 
+import itertools
 import shutil
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
@@ -348,31 +349,60 @@ def corrida_con_cita_marcada(_corrida_con_cita_marcada: Path, tmp_path: Path) ->
     return _copia(_corrida_con_cita_marcada, tmp_path)
 
 
+@pytest.fixture(scope="session")
+def _corridas_cacheadas() -> dict[tuple, Path]:
+    """Corridas reales de las fábricas de abajo, una por clave y sesión (revisión final, E7).
+
+    Cada corrida cuesta unos segundos de pipeline real; muchos tests piden la misma (la clave
+    es ``(fábrica, aprobados, rechazar)``) y casi todos la editan, así que cada llamada recibe
+    una copia propia de la corrida cacheada.
+    """
+    return {}
+
+
+def _copia_propia(origen: Path, tmp_path: Path, numero: int) -> Path:
+    """Copia de ``origen`` en ``tmp_path/copia-<n>/runs/<nombre>`` (una por llamada)."""
+    destino = tmp_path / f"copia-{numero}" / "runs" / origen.name
+    shutil.copytree(origen, destino)
+    return destino
+
+
 @pytest.fixture
 def rechazar_sin_registros(
-    tmp_path_factory: pytest.TempPathFactory, protocolo_auditoria: Path
+    tmp_path_factory: pytest.TempPathFactory,
+    protocolo_auditoria: Path,
+    _corridas_cacheadas: dict[tuple, Path],
+    tmp_path: Path,
 ) -> Callable[[str], Path]:
     """Fábrica de corridas reales de búsqueda vacía rechazadas en un gate (``rechazar``).
 
     Una corrida rechazada antes de la síntesis no hizo ninguna llamada a la IA (sin registros
-    no hay nada que cribar): no tiene ``llm_calls.jsonl`` ni el diario de T/A.
+    no hay nada que cribar): no tiene ``llm_calls.jsonl`` ni el diario de T/A. Cada llamada
+    devuelve una copia propia de la corrida de esa etapa, generada una vez por sesión.
     """
+    copias = itertools.count()
 
     def _rechazar(etapa: str) -> Path:
-        return _correr(
-            tmp_path_factory.mktemp("sin-registros-rechazada"),
-            protocolo_auditoria,
-            parar_en=None,
-            rechazar=etapa,
-            search_fn=busqueda_vacia,
-        )
+        clave = ("rechazar_sin_registros", etapa)
+        if clave not in _corridas_cacheadas:
+            _corridas_cacheadas[clave] = _correr(
+                tmp_path_factory.mktemp("sin-registros-rechazada"),
+                protocolo_auditoria,
+                parar_en=None,
+                rechazar=etapa,
+                search_fn=busqueda_vacia,
+            )
+        return _copia_propia(_corridas_cacheadas[clave], tmp_path, next(copias))
 
     return _rechazar
 
 
 @pytest.fixture
 def detener_corrida(
-    tmp_path_factory: pytest.TempPathFactory, protocolo_auditoria: Path
+    tmp_path_factory: pytest.TempPathFactory,
+    protocolo_auditoria: Path,
+    _corridas_cacheadas: dict[tuple, Path],
+    tmp_path: Path,
 ) -> Callable[..., Path]:
     """Fábrica de corridas reales detenidas en un gate (pausadas o rechazadas).
 
@@ -384,8 +414,10 @@ def detener_corrida(
     no puede inventarse editando una corrida terminada. ``aprobados`` son los primeros gates de
     ``GATED_STAGES``, en orden: el pipeline no puede decidir un gate sin pasar por los previos.
     Con los cinco aprobados no queda ningún gate donde detenerse (``ValueError``): esa es la
-    corrida completada, la fixture ``corrida``.
+    corrida completada, la fixture ``corrida``. Cada llamada devuelve una copia propia de la
+    corrida de esa clave, generada una vez por sesión (E7).
     """
+    copias = itertools.count()
 
     def _detener(*, aprobados: Sequence[str], rechazar: str | None = None) -> Path:
         aprobados = tuple(aprobados)
@@ -397,11 +429,14 @@ def detener_corrida(
             )
         siguiente = GATED_STAGES[len(aprobados)]
         assert rechazar in (None, siguiente), f"solo se rechaza `{siguiente}`, no `{rechazar}`"
-        return _correr(
-            tmp_path_factory.mktemp("detenida"),
-            protocolo_auditoria,
-            parar_en=None if rechazar else siguiente,
-            rechazar=rechazar,
-        )
+        clave = ("detener_corrida", aprobados, rechazar)
+        if clave not in _corridas_cacheadas:
+            _corridas_cacheadas[clave] = _correr(
+                tmp_path_factory.mktemp("detenida"),
+                protocolo_auditoria,
+                parar_en=None if rechazar else siguiente,
+                rechazar=rechazar,
+            )
+        return _copia_propia(_corridas_cacheadas[clave], tmp_path, next(copias))
 
     return _detener
