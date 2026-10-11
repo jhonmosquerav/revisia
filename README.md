@@ -103,6 +103,11 @@ humana responde a la solicitud que se revisó y los umbrales del protocolo
 marcadas sin adjudicar o anterior a la Ola 1 (sin `run.json`) **no es
 publicable**.
 
+Límite inherente: los hashes no son firmas. Una reescritura completa y
+coherente del ledger, las decisiones y los conteos no la detecta ningún check,
+y `request_sha256` es estable entre corridas con las mismas entradas (copiar
+decisiones entre dos corridas idénticas solo lo delata `timing`).
+
 ## Principios de diseño
 
 | Principio | Cómo se implementa |
@@ -209,16 +214,47 @@ con ids que no están en la solicitud o incompleto para aprobar detiene la
 corrida con un mensaje que nombra qué falta (código 2): no se toma como
 rechazo ni como aprobación. Con `approved: false` en el reporte final la
 corrida termina como `rejected` (código 1) y no se sedimenta en `--brain`.
-Reanudar no repite la búsqueda ni ninguna llamada ya hecha; una corrida
-interrumpida (un 429, la red) sale con código 3 y se reanuda igual. No
-reanudes la misma corrida en dos procesos a la vez, y si empezaste con
-`--mailto`, pásalo también al reanudar.
 
 `--auto-approve` sirve para demostraciones: aprueba con las etiquetas de la IA
 (actor `auto-approve (demo)`, que el checklist trAIce y `metodologia.md`
 declaran como no humano) y pausa si hay un `unclear` en texto completo o citas
 marcadas. `revisia audit` declara esa corrida **no publicable** (FAIL en
 `hitl` y en `final_gate`).
+
+### Reanudar una corrida
+
+`revisia run --resume runs/<slug>-<fecha>` sigue donde se quedó: la búsqueda y
+el dedup están congelados y cada etapa con IA o red lleva un diario, así que no
+repite ningún registro terminado. Las llamadas del registro en curso cuando algo
+falla (p. ej. el 2.º modelo del ensemble de título/abstract, o el juez de
+grounding a mitad) se repiten al reanudar y no quedan en `llm_calls.jsonl`, que
+recibe las de cada registro al terminarlo. Una corrida interrumpida (un 429, la
+red) sale con código 3 y se reanuda igual; un error de configuración o de un
+fichero dañado (un `decision.yml` que no es UTF-8, un `gold.yml` o un
+`effects.yml` con otra forma, un artefacto editado a mano) sale con código 2 y
+un mensaje que dice qué corregir.
+
+- Un fallo transitorio al recuperar un texto completo (`error_http`,
+  `sin_httpx`) se reintenta en cada reanudación: si entonces aparece el texto,
+  la solicitud de texto completo cambia y una corrida `completed` vuelve a
+  `paused` en ese gate.
+- Si un gate se aprobó con `--auto-approve` y reanudas sin él, esa aprobación de
+  demostración sigue valiendo para la misma solicitud (está en el ledger) y la
+  corrida no vuelve a pausar. Para sustituirla por una decisión humana, copia
+  `<etapa>/decision.template.yml` como `<etapa>/decision.yml`, rellénalo con tu
+  `actor: human:<nombre>` y reanuda: la decisión del fichero pasa a ser la
+  efectiva y las dos quedan en el ledger. Hazlo en cada gate que aprobó la demo.
+- Sin `pypdf` instalado, un texto completo en abierto que es un PDF queda como
+  no recuperado (`texto_vacio`), y como ese motivo es definitivo no se reintenta
+  al reanudar. `pypdf` no está en ningún extra: instálalo antes de correr con
+  `uv pip install pypdf` (el preflight avisa si falta).
+- Limitación conocida (Ola 2, M15): un fallo determinista de un registro (un
+  400 por contexto excedido, un bloqueo de seguridad del proveedor, una
+  respuesta que no se puede interpretar una y otra vez) sale con código 3 en
+  cada reanudación; la única salida hoy es una corrida nueva (p. ej. con otro
+  modelo).
+- No reanudes la misma corrida en dos procesos a la vez, y si empezaste con
+  `--mailto`, pásalo también al reanudar.
 
 ## Exportar el artículo (HTML / PDF)
 

@@ -17,7 +17,8 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   `ExcludedReport`, `GateSummary`, `JOURNAL_PATHS`, `GATED_STAGES`), hashes
   canónicos (`canonical_json`/`canonical_sha256`), el reductor único del ledger
   (`summarize_gates`) y `KNOWN_THRESHOLDS`. `ScreeningDecision` y `PrismaCounts`
-  ganan campos opcionales, sin cambio de comportamiento. Diseño en
+  ganan campos opcionales (aditivos al llegar en PR-0; el resto de la Ola 1 los
+  usa y cambia el comportamiento, ver más abajo). Diseño en
   `docs/superpowers/specs/2026-10-04-ola-1-remediacion-design.md`.
 - **Preflight sin red** (`revisia/llm/preflight.py`; auditoría 2026-09-03, M6):
   antes de empezar, `revisia validate` y `revisia run` comprueban proveedor
@@ -38,8 +39,10 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   2026-09-03, A9): `run.json` (identidad, huellas del protocolo y de los
   prompts, historia y estado), instantánea del protocolo en `00_protocol/`,
   búsqueda y dedup congelados en `01_search/` y `02_dedup/`, un diario por cada
-  etapa con LLM o red y `llm_calls.jsonl` escrito en cada llamada. Reanudar no
-  repite la búsqueda ni ninguna llamada ya hecha. Un error a mitad de corrida
+  etapa con LLM o red y `llm_calls.jsonl` con las llamadas de cada registro
+  terminado. Reanudar no repite la búsqueda ni ningún registro terminado; las
+  llamadas del registro en curso al fallar se repiten y no quedan registradas.
+  Un error a mitad de corrida
   (un 429, la red) queda en `run.json` y la corrida sale con código 3 y la
   orden de reanudar. Los fallos transitorios al recuperar el texto completo
   (`error_http`, `sin_httpx`) no se congelan: se reintentan al reanudar.
@@ -89,9 +92,22 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   coinciden) y `grounding`, que cada cita marcada la adjudicó un humano.
 - `revisia.metrics.kappa_from_matrix(tp, fp, fn, tn)` y
   `revisia.metrics.wilson_interval(k, n)`, públicas.
-- `revisia validate` y `revisia run` rechazan (código 2) las claves de fusión
-  YAML (`<<`) en `protocol.yml`: el auditor no las admite al releer la
-  instantánea, porque permiten construir documentos que se expanden sin límite.
+- `gold.yml`, `effects.yml`, `inclusion_exclusion.yml` y `extraction_form.yml`
+  se validan al cargar (`revisia/protocol_files.py`), en el preflight de
+  `validate` y `run` y otra vez sobre `00_protocol/` al reanudar: un fichero con
+  otra forma es un error de configuración (código 2) que dice qué corregir. Los
+  ids del gold pasan a texto y las fechas del formulario y de los criterios, a
+  texto ISO.
+- El preflight avisa si falta `pypdf`: sin él, los PDF en abierto quedan como no
+  recuperados.
+- El auditor ancla el meta-análisis a `00_protocol/effects.yml`: con efectos, el
+  meta-análisis, su copia, `meta_analisis.md` y `effects_metafor.csv` son
+  obligatorios, el resultado se recalcula y el CSV PRISMA2020 declara sus `k`
+  estudios; avisa si `k` supera a los incluidos. Compara además
+  `agreement.json` con la solicitud de extracción, los textos en caché con
+  `retrieval.json` y `prisma_flow.md` con los conteos del manifiesto, y avisa
+  de cada base de importación manual sin cadena propia (PRISMA-S 8).
+- El documento exportado (HTML/PDF) incluye la lista 16b como anexo.
 
 ### Fixed
 - **`claude_code` corre sin herramientas de verdad**: `--tools ""` sustituye a
@@ -147,6 +163,25 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - `gold` daba PASS con κ = 0,0 aunque el protocolo pidiera `kappa_min: 0.6`:
   nadie leía los umbrales (A11).
 - `search_window` daba PASS a una fecha de ejecución tecleada a mano.
+- Errores deterministas que salían como código 3 «reanuda» y fallaban igual en
+  cada reanudación ahora salen con código 2 y qué corregir: un `decision.yml` que
+  no es UTF-8, una última línea truncada del ledger (se recorta, con aviso; una
+  dañada en medio es error), `01_search/records.json` o `02_dedup/*.json`
+  editados a mano, y `validate`/`run` sin `protocol.yml` o con uno que no es
+  UTF-8. Un sustituto UTF-16 suelto de una API ya no tumba la búsqueda ni la caché
+  de texto completo.
+- Unpaywall, el ID Converter y BioC ya no convierten un fallo de red, un 5xx o un
+  429 en «sin acceso abierto» (`sin_url_oa`, definitivo): es `error_http` y se
+  reintenta; sin `httpx` es `sin_httpx`.
+- Al reanudar se usa el gold efectivo de `03_screening/gold.json` (con las
+  etiquetas pasadas por código en la primera invocación). El mensaje de Ctrl+C
+  dice la carpeta real y solo afirma que quedó en `run.json` si se registró.
+- Seguridad: las firmas de URL prefirmadas (S3, CloudFront, Azure SAS),
+  `secret`/`client_secret`/`password` y el `usuario:clave@` de una URL se
+  redactan, también en la `source_url` de un texto recuperado. La suite ya no
+  carga el `.env` del clon.
+- Las razones de exclusión con `|`, comillas, saltos de línea, `;` o `,` ya no
+  rompen la tabla, el diagrama Mermaid ni el CSV PRISMA2020.
 - Seguridad: ningún artefacto manipulado tumba ni cuelga `revisia audit` (YAML
   muy anidado, bombas de alias y de claves de fusión, escalares numéricos
   gigantes, claves que colisionan en el hash), y los textos que vienen de la
@@ -166,14 +201,22 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   anteriores (`!runs/*/manifest.yml`) nunca funcionaron.
 - `--brain` no sedimenta dos veces la misma corrida (al reanudar una ya
   completada).
-- `revisia run --max` vale 50 por defecto en una corrida nueva; al reanudar
-  manda el de `run.json`.
+- Al reanudar, `--max` se ignora: manda el `max_results` de `run.json` (en una
+  corrida nueva sigue valiendo 50 por defecto).
 - Las métricas de cribado miden siempre la propuesta de la IA
   (`ensemble_label`) frente al gold, nunca la decisión final humano + IA (D6).
 - `--auto-approve` aprueba con las etiquetas de la IA y no exige etiquetar
   cada registro en A0, pero pausa si hay un `unclear` en texto completo (D9).
 - Una corrida en pausa o interrumpida se audita con lo que tiene: los checks de
   las etapas que no alcanzó dan `N/A` (➖ en la consola) y el gate final, FAIL.
+  Si `run.json` dice que está en pausa o interrumpida, esa es su etapa aunque el
+  ledger conserve un `approve` del reporte de una vuelta anterior.
+- `metodologia.md` y los checklists dicen lo que pasó: el meta-análisis sale de
+  `effects.yml` (no de la extracción), la fecha tecleada se rotula «declarada en
+  el protocolo», con `--auto-approve` el reporte figura como «aprobación de
+  demostración prevista», «rescate» se reserva para el no recuperado evaluado
+  por el revisor y las bases de importación manual no se llaman «APIs
+  abiertas».
 
 ### Cambios incompatibles
 - `revisia validate` y `revisia run` salen con código 2 ante cualquier error de
@@ -183,7 +226,7 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   se siguen leyendo (buscados = evaluados, no recuperados = 0), así que
   `revisia export` funciona con corridas viejas.
 - Los registros sin texto completo ya no llegan a extracción. Con el demo sin
-  el extra `search` ni `--mailto` puede no quedar ningún estudio incluido.
+  `--mailto` o sin red puede no quedar ningún estudio incluido.
 - `decision.yml` exige `request_sha256` (viene en `decision.template.yml`): una
   decisión sin hash da error y una que responde a otra solicitud no se aplica.
 - Una corrida nueva sobre una carpeta que ya tiene contenido da error (dos
@@ -211,7 +254,16 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - `revisia.audit` es un paquete: `from revisia.audit import run_audit,
   render_audit_md, AuditReport, AuditCheck` sigue funcionando; `AuditReport`
   gana `state` y `n_na`, y `AuditCheck.status` admite `N/A`.
-- `protocol.yml` con claves de fusión YAML (`<<`) ya no carga: expándelas.
+- `protocol.yml` con claves de fusión YAML (`<<`) ya no carga (código 2 en
+  `validate` y `run`): expándelas. El auditor no las admite al releer la
+  instantánea, porque permiten construir documentos que se expanden sin límite.
+- `gold.yml` con una etiqueta entre comillas (`"false"`) o un id que no es texto
+  ni número, `effects.yml` con un solo estudio, sin los datos de su medida o con
+  varianza ≤ 0, y unos criterios o un formulario que no son un mapa ya no cargan
+  (código 2).
+- El auditor es más estricto con el meta-análisis declarado en `effects.yml`, con
+  los derivados (`agreement.json`, textos en caché, `prisma_flow.md`) y con
+  `human:desconocido` en el gate final (WARN).
 
 ## [0.7.0] · 2026-09-28
 

@@ -26,7 +26,7 @@ incumpla (o con una etapa o nivel desconocidos) no carga, y `revisia validate` y
 | Agente | Etapa | Tipo | Autonomía por defecto | Verificación |
 |---|---|---|---|---|
 | `protocolo` | Preregistro del protocolo | 🧑 humano + plantillas | A0 | Firma humana; PRISMA-P (`protocolo-prisma-p.md`) |
-| `busqueda` | Búsqueda multi-base (OpenAlex, Crossref, Semantic Scholar, PubMed/PMC vía NCBI, Europe PMC, ERIC, DOAJ, UNESDOC, BVS/LILACS, DSpace 7+ (AGROSAVIA/CLACSO/Banco Mundial OKR), DOAB + import RIS/BibTeX) | ⚙️ determinista | A2 | Cadenas versionadas (PRISMA-S); conteos al ledger; fallos por base en `01_search/failures.json` |
+| `busqueda` | Búsqueda multi-base (OpenAlex, Crossref, Semantic Scholar, PubMed/PMC vía NCBI, Europe PMC, ERIC, DOAJ, UNESDOC, BVS/LILACS, DSpace 7+ (AGROSAVIA/CLACSO/Banco Mundial OKR), DOAB + import RIS/BibTeX) | ⚙️ determinista | A2 | Cadenas versionadas (PRISMA-S); cadena, conteos y horas por base en `01_search/log.json`; fallos por base en `01_search/failures.json` |
 | `dedup` | Deduplicación | ⚙️ determinista | A2 | Conteo de descartes trazado |
 | `screening_ta` | Cribado título/abstract | 🤖 LLM (ensemble + voto pro-recall) | A1 | Gold humano → recall/lost-evidence/MCC/WMCC/κ; checkpoint HITL |
 | `screening_ft` | Cribado a texto completo | 🤖 LLM | A0 | Decisión humana registro a registro |
@@ -44,13 +44,14 @@ Tipos: ⚙️ determinista (sin LLM, reproducible bit a bit) · 🤖 LLM
 
 ## Las auditorías (defensa en profundidad)
 
-1. **Verificador por etapa** — tras cada agente de razonamiento, el grounding
-   comprueba citas contra el corpus ANTES del checkpoint humano.
+1. **Verificador de la síntesis** — tras la síntesis narrativa (hoy, la única
+   etapa que cita estudios), el grounding comprueba sus citas contra el corpus
+   ANTES del checkpoint humano del reporte.
 2. **Checkpoints HITL** — el flujo se pausa por etapa; cada aprobación/edición
    queda en `decisions_ledger.jsonl` (actor, autonomía, acción, timestamp).
-3. **Gold standard escalonado** — modelos ligeros criban → un modelo fuerte
-   recomienda en zona gris → el humano valida → κ/recall del sistema contra ese
-   gold (nunca "accuracy").
+3. **Gold standard** — el ensemble criba → el humano valida → κ/recall de la
+   propuesta de la IA contra ese gold (nunca "accuracy"). La recomendación de un
+   modelo fuerte en la zona gris no está implementada.
 4. **Auditor post-corrida** — `revisia audit runs/<slug>-<fecha>` comprueba
    que la corrida es coherente, no solo que sus ficheros existan: esquemas de
    cada artefacto, instantánea del protocolo (`00_protocol/` contra
