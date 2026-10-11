@@ -442,6 +442,18 @@ def test_arithmetic_linea_de_diario_sin_su_llamada_falla(corrida, etapa: str) ->
     assert "(se esperan " in detalle
 
 
+def test_arithmetic_diario_de_recuperacion_con_una_llamada_falla(corrida) -> None:
+    # La recuperación no llama a ninguna IA: una meta (válida, de otra etapa) en su diario rompe
+    # las dos relaciones 12 de ese diario.
+    texto_ft = (corrida / JOURNAL_PATHS["screening_ft"]).read_text(encoding="utf-8")
+    meta_ft = json.loads(texto_ft.splitlines()[0])["metas"][0]
+    path = JOURNAL_PATHS["fulltext_retrieval"]
+    _jsonl(path, lambda entries: entries[0].update(metas=[meta_ft]))(corrida)
+    _rota(corrida, f"12 · metas de {path} en llm_calls.jsonl")
+    detalle = _rota(corrida, f"12 · llamadas por línea en {path}")
+    assert "línea 1: 1 (se esperan 0)" in detalle
+
+
 def test_arithmetic_meta_de_otro_registro_falla(corrida) -> None:
     def _otro_registro(entries: list[dict]) -> None:
         entries[0]["metas"][0]["record_id"] = entries[1]["record_id"]
