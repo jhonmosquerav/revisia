@@ -191,6 +191,7 @@ def test_paused_run_final_gate_falla_en_auditoria(tmp_path) -> None:
     report = run_audit(ctx.run_dir)
     final_gate = next(c for c in report.checks if c.check_id == "final_gate")
     assert final_gate.status == "FAIL"
+    assert "en pausa en `reporte`" in final_gate.detail
 
 
 def test_ft_no_recuperado_no_se_criba_con_ia(
@@ -378,3 +379,75 @@ def test_entregables_de_busqueda_salen_del_log_del_motor(
     metodologia = (entregable / "metodologia.md").read_text(encoding="utf-8")
     assert "(fecha registrada por el motor): 2026-03-01" in metodologia
     assert "00_protocol/search_strings/" not in metodologia
+
+
+# ── Frontera del contrato con el auditor (spec 2026-10-04 §9.4, PR-E) ──
+
+# Avisos que una corrida de demostración con un humano en cada gate lleva siempre:
+# vienen de cómo se monta la demo (proveedor `fake`, búsqueda inyectada, sin gold),
+# no de un desacuerdo entre pipeline y auditor. Un aviso fuera de esta lista sí lo es.
+AVISOS_DE_LA_DEMO = {
+    "manifest",  # todas las llamadas con proveedor `fake`: «corrida de demostración»
+    "gold",  # el ejemplo no trae gold.yml
+    "thresholds",  # sin gold, recall_target no es medible
+    "grounding",  # la síntesis del doble no cita ningún estudio
+    "search_log",  # búsqueda inyectada (`search_fn`): no corresponde a las bases declaradas
+    "search_window",  # `executed` del protocolo difiere de la fecha del motor
+}
+
+
+def test_pipeline_fake_con_humano_audita_sin_fail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Lo que escribe el pipeline con un humano en cada gate audita sin ningún
+    # FAIL: si el pipeline y el auditor leen el contrato de §4 distinto, falla.
+    # `correr_hasta` responde a cada pausa como la revisora: etiqueta lo que el
+    # gate exige con la propuesta de la IA y aprueba, también el reporte final.
+    monkeypatch.setattr(
+        pipeline_mod, "build_provider", lambda cfg: ScriptedProvider(model=cfg.model)
+    )
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "TEST-FRONTERA")
+    result = correr_hasta(
+        protocol,
+        EXAMPLE,
+        ctx,
+        search_fn=_fake_search,
+        fetch_fn=fetch_disponible,
+    )
+    assert result.status == "completed"
+    report = run_audit(ctx.run_dir)
+    assert {c.check_id: c.detail for c in report.checks if c.status == "FAIL"} == {}
+    assert report.publishable
+    # Ninguna fila viene de un check que reventó ni de una etapa sin alcanzar.
+    assert [c.check_id for c in report.checks if "error interno" in c.detail] == []
+    assert {c.status for c in report.checks} <= {"PASS", "WARN"}
+    avisos = {c.check_id for c in report.checks if c.status == "WARN"}
+    assert avisos <= AVISOS_DE_LA_DEMO, avisos - AVISOS_DE_LA_DEMO
+
+
+def test_pipeline_auto_approve_no_es_publicable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # D8: `--auto-approve` sirve para demostraciones; la corrida no es publicable.
+    monkeypatch.setattr(
+        pipeline_mod, "build_provider", lambda cfg: ScriptedProvider(model=cfg.model)
+    )
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "TEST-AUTO")
+    result = run_pipeline(
+        protocol,
+        EXAMPLE,
+        ctx,
+        auto_approve=True,
+        search_fn=_fake_search,
+        fetch_fn=fetch_disponible,
+    )
+    assert result.status == "completed"
+    report = run_audit(ctx.run_dir)
+    assert not report.publishable
+    statuses = {c.check_id: c.status for c in report.checks}
+    assert statuses["hitl"] == "FAIL"
+    assert statuses["final_gate"] == "FAIL"
+    final_gate = next(c for c in report.checks if c.check_id == "final_gate")
+    assert "auto-approve (demo)" in final_gate.detail
