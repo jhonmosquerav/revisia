@@ -24,9 +24,9 @@ o no verificable (WARN), y ninguna se omite en silencio. Lo que el motor escribe
 manifiesto, las decisiones, extracciones y evaluaciones, ``agreement.json`` cuando el protocolo
 declara un 2.º extractor y hay incluidos) y falta es manipulación, así que la relación queda rota;
 lo mismo un CSV PRISMA2020 que existe y no se lee. El WARN se reserva para lo que de verdad no se
-puede saber: un valor que no valida y marca ``schemas``, un dato que manifiestos antiguos
-pudieron no traer (``excluded_ta_human/ai``) y el CSV PRISMA2020 ausente, cuyo FAIL ya da la
-fila ``deliverable``.
+puede saber: un valor que no valida y marca ``schemas``, un dato que manifiestos de antes de la
+Ola 1 pudieron no traer (``excluded_ta_human/ai``, solo sin ``run.json``) y el CSV PRISMA2020
+ausente, cuyo FAIL ya da la fila ``deliverable``.
 
 Lo que el motor aún no ha escrito no se exige (``state.py``): ``arithmetic`` y ``deliverable``
 solo corren con ``reporte`` alcanzado, y ``exclusions``, que corre desde ``screening_ft``,
@@ -60,6 +60,14 @@ anterior del ensemble T/A cuando el siguiente falla a mitad del registro, o el j
 cuando la verificación se cae a medias: el registro se recalcula entero al reanudar y su línea de
 diario lleva las metas completas). Contar totales daría FAIL a corridas legítimas reanudadas; la
 cota inferior de llamadas (§9.3) sigue delatando decisiones sin las llamadas que las produjeron.
+Inclusión no es reutilización: cada línea de ``llm_calls.jsonl`` respalda como mucho una posición
+de meta en todos los diarios (si no, una meta copiada taparía la llamada que falta) y los
+miembros de una línea de T/A tienen roles distintos.
+
+El gold del protocolo (``00_protocol/gold.yml``, la instantánea) ancla las métricas: si no está
+vacío, el motor escribe ``03_screening/gold.json`` (con esas claves como mínimo; ``gold_labels=``
+solo cambia valores o añade ids, D6) y ``metrics.json``, así que borrarlos no puede ser la forma de
+no recalcular un recall bajo el umbral (D7).
 """
 
 from __future__ import annotations
@@ -89,6 +97,7 @@ from revisia.exports import PrismaCounts
 from revisia.extraction_agreement import select_double_extraction_subset
 from revisia.llm.ensemble import recall_biased_label
 from revisia.metrics import confusion, kappa_from_matrix, mcc, wmcc
+from revisia.orchestration.snapshot import SNAPSHOT_DIR
 from revisia.schemas.artifacts import JOURNAL_PATHS, TRANSIENT_FULLTEXT_REASONS, JournalEntry
 from revisia.schemas.records import SearchRecord
 from revisia.schemas.screening import ScreeningDecision
@@ -106,6 +115,8 @@ SEARCH_RECORDS = "01_search/records.json"
 DEDUP_REPORT = "02_dedup/dedup.json"
 EXCLUDED = "04_fulltext/excluded.json"
 GOLD = "03_screening/gold.json"
+GOLD_PROTOCOLO = f"{SNAPSHOT_DIR}/gold.yml"
+GOLD_Y_METRICAS = "§9.3 · metrics.json junto a gold.json"
 METRICS = "03_screening/metrics.json"
 VERIFICATION = "06_synthesis/verification.json"
 DOCUMENTO = "deliverable/documento.md"
@@ -345,6 +356,47 @@ def _cribado_con_trabajo(ctx: AuditContext) -> bool:
     return not dedup.ok or bool(dedup.value)
 
 
+@dataclass(frozen=True)
+class _GoldProtocolo:
+    """El gold humano de la instantánea del protocolo (``00_protocol/gold.yml``).
+
+    Attributes:
+        claves: los ids etiquetados, como quedan en ``gold.json`` (cadenas JSON). Vacío si el
+            protocolo no trae gold (sin fichero, fichero sin etiquetas, o ilegible).
+        problema: por qué no se pudo leer un fichero que existe (acotado): entonces no se sabe
+            si el motor escribió ``gold.json``.
+    """
+
+    claves: frozenset[str] = frozenset()
+    problema: str = ""
+
+
+def _gold_del_protocolo(ctx: AuditContext) -> _GoldProtocolo:
+    """Los ids del gold de la instantánea, leídos como los lee el motor.
+
+    ``pipeline._load_gold``: ``data.get("gold", data)`` (el mapa puede ir en la raíz o bajo
+    ``gold``) y un documento vacío o sin etiquetas es «sin gold». Es el gold del *protocolo*: las
+    etiquetas que se pasan por código (``gold_labels=``, D6) las suma el motor en ``gold.json``,
+    que por eso puede traer más ids y otros valores pero nunca menos ids.
+    """
+    cargado = ctx.art.yaml_o_vacio(GOLD_PROTOCOLO)
+    if not cargado.present:
+        return _GoldProtocolo()
+    if not cargado.ok:
+        motivo = short_text(cargado.error, limit=_LIMITE_ERROR)
+        return _GoldProtocolo(problema=f"{GOLD_PROTOCOLO} ilegible ({motivo})")
+    datos = cargado.value or {}
+    etiquetas = datos.get("gold", datos) or {}
+    if not isinstance(etiquetas, dict):
+        return _GoldProtocolo(problema=f"{GOLD_PROTOCOLO} no es un mapa de etiquetas")
+    try:
+        # Las claves que `gold.json` guarda: un id numérico o booleano pasa por JSON como cadena.
+        claves = frozenset(json.loads(json.dumps(dict.fromkeys(etiquetas, True))))
+    except (TypeError, ValueError):
+        return _GoldProtocolo(problema=f"{GOLD_PROTOCOLO} con ids que JSON no puede guardar")
+    return _GoldProtocolo(claves)
+
+
 def _journals_ola1(ctx: AuditContext) -> list[tuple[str, str]]:
     """Diarios y llamadas que existen si su etapa tuvo trabajo: el cribado T/A con algún
     registro (su diario y ``llm_calls.jsonl``), la recuperación con algún resultado definitivo,
@@ -398,6 +450,15 @@ def check_stage_artifacts(ctx: AuditContext) -> Verdict:
             if stage in ctx.state.reached:
                 required += [(stage, rel) for rel in rels]
         required += _journals_ola1(ctx)
+        # Con gold en la instantánea el motor escribe el gold efectivo y sus métricas (D6): se
+        # exigen aunque el manifiesto no registre la copia (quitarla no puede ser la forma de
+        # quitar los ficheros).
+        if "screening_ta" in ctx.state.reached and _gold_del_protocolo(ctx).claves:
+            required += [
+                ("screening_ta", rel)
+                for rel in (GOLD, METRICS)
+                if ("screening_ta", rel) not in required
+            ]
     missing = [f"{stage}: {rel}" for stage, rel in required if not ctx.art.exists(rel)]
     if missing:
         return "FAIL", f"faltan artefactos de etapas alcanzadas: {_limitar(missing)}."
@@ -575,8 +636,13 @@ def _funnel(ctx: AuditContext, rel: _Relations) -> None:
     name_6 = "6 · excluded_ta_human + excluded_ta_ai == excluded_ta"
     human, ai = counts.excluded_ta_human, counts.excluded_ta_ai
     if human is None and ai is None:
-        # Un manifiesto anterior al desglose humano/IA pudo no traerlos: no se puede saber.
-        rel.unverifiable(name_6, "counts sin excluded_ta_human/ai (manifiesto sin desglose)")
+        if ola1:
+            # El motor de la Ola 1 escribe siempre el desglose: quitarlo no puede ser la forma
+            # de no verificar la relación.
+            rel.check(name_6, False, "counts sin excluded_ta_human/ai (el motor escribe ambos)")
+        else:
+            # Un manifiesto anterior al desglose humano/IA pudo no traerlos: no se puede saber.
+            rel.unverifiable(name_6, "counts sin excluded_ta_human/ai (manifiesto sin desglose)")
     elif human is None or ai is None:
         rel.check(
             name_6, False, "solo uno de excluded_ta_human/ai presente (el motor escribe ambos)"
@@ -710,12 +776,52 @@ def _busqueda_y_dedup(ctx: AuditContext, rel: _Relations) -> None:
     if deduped is not None:
         repetidos = sorted(i for i, n in Counter(r.record_id for r in deduped).items() if n > 1)
         rel.check(f"4 · ids de {DEDUP_RECORDS} únicos", not repetidos, _ids(repetidos))
+        _diario_dentro_del_dedup(ctx, rel, deduped)
     if dedup is not None and deduped is not None:
         rel.eq(
             f"4 · n_out == screened == len({DEDUP_RECORDS})",
             (dedup.n_out, len(deduped)),
             (counts.screened, counts.screened),
         )
+
+
+def _diario_dentro_del_dedup(
+    ctx: AuditContext, rel: _Relations, deduped: list[SearchRecord]
+) -> None:
+    """Relación 4: todo ``record_id`` del diario de T/A está en ``02_dedup/records.json``.
+
+    Sacar un registro ya cribado de ``02_dedup/records.json`` y de las decisiones, disfrazado de
+    duplicado, y ajustar a mano el informe del dedup, los conteos, el desglose, las métricas y el
+    CSV deja cuadradas todas las demás relaciones. El motor criba el resultado del dedup y su
+    diario conserva la línea del registro que ya no está.
+    """
+    name = f"4 · ids de {SCREENING_JOURNAL} ⊆ ids de {DEDUP_RECORDS}"
+    if not deduped:  # sin registros que cribar no hay diario
+        rel.check(name, True)
+        return
+    diario = ctx.art.jsonl(SCREENING_JOURNAL)
+    if not diario.present:
+        rel.ausente(name, f"{SCREENING_JOURNAL} ausente con {len(deduped)} registro(s) cribados")
+        return
+    if diario.value is None:
+        rel.unverifiable(name, f"{SCREENING_JOURNAL} ilegible (ver `schemas`)")
+        return
+    # Del JSON tal cual: una línea que no valida su modelo sigue diciendo qué registro cribó.
+    en_el_diario: set[str] = set()
+    sin_id = 0
+    for _, linea in diario.value:
+        record_id = linea.get("record_id") if isinstance(linea, dict) else None
+        if isinstance(record_id, str):
+            en_el_diario.add(record_id)
+        else:
+            sin_id += 1
+    fuera = sorted(en_el_diario - {r.record_id for r in deduped})
+    if fuera:
+        rel.check(name, False, _ids(fuera))
+    elif sin_id or diario.error:
+        rel.unverifiable(name, f"{SCREENING_JOURNAL} con líneas sin record_id (ver `schemas`)")
+    else:
+        rel.check(name, True)
 
 
 def _texto_completo_ola1(
@@ -769,8 +875,10 @@ def _recuperacion(
     """Relación 7: recuperado ⇔ ``retrieval.available`` ⇔ un voto de la IA (D2).
 
     ``retrieval.json`` tiene una fila por informe buscado, en su orden, también los fallos
-    transitorios que el diario no guarda (§14, fila 24a). Una decisión sin ``fulltext_status``
-    no sale del motor de la Ola 1 y no cuenta para ningún lado: se marca.
+    transitorios que el diario no guarda (§14, fila 24a). Un informe recuperado lleva exactamente
+    un voto; uno no recuperado no se criba con la IA: ni votos ni propuesta (``votes == []`` y
+    ``ensemble_label`` nulo; si un humano lo rescata es solo con su etiqueta, D2). Una decisión
+    sin ``fulltext_status`` no sale del motor de la Ola 1 y no cuenta para ningún lado: se marca.
     """
     name = "7 · retrieved ⇔ retrieval.available ⇔ un voto"
     retrieval = _artefacto(ctx, rel, RETRIEVAL, name)
@@ -779,13 +887,18 @@ def _recuperacion(
     ids_recuperacion = [r.record_id for r in retrieval]
     _misma_secuencia(rel, f"7 · ids de {RETRIEVAL} == ids de 04_fulltext", ids_recuperacion, ids_ft)
     disponible = {r.record_id: r.available for r in retrieval}
-    malos = [
-        d.record_id
-        for d in ft
-        if d.fulltext_status is None
-        or len({d.fulltext_status == "retrieved", disponible.get(d.record_id), len(d.votes) == 1})
-        != 1
-    ]
+
+    def _coherente(d: ScreeningDecision) -> bool:
+        if d.fulltext_status is None:
+            return False
+        recuperado = d.fulltext_status == "retrieved"
+        if disponible.get(d.record_id) is not recuperado:
+            return False
+        if recuperado:
+            return len(d.votes) == 1
+        return not d.votes and d.ensemble_label is None
+
+    malos = [d.record_id for d in ft if not _coherente(d)]
     rel.check(name, not malos, _ids(malos))
 
 
@@ -1090,16 +1203,50 @@ def _calls(ctx: AuditContext, rel: _Relations) -> None:
     )
 
 
+def _gold_anclado(ctx: AuditContext, rel: _Relations, protocolo: _GoldProtocolo) -> None:
+    """§9.3 (D6): ``gold.json`` trae como mínimo los ids del gold de la instantánea del protocolo.
+
+    ``gold.json`` es el gold efectivo: el fichero del protocolo más las etiquetas por código
+    (``gold_labels=``), que pueden cambiar valores y añadir ids pero no quitarlos. Sin este
+    ancla, borrar ``gold.json``, ``metrics.json`` y la copia del manifiesto dejaría sin
+    verificar un recall bajo el umbral (D7).
+    """
+    name = "§9.3 · gold.json con el gold del protocolo"
+    if protocolo.problema:
+        rel.unverifiable(name, protocolo.problema)
+        return
+    if not protocolo.claves:  # el protocolo no trae gold: el motor no escribe gold.json
+        return
+    gold = ctx.art.artifact(GOLD)
+    if not gold.present:
+        rel.ausente(name, f"{GOLD} ausente con gold en {GOLD_PROTOCOLO}")
+        return
+    if not gold.ok:
+        rel.unverifiable(name, f"{GOLD} inválido (ver `schemas`)")
+        return
+    faltan = sorted(protocolo.claves - set(gold.value))
+    rel.check(name, not faltan, f"faltan en {GOLD}: {_ids(faltan)}")
+
+
 def _metrics(ctx: AuditContext, rel: _Relations) -> None:
+    ola1 = _ola1(ctx)
+    protocolo = _gold_del_protocolo(ctx) if ola1 else _GoldProtocolo()
+    if ola1:
+        _gold_anclado(ctx, rel, protocolo)
     loaded = ctx.art.artifact(METRICS)
     if not loaded.present:
-        if _ola1(ctx) and ctx.art.exists(GOLD):
-            # El motor escribe gold.json y metrics.json juntos (`_screen_ta`, si hay gold):
-            # quitar las métricas no puede ser la forma de no recalcularlas.
+        # El motor escribe gold.json y metrics.json juntos (`_screen_ta`, si hay gold): quitar
+        # las métricas no puede ser la forma de no recalcularlas. Hay gold si el protocolo
+        # trae etiquetas o si `gold.json` existe (etiquetas pasadas por código).
+        con = [
+            *([f"{GOLD} presente"] if ola1 and ctx.art.exists(GOLD) else []),
+            *([f"gold en {GOLD_PROTOCOLO}"] if protocolo.claves else []),
+        ]
+        if con:
             rel.check(
-                "§9.3 · metrics.json junto a gold.json",
+                GOLD_Y_METRICAS,
                 False,
-                f"{METRICS} ausente con {GOLD} presente (el motor escribe los dos)",
+                f"{METRICS} ausente con {' y '.join(con)} (el motor escribe los dos)",
             )
         return
     if not loaded.ok:
@@ -1214,11 +1361,12 @@ class _Llamadas:
     """``llm_calls.jsonl`` para la relación 12: sus líneas en forma canónica o por qué no.
 
     Attributes:
-        claves: :func:`_clave` de cada línea (``None`` si no se puede leer o falta).
+        claves: :func:`_clave` de cada línea y cuántas veces aparece (``None`` si no se puede
+            leer o falta). Cada aparición respalda como mucho una posición de meta.
         ausente: el fichero no existe (el motor lo escribe antes que cualquier diario).
     """
 
-    claves: frozenset[str] | None
+    claves: Counter[str] | None
     ausente: bool = False
 
 
@@ -1234,7 +1382,7 @@ def _llamadas(ctx: AuditContext) -> _Llamadas:
     raw = ctx.art.jsonl(LLM_CALLS)
     if raw.value is None:
         return _Llamadas(None)
-    return _Llamadas(frozenset(_clave(obj) for _, obj in raw.value))
+    return _Llamadas(Counter(_clave(obj) for _, obj in raw.value))
 
 
 def _llamadas_esperadas(
@@ -1277,6 +1425,7 @@ def _diarios(ctx: AuditContext, rel: _Relations) -> None:
     screeners = _screeners(ctx.protocol)
     miembros = len(screeners) if screeners else None
     modo = ctx.protocol.grounding if ctx.protocol is not None else None
+    usadas: Counter[str] = Counter()  # posiciones de meta que ya respalda cada llamada
     for stage, path in JOURNAL_PATHS.items():
         raw = ctx.art.jsonl(path)
         if not raw.present:
@@ -1289,7 +1438,7 @@ def _diarios(ctx: AuditContext, rel: _Relations) -> None:
             continue
         modelos = ctx.art.jsonl_models(path)
         revision = _revisar_diario(
-            stage, raw.value, dict(modelos.value or []), llamadas, miembros, modo
+            stage, raw.value, dict(modelos.value or []), llamadas, usadas, miembros, modo
         )
         invalidas = f"{path} con líneas inválidas (ver `schemas`)" if modelos.error else ""
         if revision.problemas:
@@ -1321,8 +1470,9 @@ class _RevisionDiario:
     """Lo que la relación 12 encontró en las líneas válidas de un diario.
 
     Attributes:
-        problemas: líneas con una meta que no está en ``llm_calls.jsonl``, una meta de otra etapa
-            o registro, o la línea misma de otra etapa (``"línea N …"``, sin repetir).
+        problemas: líneas con una meta que no está en ``llm_calls.jsonl`` (o cuya llamada ya
+            respalda otra meta), una meta de otra etapa o registro, miembros de T/A con el mismo
+            rol, o la línea misma de otra etapa (``"línea N …"``, sin repetir).
         mal_contadas: líneas con un número de llamadas distinto del de su etapa.
         sin_saber: líneas cuyo número esperado de llamadas no se puede saber.
         con_metas: alguna línea cita alguna llamada.
@@ -1339,13 +1489,17 @@ def _revisar_diario(
     lineas: list[tuple[int, Any]],
     validas: dict[int, JournalEntry],
     llamadas: _Llamadas,
+    usadas: Counter[str],
     miembros: int | None,
     modo: str | None,
 ) -> _RevisionDiario:
     """Recorre las líneas de un diario para la relación 12 (las inválidas las marca ``schemas``).
 
     Las metas se comparan en crudo (``lineas``: el JSON tal cual) y no desde el modelo: «aparece
-    idéntica» incluye los campos que ``LLMCall`` ignoraría o normalizaría.
+    idéntica» incluye los campos que ``LLMCall`` ignoraría o normalizaría. ``usadas`` cuenta, en
+    todos los diarios, las posiciones de meta que respalda cada llamada: una línea de
+    ``llm_calls.jsonl`` respalda una sola (una meta copiada no puede tapar la llamada que falta)
+    y los miembros del ensemble T/A de una línea tienen roles distintos.
     """
     revision = _RevisionDiario()
     for numero, obj in lineas:
@@ -1361,8 +1515,17 @@ def _revisar_diario(
         for meta in metas:
             if meta.get("stage") != stage or meta.get("record_id") != entry.record_id:
                 revision.problemas.append(f"línea {numero} (meta de otra etapa o registro)")
-            elif llamadas.claves is not None and _clave(meta) not in llamadas.claves:
-                revision.problemas.append(f"línea {numero}")
+            elif llamadas.claves is not None:
+                clave = _clave(meta)
+                usadas[clave] += 1
+                if clave not in llamadas.claves:
+                    revision.problemas.append(f"línea {numero}")
+                elif usadas[clave] > llamadas.claves[clave]:
+                    revision.problemas.append(f"línea {numero} (llamada citada por otra meta)")
+        if stage == "screening_ta":
+            roles = [_clave(meta.get("role")) for meta in metas]
+            if len(set(roles)) != len(roles):
+                revision.problemas.append(f"línea {numero} (roles repetidos)")
         esperado = _llamadas_esperadas(stage, entry, miembros, modo)
         if esperado is None:
             revision.sin_saber += 1
@@ -1510,16 +1673,22 @@ def _documento(ctx: AuditContext, rel: _Relations) -> None:
         rel.unverifiable(name, f"{path} ilegible (ver `schemas`)")
         return
     modelos = ctx.art.jsonl_models(path)
-    narrativas = [
+    todas = [
         e.output["narrative"]
         for _, e in modelos.value or []
         if e.stage == "sintesis" and isinstance(e.output.get("narrative"), str)
     ]
+    # Una narrativa vacía (o en blanco) está en cualquier documento: no respalda ninguno.
+    narrativas = [n for n in todas if n.strip()]
     documento = _normalizar(texto.value)
     if any(_normalizar(n) in documento for n in narrativas):
         rel.check(name, True)
     elif modelos.error is not None:
         rel.unverifiable(name, f"{path} con líneas inválidas (ver `schemas`)")
+    elif todas and not narrativas:
+        # Un modelo que devolvió una síntesis vacía deja un documento sin narrativa: no hay
+        # texto que contrastar (ni un FAIL falso, ni una relación verificada).
+        rel.unverifiable(name, f"las {len(todas)} narrativa(s) del diario están vacías")
     else:
         rel.check(name, False, f"ninguna de las {len(narrativas)} narrativas del diario")
 
@@ -1640,8 +1809,12 @@ def check_exclusions(ctx: AuditContext) -> Verdict:
     elif not counts.ok:
         unverifiable.append("manifest.counts inválido (ver `schemas`)")
     elif counts.value.excluded_ta_human is None and counts.value.excluded_ta_ai is None:
-        # Un manifiesto anterior al desglose humano/IA pudo no traerlos: no se puede saber.
-        unverifiable.append("counts sin excluded_ta_human/ai (manifiesto sin desglose)")
+        if _ola1(ctx):
+            # El motor de la Ola 1 escribe siempre el desglose: que falte es manipulación.
+            diffs.append("counts sin excluded_ta_human/ai (el motor escribe ambos)")
+        else:
+            # Un manifiesto anterior al desglose humano/IA pudo no traerlos: no se sabe.
+            unverifiable.append("counts sin excluded_ta_human/ai (manifiesto sin desglose)")
     elif counts.value.excluded_ta_human is None or counts.value.excluded_ta_ai is None:
         diffs.append("counts con solo uno de excluded_ta_human/ai (el motor escribe ambos)")
     else:

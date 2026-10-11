@@ -28,7 +28,7 @@ from pathlib import Path
 import pytest
 import yaml
 from audit_fixtures import auditar, edit_json, edit_yaml, fila
-from conftest import REGISTROS_AUDITORIA, etiquetar_auditoria, proveedor_auditoria
+from conftest import GOLD_AUDITORIA, REGISTROS_AUDITORIA, etiquetar_auditoria, proveedor_auditoria
 from fakes import ScriptedProvider, fetch_disponible, fetch_no_disponible
 from hitl_helpers import correr_hasta
 
@@ -37,6 +37,7 @@ from revisia.audit import CHECKS
 from revisia.audit.artifacts import AuditContext, load_run
 from revisia.audit.checks_flow import collect_relations
 from revisia.config import load_protocol
+from revisia.exclusions import compute_exclusion_breakdown
 from revisia.llm.base import LLMRequest
 from revisia.llm.registry import ProviderConfig
 from revisia.orchestration import pipeline as pipeline_mod
@@ -44,6 +45,7 @@ from revisia.orchestration.pipeline import PipelineResult, run_pipeline
 from revisia.orchestration.run_context import RunContext, RunInterrupted
 from revisia.schemas.artifacts import JOURNAL_PATHS
 from revisia.schemas.records import SearchRecord
+from revisia.schemas.screening import ScreeningDecision
 
 
 def _json(rel: str, fn: Callable) -> Callable[[Path], None]:
@@ -56,6 +58,14 @@ def _json(rel: str, fn: Callable) -> Callable[[Path], None]:
 def _counts(**cambios) -> Callable[[Path], None]:
     def _editar(run: Path) -> None:
         edit_yaml(run / "manifest.yml", lambda m: m["counts"].update(cambios))
+
+    return _editar
+
+
+def _quitar_del_manifiesto(clave: str) -> Callable[[dict], None]:
+    # `del` y no `m.pop(...)`: `edit_yaml` sustituye el documento por el mapa que devuelve `fn`.
+    def _editar(manifest: dict) -> None:
+        del manifest[clave]
 
     return _editar
 
@@ -465,7 +475,7 @@ def test_arithmetic_meta_de_otro_registro_falla(corrida) -> None:
 
 def test_arithmetic_metricas_ausentes_con_gold_falla(corrida) -> None:
     (corrida / "03_screening" / "metrics.json").unlink()
-    edit_yaml(corrida / "manifest.yml", lambda m: m.pop("screening_metrics"))
+    edit_yaml(corrida / "manifest.yml", _quitar_del_manifiesto("screening_metrics"))
     detalle = _rota(corrida, "§9.3 · metrics.json junto a gold.json")
     assert "03_screening/metrics.json ausente" in detalle
 
@@ -773,7 +783,32 @@ def _juez_interrumpido(base: Path, protocolo: Path) -> Path:
     return run
 
 
+def _protocolo_con_gold(base: Path, origen: Path, gold: dict[str, bool] | None) -> Path:
+    """Copia del protocolo de la auditoría con otro ``gold.yml`` (``None``: sin gold)."""
+    destino = base / origen.name
+    shutil.copytree(origen, destino)
+    if gold is None:
+        (destino / "gold.yml").unlink()
+    else:
+        (destino / "gold.yml").write_text(
+            yaml.safe_dump({"gold": gold}, allow_unicode=True), encoding="utf-8"
+        )
+    return destino
+
+
+def _sin_gold(base: Path, protocolo: Path) -> Path:
+    return _completar(base, _protocolo_con_gold(base, protocolo, None))
+
+
+def _recall_bajo(base: Path, protocolo: Path) -> Path:
+    # `cocina` es relevante para el gold pero la IA la excluye: recall 4/5 = 0,80 < 0,95.
+    gold = {**GOLD_AUDITORIA, "10.1000/cocina": True}
+    return _completar(base, _protocolo_con_gold(base, protocolo, gold))
+
+
 ESCENARIOS: dict[str, Callable[[Path, Path], Path]] = {
+    "sin-gold": _sin_gold,
+    "recall-bajo": _recall_bajo,
     "sin-incluidos-en-ta": _sin_incluidos_en_ta,
     "sin-incluidos-en-ft": _sin_incluidos_en_ft,
     "ningun-texto-transitorio": _ningun_texto_transitorio,
@@ -789,6 +824,8 @@ ESCENARIOS: dict[str, Callable[[Path, Path], Path]] = {
 
 # Conteos que prueban que cada corrida es la que dice ser.
 CONTEOS: dict[str, dict[str, int]] = {
+    "sin-gold": {"screened": 6, "included": 3},
+    "recall-bajo": {"screened": 6, "included": 3},
     "sin-incluidos-en-ta": {"screened": 2, "excluded_ta": 2, "fulltext_sought": 0, "included": 0},
     "sin-incluidos-en-ft": {"fulltext_sought": 1, "excluded_ft": 1, "included": 0},
     "ningun-texto-transitorio": {
@@ -1051,3 +1088,336 @@ def test_arithmetic_corrida_real_rota_falla_nombrando_la_relacion(
 def test_arithmetic_corrida_sin_registros_rota_falla(corrida_sin_registros) -> None:
     _counts(identified=1, identified_by_source={"OpenAlex": 1})(corrida_sin_registros)
     _rota(corrida_sin_registros, "1 · identified == len(01_search/records.json)")
+
+
+# ── Corrección tras la revisión de la Tarea 14 ────────────────────────────────────────────────
+
+RELACION_7 = "7 · retrieved ⇔ retrieval.available ⇔ un voto"
+GOLD_Y_METRICAS = "§9.3 · metrics.json junto a gold.json"
+GOLD_DEL_PROTOCOLO = "§9.3 · gold.json con el gold del protocolo"
+RELACION_12_TA = "12 · metas de 03_screening/journal.jsonl en llm_calls.jsonl"
+RELACION_13_DOCUMENTO = (
+    "13 · deliverable/documento.md contiene la narrativa de una línea de 06_synthesis/journal.jsonl"
+)
+DIARIO_DENTRO_DEL_DEDUP = "4 · ids de 03_screening/journal.jsonl ⊆ ids de 02_dedup/records.json"
+
+
+def _rotas(run: Path) -> list[str]:
+    """Nombres de las relaciones rotas de ``arithmetic``."""
+    return [nombre for nombre, (ok, _) in _relaciones(run).items() if ok is False]
+
+
+def _lineas(run: Path, rel: str) -> list[dict]:
+    texto = (run / rel).read_text(encoding="utf-8")
+    return [json.loads(linea) for linea in texto.splitlines() if linea]
+
+
+def _agregar_llamada(run: Path, llamada: dict) -> None:
+    """Añade una llamada a ``llm_calls.jsonl`` y a su copia del manifiesto (sin tocar diarios)."""
+    with (run / "llm_calls.jsonl").open("a", encoding="utf-8", newline="") as f:
+        f.write(json.dumps(llamada, ensure_ascii=False) + "\n")
+    edit_yaml(run / "manifest.yml", lambda m: m["llm_calls"].append(llamada))
+
+
+# 1. Un rescate (informe no recuperado) no lleva votos de la IA ni propuesta (D2).
+
+
+def _rescate_con_votos_de_la_ia(decisions: list[dict]) -> None:
+    voto = {
+        "model": "fake:fake-1",
+        "label": "include",
+        "confidence": 0.9,
+        "rationale": "guion: include",
+        "criteria_violated": [],
+    }
+    for decision in decisions:
+        if decision["record_id"] == "10.1000/asreview":
+            decision.update(votes=[voto, dict(voto)], ensemble_label="include")
+
+
+def _rescate_con_propuesta_sin_votos(decisions: list[dict]) -> None:
+    for decision in decisions:
+        if decision["record_id"] == "10.1000/asreview":
+            decision.update(ensemble_label="include")
+
+
+@pytest.mark.parametrize(
+    "tocar",
+    [_rescate_con_votos_de_la_ia, _rescate_con_propuesta_sin_votos],
+    ids=["dos-votos-de-la-ia", "propuesta-sin-votos"],
+)
+def test_arithmetic_rescate_con_votos_o_propuesta_de_la_ia_falla(copia_real, tocar) -> None:
+    run = copia_real("rescates")
+    _json("04_fulltext/decisions.json", tocar)(run)
+    detalle = _rota(run, RELACION_7)
+    assert "10.1000/asreview" in detalle
+
+
+# 2. El gold del protocolo ancla las métricas: borrar gold.json y metrics.json no las evita.
+
+
+def _borrar_gold_y_metricas(run: Path) -> None:
+    (run / "03_screening" / "gold.json").unlink()
+    (run / "03_screening" / "metrics.json").unlink()
+    edit_yaml(run / "manifest.yml", _quitar_del_manifiesto("screening_metrics"))
+
+
+def test_arithmetic_gold_y_metricas_borrados_con_recall_bajo_siguen_sin_publicarse(
+    copia_real,
+) -> None:
+    run = copia_real("recall-bajo")
+    legitima = auditar(run)
+    assert fila(legitima, "thresholds").status == "FAIL"  # recall 0,80 < 0,95 (D7)
+    assert legitima.publishable is False
+    _borrar_gold_y_metricas(run)
+    report = auditar(run)
+    arithmetic = fila(report, "arithmetic")
+    assert arithmetic.status == "FAIL", arithmetic.detail
+    assert fila(report, "gold").status == "WARN"  # sin gold.json el check de calidad no ve nada
+    assert report.publishable is False
+    relaciones = _relaciones(run)
+    assert relaciones[GOLD_Y_METRICAS][0] is False
+    assert relaciones[GOLD_DEL_PROTOCOLO][0] is False
+    assert "00_protocol/gold.yml" in relaciones[GOLD_Y_METRICAS][1]
+    stage_artifacts = fila(report, "stage_artifacts")
+    assert stage_artifacts.status == "FAIL"
+    assert "03_screening/gold.json" in stage_artifacts.detail
+    assert "03_screening/metrics.json" in stage_artifacts.detail
+
+
+def test_arithmetic_solo_gold_json_borrado_con_gold_en_el_protocolo_falla(corrida) -> None:
+    (corrida / "03_screening" / "gold.json").unlink()
+    detalle = _rota(corrida, GOLD_DEL_PROTOCOLO)
+    assert "03_screening/gold.json ausente" in detalle
+    assert "(el motor siempre lo escribe)" in detalle
+
+
+def test_arithmetic_gold_json_sin_un_id_del_gold_del_protocolo_falla(corrida) -> None:
+    edit_json(corrida / "03_screening" / "gold.json", lambda gold: gold.pop("10.1000/cocina"))
+    detalle = _rota(corrida, GOLD_DEL_PROTOCOLO)
+    assert "10.1000/cocina" in detalle
+
+
+def test_arithmetic_gold_json_puede_cambiar_valores_y_anadir_claves_con_gold_labels(
+    corrida,
+) -> None:
+    # `gold_labels=` (D6) sobrescribe etiquetas del fichero y añade ids: las claves del gold del
+    # protocolo siguen estando. La matriz sí cambia y la marca su propia relación.
+    edit_json(
+        corrida / "03_screening" / "gold.json",
+        lambda gold: gold.update({"10.1000/cocina": True, "10.9/otro": False}),
+    )
+    assert _relaciones(corrida)[GOLD_DEL_PROTOCOLO][0] is True
+
+
+@pytest.mark.parametrize(
+    "texto",
+    ["", "# plantilla sin etiquetar\n", "gold: {}\n", "gold:\n", "{}\n"],
+    ids=["vacio", "solo-comentarios", "mapa-vacio", "gold-nulo", "mapa-plano-vacio"],
+)
+def test_arithmetic_gold_vacio_en_la_instantanea_no_exige_gold_ni_metricas(
+    corrida, texto: str
+) -> None:
+    # El motor lee un `gold.yml` sin etiquetas como «sin gold» y no escribe gold.json ni
+    # metrics.json: exigirlos sería un FAIL falso.
+    (corrida / "00_protocol" / "gold.yml").write_text(texto, encoding="utf-8")
+    _borrar_gold_y_metricas(corrida)
+    arithmetic = fila(auditar(corrida), "arithmetic")
+    assert arithmetic.status == "PASS", arithmetic.detail
+    nombres = list(_relaciones(corrida))
+    assert GOLD_Y_METRICAS not in nombres
+    assert GOLD_DEL_PROTOCOLO not in nombres
+
+
+def test_arithmetic_gold_plano_en_la_instantanea_tambien_se_exige(corrida) -> None:
+    # El motor acepta `gold.yml` con el mapa `id → bool` en la raíz (`data.get("gold", data)`).
+    gold = json.loads((corrida / "03_screening" / "gold.json").read_text(encoding="utf-8"))
+    (corrida / "00_protocol" / "gold.yml").write_text(yaml.safe_dump(gold), encoding="utf-8")
+    _borrar_gold_y_metricas(corrida)
+    _rota(corrida, GOLD_Y_METRICAS)
+    assert _relaciones(corrida)[GOLD_DEL_PROTOCOLO][0] is False
+
+
+def test_arithmetic_gold_del_protocolo_ilegible_deja_la_relacion_no_verificable(corrida) -> None:
+    (corrida / "00_protocol" / "gold.yml").write_text("gold: [sin: cerrar", encoding="utf-8")
+    ok, detalle = _relaciones(corrida)[GOLD_DEL_PROTOCOLO]
+    assert ok is None
+    assert "00_protocol/gold.yml" in detalle
+
+
+def test_arithmetic_corrida_sin_gold_no_tiene_gold_ni_metricas_y_pasa(corrida_real) -> None:
+    run = corrida_real("sin-gold")
+    assert not (run / "00_protocol" / "gold.yml").exists()
+    assert not (run / "03_screening" / "gold.json").exists()
+    assert not (run / "03_screening" / "metrics.json").exists()
+    report = auditar(run)
+    assert fila(report, "arithmetic").status == "PASS"
+    assert fila(report, "stage_artifacts").status == "PASS"
+    nombres = list(_relaciones(run))
+    assert GOLD_Y_METRICAS not in nombres
+    assert GOLD_DEL_PROTOCOLO not in nombres
+
+
+# 3. Una narrativa vacía en el diario de síntesis no respalda cualquier documento.
+
+
+def _sintesis_con_otra_linea(narrativa: str) -> Callable[[Path], None]:
+    """Añade al diario de síntesis una línea con ``narrativa`` y una llamada propia."""
+
+    def _editar(run: Path) -> None:
+        linea = _lineas(run, JOURNAL_PATHS["sintesis"])[0]
+        nueva = {**linea["metas"][0], "response_sha256": "e" * 64}
+        _agregar_llamada(run, nueva)
+        extra = {**linea, "input_sha256": "e" * 64, "output": {"narrative": narrativa}}
+        extra["metas"] = [nueva]
+        _jsonl(JOURNAL_PATHS["sintesis"], lambda lineas: lineas.append(extra))(run)
+
+    return _editar
+
+
+@pytest.mark.parametrize("narrativa", ["", "\n"], ids=["vacia", "salto"])
+def test_arithmetic_narrativa_vacia_en_el_diario_no_respalda_cualquier_documento(
+    corrida, narrativa: str
+) -> None:
+    _sintesis_con_otra_linea(narrativa)(corrida)
+    _documento_editado(corrida)
+    assert _rotas(corrida) == [RELACION_13_DOCUMENTO]
+
+
+def test_arithmetic_narrativas_todas_en_blanco_dejan_el_documento_no_verificable(corrida) -> None:
+    # Un motor cuyo modelo devuelve una síntesis vacía deja un documento sin narrativa: no hay
+    # texto que contrastar, pero tampoco un FAIL falso (ni una relación verificada).
+    _jsonl(JOURNAL_PATHS["sintesis"], lambda lineas: lineas[0]["output"].update(narrative=" "))(
+        corrida
+    )
+    _documento_editado(corrida)
+    ok, detalle = _relaciones(corrida)[RELACION_13_DOCUMENTO]
+    assert ok is None
+    assert "vacía" in detalle
+
+
+# 5. Cada llamada de llm_calls.jsonl respalda una sola meta, y los miembros de T/A son distintos.
+
+
+def test_arithmetic_meta_repetida_en_una_linea_de_ta_falla(corrida) -> None:
+    # La meta del 2.º miembro se sustituye por la del 1.º, se borra la llamada real del 2.º y se
+    # inyecta una huérfana: el número de llamadas y la cota inferior cuadran, pero una llamada
+    # no puede respaldar dos posiciones.
+    lineas = _lineas(corrida, JOURNAL_PATHS["screening_ta"])
+    primera, segunda = lineas[0]["metas"]
+    huerfana = {**primera, "record_id": lineas[1]["record_id"], "response_sha256": "b" * 64}
+    _jsonl(JOURNAL_PATHS["screening_ta"], lambda e: e[0]["metas"].__setitem__(1, primera))(corrida)
+    _quitar_llamada(corrida, lambda c: c == segunda)
+    _agregar_llamada(corrida, huerfana)
+    detalle = _rota(corrida, RELACION_12_TA)
+    assert "línea 1" in detalle
+
+
+def test_arithmetic_una_llamada_de_llm_calls_respalda_una_sola_meta(corrida) -> None:
+    # Dos líneas de un mismo diario (aquí, la síntesis) citando la misma llamada.
+    linea = _lineas(corrida, JOURNAL_PATHS["sintesis"])[0]
+    extra = {**linea, "input_sha256": "d" * 64}
+    _jsonl(JOURNAL_PATHS["sintesis"], lambda lineas: lineas.append(extra))(corrida)
+    detalle = _rota(corrida, "12 · metas de 06_synthesis/journal.jsonl en llm_calls.jsonl")
+    assert "línea 2" in detalle
+
+
+def test_arithmetic_miembros_de_ta_con_el_mismo_rol_falla(corrida) -> None:
+    # Dos llamadas reales (ambas en llm_calls.jsonl, del registro y la etapa) con el rol del
+    # 1.er miembro: ni el número de metas ni su pertenencia lo delatan, el rol repetido sí.
+    primera = _lineas(corrida, JOURNAL_PATHS["screening_ta"])[0]["metas"][0]
+    gemela = {**primera, "response_sha256": "d" * 64}
+    _agregar_llamada(corrida, gemela)
+    _jsonl(JOURNAL_PATHS["screening_ta"], lambda e: e[0]["metas"].__setitem__(1, gemela))(corrida)
+    detalle = _rota(corrida, RELACION_12_TA)
+    assert "roles repetidos" in detalle
+
+
+# 6. Un registro cribado no puede disfrazarse de duplicado: el diario de T/A cabe en el dedup.
+
+
+def _registro_cribado_disfrazado_de_duplicado(run: Path) -> None:
+    """Saca ``cocina`` de ``02_dedup/records.json`` y de las decisiones T/A, de forma coherente.
+
+    Se ajustan el informe del dedup (un duplicado más), los conteos, el desglose de exclusiones,
+    las métricas y el CSV: todas las relaciones de siempre cuadran, y el diario de T/A conserva
+    la línea del registro que nadie pudo cribar.
+    """
+    rid = "10.1000/cocina"
+
+    def _sin_el_registro(items: list[dict]) -> None:
+        del items[_posicion(items, rid)]
+
+    def _como_duplicado(dedup: dict) -> None:
+        dedup["n_out"] -= 1
+        dedup["duplicates"].append(
+            {
+                "record_id": rid,
+                "source_db": "OpenAlex",
+                "kept_record_id": "10.1000/llm-1",
+                "key": "doi:x",
+            }
+        )
+
+    edit_json(run / "02_dedup" / "records.json", _sin_el_registro)
+    edit_json(run / "02_dedup" / "dedup.json", _como_duplicado)
+    edit_json(run / "03_screening" / "decisions.json", _sin_el_registro)
+    decisiones = [
+        *json.loads((run / "03_screening" / "decisions.json").read_text(encoding="utf-8")),
+        *json.loads((run / "04_fulltext" / "decisions.json").read_text(encoding="utf-8")),
+    ]
+    desglose = compute_exclusion_breakdown(
+        [ScreeningDecision.model_validate(d) for d in decisiones]
+    ).model_dump()
+    (run / "03_screening" / "exclusions.json").write_text(json.dumps(desglose), encoding="utf-8")
+    edit_json(
+        run / "03_screening" / "metrics.json",
+        lambda m: m.update(n=m["n"] - 1, tn=m["tn"] - 1),
+    )
+    metricas = json.loads((run / "03_screening" / "metrics.json").read_text(encoding="utf-8"))
+
+    def _manifiesto(m: dict) -> None:
+        m["exclusions"] = desglose
+        m["screening_metrics"] = metricas
+        counts = m["counts"]
+        counts["duplicates_removed"] += 1
+        counts["screened"] -= 1
+        counts["excluded_ta"] -= 1
+        counts["excluded_ta_ai"] -= 1
+
+    edit_yaml(run / "manifest.yml", _manifiesto)
+    counts = yaml.safe_load((run / "manifest.yml").read_text(encoding="utf-8"))["counts"]
+    _csv("duplicates", str(counts["duplicates_removed"]))(run)
+    _csv("records_screened", str(counts["screened"]))(run)
+    _csv("records_excluded", str(counts["excluded_ta"]))(run)
+
+
+def _posicion(items: list[dict], rid: str) -> int:
+    return next(i for i, item in enumerate(items) if item["record_id"] == rid)
+
+
+def test_arithmetic_registro_cribado_disfrazado_de_duplicado_falla(corrida) -> None:
+    _registro_cribado_disfrazado_de_duplicado(corrida)
+    # Es la única relación que lo delata: el resto de la aritmética cuadra.
+    assert _rotas(corrida) == [DIARIO_DENTRO_DEL_DEDUP]
+    detalle = _rota(corrida, DIARIO_DENTRO_DEL_DEDUP)
+    assert "10.1000/cocina" in detalle
+
+
+def test_arithmetic_diario_de_ta_dentro_del_dedup_se_verifica_en_la_corrida_real(corrida) -> None:
+    assert _relaciones(corrida)[DIARIO_DENTRO_DEL_DEDUP][0] is True
+
+
+def test_arithmetic_diario_de_ta_ausente_con_registros_cribados_es_relacion_rota(corrida) -> None:
+    (corrida / JOURNAL_PATHS["screening_ta"]).unlink()
+    ok, detalle = _relaciones(corrida)[DIARIO_DENTRO_DEL_DEDUP]
+    assert ok is False
+    assert "(el motor siempre lo escribe)" in detalle
+
+
+def test_arithmetic_diario_de_ta_sin_registros_cribados_se_verifica(
+    corrida_sin_registros,
+) -> None:
+    # Sin registros tras el dedup no hay diario de T/A ni qué comprobar.
+    ok, _ = _relaciones(corrida_sin_registros)[DIARIO_DENTRO_DEL_DEDUP]
+    assert ok is True

@@ -449,11 +449,13 @@ def test_arithmetic_corrida_real_cuenta_sus_relaciones_verificadas(corrida) -> N
     # fulltext_assessed == screened`, `len(decisions FT) == fulltext_assessed`, un voto FT por
     # decisión e `included` con `unclear`) y entran las de la Ola 1: 3 entre conteos (6, 8, 9), 2
     # de T/A (orden y buscados), 15 del texto completo (7-10), 6 de búsqueda y dedup (1, 4), la
-    # matriz desde `gold.json`, 16 de los ocho diarios (12) y 8 de los consolidados (13).
+    # matriz desde `gold.json`, 16 de los ocho diarios (12) y 8 de los consolidados (13). La
+    # corrección tras la revisión suma dos: `gold.json` con el gold del protocolo y el diario de
+    # T/A dentro del dedup (96 + 2).
     relaciones = _relaciones(corrida)
     assert [n for n, (ok, _) in relaciones.items() if ok is not True] == []
-    assert len(relaciones) == 96
-    assert "96 relaciones verificadas" in fila(auditar(corrida), "arithmetic").detail
+    assert len(relaciones) == 98
+    assert "98 relaciones verificadas" in fila(auditar(corrida), "arithmetic").detail
 
 
 def test_arithmetic_manifiesto_sin_counts_falla(corrida) -> None:
@@ -579,18 +581,38 @@ def test_arithmetic_identified_by_source_vacio_sin_identificados_se_verifica(tmp
     assert _relaciones(run)[SUMA_POR_BASE][0] is True
 
 
-def test_arithmetic_sin_desglose_humano_ia_en_counts_no_es_verificable(corrida) -> None:
-    # Un manifiesto anterior al desglose pudo no traerlos: no se puede saber (WARN, no FAIL).
+def test_arithmetic_sin_desglose_humano_ia_en_counts_falla_en_la_ola_1(corrida) -> None:
+    # El motor de la Ola 1 (con run.json) escribe siempre el desglose humano/IA de T/A: que falten
+    # los dos es manipulación (quitarlos no puede ser la forma de no verificar la relación 6).
     edit_yaml(corrida / "manifest.yml", _quitar_de_counts("excluded_ta_human", "excluded_ta_ai"))
     report = auditar(corrida)
     arithmetic = fila(report, "arithmetic")
+    assert arithmetic.status == "FAIL"
+    assert RELACION_6 in arithmetic.detail
+    ok, detalle = _relaciones(corrida)[RELACION_6]
+    assert ok is False
+    assert "counts sin excluded_ta_human/ai (el motor escribe ambos)" in detalle
+    exclusions = fila(report, "exclusions")
+    assert exclusions.status == "FAIL"
+    assert "counts sin excluded_ta_human/ai (el motor escribe ambos)" in exclusions.detail
+    assert report.publishable is False
+
+
+def test_arithmetic_sin_desglose_humano_ia_en_counts_de_una_corrida_v07_no_es_verificable(
+    tmp_path,
+) -> None:
+    # Un manifiesto anterior al desglose (sin run.json) pudo no traerlos: no se puede saber
+    # (WARN, no FAIL).
+    run = write_legacy_v07(tmp_path)
+    edit_yaml(run / "manifest.yml", _quitar_de_counts("excluded_ta_human", "excluded_ta_ai"))
+    report = auditar(run)
+    arithmetic = fila(report, "arithmetic")
     assert arithmetic.status == "WARN"
     assert f"no verificables: {RELACION_6} (counts sin excluded_ta_human/ai" in arithmetic.detail
-    assert _relaciones(corrida)[RELACION_6][0] is None
+    assert _relaciones(run)[RELACION_6][0] is None
     exclusions = fila(report, "exclusions")
     assert exclusions.status == "WARN"
     assert "counts sin excluded_ta_human/ai" in exclusions.detail
-    assert report.publishable is True
 
 
 def test_arithmetic_solo_uno_de_los_conteos_humano_ia_falla(corrida) -> None:

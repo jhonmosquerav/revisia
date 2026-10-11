@@ -651,6 +651,19 @@ class RunArtifacts:
     def yaml(self, rel: str) -> Loaded[Any]:
         return self._memo("yaml", rel, lambda: read_yaml(self.run_dir, rel))
 
+    def yaml_o_vacio(self, rel: str) -> Loaded[Any]:
+        """Como :meth:`yaml`, pero un documento vacío (``None``) también es una raíz válida.
+
+        El motor lee un fichero sin contenido (o solo con comentarios) como ``{}``
+        (``pipeline._load_yaml``: ``yaml.safe_load(...) or {}``); p. ej. el ``gold.yml`` de
+        la plantilla de ``revisia gold-template`` sin ninguna etiqueta descomentada.
+        """
+        return self._memo(
+            "yaml_o_vacio",
+            rel,
+            lambda: read_yaml(self.run_dir, rel, root=(dict, type(None))),
+        )
+
     def jsonl(self, rel: str) -> Loaded[list[tuple[int, Any]]]:
         return self._memo("jsonl", rel, lambda: read_jsonl(self.run_dir, rel))
 
