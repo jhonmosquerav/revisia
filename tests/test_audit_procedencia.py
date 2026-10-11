@@ -313,7 +313,7 @@ def test_ledger_volver_a_decidir_tras_un_rechazo_es_valido(corrida) -> None:
 
 def test_schemas_failures_json_valido_pasa_y_cuenta_como_un_artefacto_mas(corrida) -> None:
     antes = int(fila(auditar(corrida), "schemas").detail.split()[0])
-    (corrida / "01_search").mkdir()
+    (corrida / "01_search").mkdir(exist_ok=True)  # la Ola 1 congela ahí la búsqueda (log.json)
     fallos = [{"db": "OpenAlex", "error": "tiempo de espera agotado"}]
     (corrida / "01_search" / "failures.json").write_text(json.dumps(fallos), encoding="utf-8")
     schemas = fila(auditar(corrida), "schemas")
@@ -322,7 +322,7 @@ def test_schemas_failures_json_valido_pasa_y_cuenta_como_un_artefacto_mas(corrid
 
 
 def test_schemas_failures_json_sin_el_error_de_la_base_falla(corrida) -> None:
-    (corrida / "01_search").mkdir()
+    (corrida / "01_search").mkdir(exist_ok=True)
     (corrida / "01_search" / "failures.json").write_text('[{"db": "OpenAlex"}]', encoding="utf-8")
     schemas = fila(auditar(corrida), "schemas")
     assert schemas.status == "FAIL"

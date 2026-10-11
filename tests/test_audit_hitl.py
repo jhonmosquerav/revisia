@@ -11,7 +11,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from audit_fixtures import auditar, edit_json, edit_ledger, fila, pausar_en_screening_ft
+from audit_fixtures import auditar, edit_json, edit_ledger, fila
 
 from revisia.audit.artifacts import AuditContext, load_run
 from revisia.audit.checks_hitl import check_final_gate, de_la_decision_efectiva
@@ -19,6 +19,12 @@ from revisia.audit.state import RunState
 from revisia.config import STAGES
 from revisia.provenance.ledger import AUTO_APPROVE_ACTOR, DecisionEntry
 from revisia.schemas.artifacts import GATED_STAGES, GateSummary
+
+# La corrida real ya trae etiquetas por registro: en el texto completo (A0) la revisora etiqueta
+# los 4 recuperados y excluye uno ("secundario"). Esa `label` respalda la exclusión humana que
+# declara exclusions.json; los tests que añaden etiquetas suman las suyas a esa.
+_ETIQUETAS_FT = 4
+_EXCLUSIONES_FT = 1
 
 
 def _actor(stage: str, actor: str):
@@ -51,21 +57,13 @@ def test_hitl_excluded_human_sin_etiquetas_falla(corrida) -> None:
 
 
 def test_hitl_etiquetas_exclude_respaldan_exclusiones_humanas(corrida) -> None:
-    def _etiqueta(entries: list[dict]) -> list[dict]:
-        ta = entries[0]
-        label = {
-            **ta,
-            "action": "label",
-            "target": "10.1000/cocina",
-            "detail": {"from": "exclude", "to": "exclude", "reason": "fuera de alcance"},
-        }
-        return [label, *entries]
-
-    edit_ledger(corrida, _etiqueta)
-    edit_json(corrida / "03_screening" / "exclusions.json", lambda e: e.update(excluded_human=1))
+    # La revisora excluyó "secundario" a texto completo (A0): la exclusión
+    # humana de exclusions.json tiene su `label` con `to: exclude` en el ledger.
+    exclusions = json.loads((corrida / "03_screening" / "exclusions.json").read_text("utf-8"))
+    assert exclusions["excluded_human"] == _EXCLUSIONES_FT
     hitl = fila(auditar(corrida), "hitl")
     assert hitl.status == "PASS"
-    assert "1 etiqueta(s) por registro" in hitl.detail
+    assert f"{_ETIQUETAS_FT} etiqueta(s) por registro" in hitl.detail
 
 
 # ── Solo cuentan las etiquetas de la decisión efectiva (revisión de la Tarea 8) ──
@@ -93,7 +91,11 @@ def _etiqueta(target: str, **cambios) -> dict:
 
 
 def _etiquetar(corrida, *etiquetas: dict, excluded_human: int) -> None:
-    """La aprobación efectiva de T/A lleva hashes (como en PR-D) y las `label` van antes."""
+    """Etiquetas de T/A ante una aprobación efectiva con hashes conocidos; las `label` van antes.
+
+    ``excluded_human`` es el total que declara exclusions.json (incluida la exclusión humana a
+    texto completo de la corrida real, ``_EXCLUSIONES_FT``).
+    """
 
     def _editar(entries: list[dict]) -> list[dict]:
         i = next(
@@ -114,10 +116,10 @@ def _etiquetar(corrida, *etiquetas: dict, excluded_human: int) -> None:
 
 
 def test_hitl_etiquetas_de_la_decision_efectiva_respaldan_las_exclusiones(corrida) -> None:
-    _etiquetar(corrida, _etiqueta("10.1000/cocina"), excluded_human=1)
+    _etiquetar(corrida, _etiqueta("10.1000/cocina"), excluded_human=_EXCLUSIONES_FT + 1)
     hitl = fila(auditar(corrida), "hitl")
     assert hitl.status == "PASS", hitl.detail
-    assert "1 etiqueta(s) por registro" in hitl.detail
+    assert f"{_ETIQUETAS_FT + 1} etiqueta(s) por registro" in hitl.detail
 
 
 @pytest.mark.parametrize(
@@ -137,18 +139,19 @@ def test_hitl_etiquetas_de_la_decision_efectiva_respaldan_las_exclusiones(corrid
 def test_hitl_etiquetas_huerfanas_no_respaldan_exclusiones_humanas(
     corrida, huerfana: dict, motivo: str
 ) -> None:
-    # Una etiqueta válida y otra huérfana (`motivo`); `excluded_human: 2` solo tiene
-    # respaldo de una de ellas.
+    # Una etiqueta válida y otra huérfana (`motivo`) en T/A, más la exclusión a texto completo
+    # de la corrida: `excluded_human` las cuenta todas y la huérfana no tiene respaldo.
+    declaradas = _EXCLUSIONES_FT + 2
     _etiquetar(
         corrida,
         _etiqueta("10.1000/cocina"),
         {"target": "10.1000/botanica", **huerfana},
-        excluded_human=2,
+        excluded_human=declaradas,
     )
     hitl = fila(auditar(corrida), "hitl")
     assert hitl.status == "FAIL", motivo
-    assert "exclusions.json declara 2 exclusiones humanas" in hitl.detail
-    assert "solo registra 1 etiqueta(s) `exclude`" in hitl.detail
+    assert f"exclusions.json declara {declaradas} exclusiones humanas" in hitl.detail
+    assert f"solo registra {declaradas - 1} etiqueta(s) `exclude`" in hitl.detail
     assert "además, 1 etiqueta(s) `exclude` ajenas a esa decisión no cuentan" in hitl.detail
 
 
@@ -166,8 +169,9 @@ def test_hitl_etiquetas_huerfanas_no_respaldan_exclusiones_humanas(
 )
 def test_hitl_etiquetas_que_no_son_una_exclusion_humana_no_cuentan(corrida, etiquetas) -> None:
     # `duplicada` cuenta una sola vez: la tupla de una etiqueta es única (spec §4.3), y
-    # `excluded_human: 2` con un solo registro etiquetado sigue sin respaldo.
-    esperado = 2 if len(etiquetas) == 2 else 1
+    # dos exclusiones de T/A con un solo registro etiquetado siguen sin respaldo. La exclusión a
+    # texto completo de la corrida sí lo tiene (y se suma a lo declarado).
+    esperado = _EXCLUSIONES_FT + (2 if len(etiquetas) == 2 else 1)
     _etiquetar(corrida, *etiquetas, excluded_human=esperado)
     hitl = fila(auditar(corrida), "hitl")
     assert hitl.status == "FAIL"
@@ -255,7 +259,9 @@ def test_hitl_acota_los_textos_hostiles_del_ledger(corrida) -> None:
     def _hostil(entries: list[dict]) -> None:
         entries[0]["stage"] = enorme
         entries[0]["actor"] = AUTO_APPROVE_ACTOR
-        entries[1]["actor"] = enorme  # screening_ft
+        for entry in entries:  # la decisión de screening_ft (y sus etiquetas)
+            if entry["stage"] == "screening_ft":
+                entry["actor"] = enorme
 
     edit_ledger(corrida, _hostil)
     hitl = fila(auditar(corrida), "hitl")
@@ -285,6 +291,9 @@ def test_hitl_sin_ninguna_decision_de_juicio_es_na_y_el_gate_final_falla(corrida
         return [{**entries[0], "action": "label", **etiqueta}]
 
     edit_ledger(corrida, _solo_una_etiqueta)
+    # Sin la etiqueta FT de la corrida, su exclusión humana ya no tiene respaldo: eso es otro
+    # FAIL de `hitl` (C3), no lo que se prueba aquí.
+    edit_json(corrida / "03_screening" / "exclusions.json", lambda e: e.update(excluded_human=0))
     report = auditar(corrida)
     hitl = fila(report, "hitl")
     assert hitl.status == "N/A"
@@ -295,9 +304,8 @@ def test_hitl_sin_ninguna_decision_de_juicio_es_na_y_el_gate_final_falla(corrida
 # ── Estado de la corrida y gate final ─────────────────────────────────
 
 
-def test_pausa_en_screening_ft_final_gate_falla_y_hitl_pasa_en_ta(corrida) -> None:
-    pausar_en_screening_ft(corrida)
-    report = auditar(corrida)
+def test_pausa_en_screening_ft_final_gate_falla_y_hitl_pasa_en_ta(corrida_en_pausa_ft) -> None:
+    report = auditar(corrida_en_pausa_ft)
     final_gate = fila(report, "final_gate")
     assert final_gate.status == "FAIL"
     assert final_gate.detail == "corrida en pausa en `screening_ft`: sin decisión final."
@@ -308,10 +316,9 @@ def test_pausa_en_screening_ft_final_gate_falla_y_hitl_pasa_en_ta(corrida) -> No
         assert fila(report, check_id).status == "N/A"
 
 
-def test_corrida_interrumpida_sin_solicitud_falla_el_gate_final(corrida) -> None:
-    pausar_en_screening_ft(corrida)
-    (corrida / "screening_ft" / "review_request.yml").unlink()
-    report = auditar(corrida)
+def test_corrida_interrumpida_sin_solicitud_falla_el_gate_final(corrida_en_pausa_ft) -> None:
+    (corrida_en_pausa_ft / "screening_ft" / "review_request.yml").unlink()
+    report = auditar(corrida_en_pausa_ft)
     assert report.state is not None and report.state.status == "interrupted"
     final_gate = fila(report, "final_gate")
     assert final_gate.status == "FAIL"
@@ -437,23 +444,32 @@ def test_de_la_decision_efectiva_de_una_etapa_sin_decision_es_falso() -> None:
 
 
 def test_hitl_etiqueta_con_hash_frente_a_una_aprobacion_sin_hash_no_respalda(corrida) -> None:
-    # Sentido inverso del fallback anterior a PR-D: la aprobación de la corrida real no lleva
-    # hashes, así que una `label` que sí lleva `decision_sha256` es de otra decisión.
+    # Sentido inverso del fallback anterior a PR-D: con una aprobación de T/A sin hashes (como en
+    # un ledger de la fase 1), una `label` que sí lleva `decision_sha256` es de otra decisión.
     def _etiqueta_con_hash(entries: list[dict]) -> list[dict]:
-        etiqueta = {**entries[0], "action": "label", "target": "10.1000/cocina"}
+        aprobacion = entries[0]
+        assert (aprobacion["stage"], aprobacion["action"]) == ("screening_ta", "approve")
+        aprobacion["detail"] = {}
+        etiqueta = {**aprobacion, "action": "label", "target": "10.1000/cocina"}
         return [{**etiqueta, "detail": _detalle()}, *entries]
 
+    declaradas = _EXCLUSIONES_FT + 1
     edit_ledger(corrida, _etiqueta_con_hash)
-    edit_json(corrida / "03_screening" / "exclusions.json", lambda e: e.update(excluded_human=1))
+    edit_json(
+        corrida / "03_screening" / "exclusions.json",
+        lambda e: e.update(excluded_human=declaradas),
+    )
     hitl = fila(auditar(corrida), "hitl")
     assert hitl.status == "FAIL"
-    assert "exclusions.json declara 1 exclusiones humanas" in hitl.detail
+    assert f"exclusions.json declara {declaradas} exclusiones humanas" in hitl.detail
     assert "además, 1 etiqueta(s) `exclude` ajenas a esa decisión no cuentan" in hitl.detail
 
 
 def test_hitl_con_el_estado_desconocido_exige_cada_etapa_de_juicio(corrida) -> None:
-    # Con una línea ilegible el estado queda en `unknown` y se exige todo: las etapas de juicio
-    # sin decisión (y sin otra posterior decidida) son «alcanzadas sin decisión».
+    # Con una línea ilegible y sin run.json el estado queda en `unknown` y se exige todo: las
+    # etapas de juicio sin decisión (y sin otra posterior decidida) son «alcanzadas sin
+    # decisión». La corrida de la Ola 1 tiene run.json: se quita (como en una anterior).
+    (corrida / "run.json").unlink()
     edit_ledger(corrida, lambda entries: [e for e in entries if e["stage"] == "screening_ta"])
     with (corrida / "decisions_ledger.jsonl").open("a", encoding="utf-8") as fh:
         fh.write("esto no es json\n")

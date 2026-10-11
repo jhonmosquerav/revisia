@@ -25,7 +25,6 @@ from audit_fixtures import (
     editar_llamadas,
     editar_protocolo,
     fila,
-    pausar_en_screening_ft,
     write_legacy_v07,
 )
 
@@ -441,13 +440,14 @@ def _quitar_de_counts(*claves: str) -> Callable[[dict], None]:
 
 
 def test_arithmetic_corrida_real_cuenta_sus_relaciones_verificadas(corrida) -> None:
-    # 48 antes de la revisión + `fulltext_rescued == 0` (corrida sin run.json). Las relaciones que
-    # ahora son incondicionales (Σ por base, desglose humano/IA, protocolo, doble extracción) no
-    # suman nada a una corrida sana: en ella ya se verificaban todas.
+    # La corrida de la Ola 1 tiene run.json: no lleva la relación v0.7 `fulltext_rescued == 0`
+    # (49 en la fase 1, con una corrida sin run.json). Las relaciones que ahora son
+    # incondicionales (Σ por base, desglose humano/IA, protocolo, doble extracción) no suman
+    # nada a una corrida sana: en ella ya se verificaban todas.
     relaciones = _relaciones(corrida)
     assert [n for n, (ok, _) in relaciones.items() if ok is not True] == []
-    assert len(relaciones) == 49
-    assert "49 relaciones verificadas" in fila(auditar(corrida), "arithmetic").detail
+    assert len(relaciones) == 48
+    assert "48 relaciones verificadas" in fila(auditar(corrida), "arithmetic").detail
 
 
 def test_arithmetic_manifiesto_sin_counts_falla(corrida) -> None:
@@ -611,7 +611,9 @@ def test_arithmetic_doble_extraccion_declarada_sin_fichero_ni_copia_falla(corrid
 
 
 def test_arithmetic_fulltext_rescued_sin_run_json_es_relacion_rota(corrida) -> None:
-    # La corrida de referencia no tiene run.json: el motor es el v0.7 y nunca rescata textos.
+    # Sin run.json el motor es el v0.7 y nunca rescata textos (la corrida de la Ola 1 lo tiene:
+    # se quita para auditarla con las relaciones v0.7).
+    (corrida / "run.json").unlink()
     edit_yaml(corrida / "manifest.yml", lambda m: m["counts"].update(fulltext_rescued=1))
     arithmetic = fila(auditar(corrida), "arithmetic")
     assert arithmetic.status == "FAIL"
@@ -620,7 +622,10 @@ def test_arithmetic_fulltext_rescued_sin_run_json_es_relacion_rota(corrida) -> N
 
 
 def test_arithmetic_fulltext_rescued_no_baja_la_cota_de_llamadas(corrida) -> None:
-    # Con rescates declarados la cota bajaba y una corrida con llamadas de menos pasaba.
+    # Con rescates declarados la cota bajaba y una corrida con llamadas de menos pasaba. Sin
+    # run.json (relaciones v0.7) se exige `fulltext_rescued == 0`; con run.json, contrastar los
+    # rescates declarados con los del ledger es la relación 8 de la Ola 1 (Tarea 14).
+    (corrida / "run.json").unlink()
     edit_yaml(
         corrida / "manifest.yml",
         lambda m: m["counts"].update(fulltext_rescued=m["counts"]["fulltext_assessed"]),
@@ -791,9 +796,8 @@ def test_stage_artifacts_corrida_real_pasa(corrida) -> None:
     assert "etapas alcanzadas presentes" in stage.detail
 
 
-def test_stage_artifacts_en_pausa_solo_exige_las_etapas_alcanzadas(corrida) -> None:
-    pausar_en_screening_ft(corrida)
-    stage = fila(auditar(corrida), "stage_artifacts")
+def test_stage_artifacts_en_pausa_solo_exige_las_etapas_alcanzadas(corrida_en_pausa_ft) -> None:
+    stage = fila(auditar(corrida_en_pausa_ft), "stage_artifacts")
     assert stage.status == "PASS"
     assert "screening_ta" in stage.detail
     assert "screening_ft" not in stage.detail

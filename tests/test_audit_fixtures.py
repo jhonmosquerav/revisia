@@ -182,7 +182,7 @@ def test_edit_yaml_con_dict_devuelto_reemplaza_el_documento(corrida) -> None:
 
 def test_edit_ledger_muta_las_entradas_en_sitio(corrida) -> None:
     antes = _ledger(corrida)
-    assert len(antes) == 5
+    assert len(antes) == 9  # 5 aprobaciones + 4 etiquetas a texto completo (A0, D1)
 
     def _agente(entradas: list[dict]) -> None:
         for entrada in entradas:

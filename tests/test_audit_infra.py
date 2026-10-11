@@ -1,7 +1,7 @@
 """Infraestructura del auditor: carga que nunca lanza, estado, N/A, fail-closed y render.
 
-Spec 2026-10-04 §9.1-§9.2. Las corridas salen de la fixture ``corrida``
-(``tests/conftest.py``).
+Spec 2026-10-04 §9.1-§9.2. Las corridas salen de las fixtures ``corrida`` y
+``corrida_en_pausa_ft`` (``tests/conftest.py``).
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from audit_fixtures import (
     bomba_de_alias,
     edit_yaml,
     fila,
-    pausar_en_screening_ft,
 )
 from pydantic import AfterValidator, BaseModel, TypeAdapter, ValidationError
 
@@ -786,9 +785,8 @@ def test_derive_state_run_json_interrumpida() -> None:
     assert (estado.status, estado.pending_stage) == ("interrupted", "extraccion")
 
 
-def test_pausa_en_screening_ft_deja_na_las_etapas_posteriores(corrida) -> None:
-    pausar_en_screening_ft(corrida)
-    report = auditar(corrida)
+def test_pausa_en_screening_ft_deja_na_las_etapas_posteriores(corrida_en_pausa_ft) -> None:
+    report = auditar(corrida_en_pausa_ft)
     assert report.state is not None
     assert (report.state.status, report.state.pending_stage) == ("paused", "screening_ft")
     for check_id in ("exclusions", "deliverable", "grounding", "manifest", "provenance"):
@@ -825,11 +823,10 @@ def test_render_incluye_el_estado(corrida) -> None:
     assert "Estado deducido: completada" in markdown
 
 
-def test_cli_audit_muestra_na(corrida, capsys) -> None:
+def test_cli_audit_muestra_na(corrida_en_pausa_ft, capsys) -> None:
     from revisia.cli import main
 
-    pausar_en_screening_ft(corrida)
-    assert main(["audit", str(corrida)]) == 1
+    assert main(["audit", str(corrida_en_pausa_ft)]) == 1
     out = capsys.readouterr().out
     assert "➖ N/A  exclusions" in out
     assert "Traceback" not in out

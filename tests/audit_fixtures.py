@@ -14,7 +14,9 @@ Contiene lo que el pipeline no puede producir ni los tests pueden pedirle:
 - Los constructores de corridas que el motor ya no produce: la del motor v0.7
   (``write_legacy_v07``) y la reconstrucción de la auditoría 2026-09-03
   (``write_c3_reconstruction``).
-- ``metricas_validas``, ``escribir_metricas``, ``pausar_en_screening_ft`` y ``bomba_de_alias``.
+- ``metricas_validas``, ``escribir_metricas`` y ``bomba_de_alias``. La corrida en pausa en el
+  gate FT ya no se simula borrando artefactos: es una corrida real detenida ahí
+  (``corrida_en_pausa_ft`` en ``tests/conftest.py``).
 
 Uso (``tests/`` está en ``sys.path`` porque no es un paquete)::
 
@@ -25,7 +27,6 @@ from __future__ import annotations
 
 import copy
 import json
-import shutil
 import subprocess
 import sys
 from collections.abc import Callable
@@ -237,23 +238,6 @@ def escribir_metricas(run_dir: Path, metrics: dict) -> None:
     """Sustituye ``03_screening/metrics.json``."""
     path = run_dir / "03_screening" / "metrics.json"
     path.write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def pausar_en_screening_ft(run_dir: Path) -> None:
-    """Deja la corrida como si se hubiera detenido en el gate FT (fase 1 de PR-E).
-
-    Lo que el pipeline aún no habría escrito desaparece: la decisión FT, los
-    gates posteriores, las etapas posteriores, el manifiesto y el desglose de
-    exclusiones (se escribe tras aprobar el gate FT).
-    """
-    edit_ledger(run_dir, lambda entries: [e for e in entries if e["stage"] == "screening_ta"])
-    (run_dir / "screening_ft" / "decision.yml").unlink()
-    for gate in ("extraccion", "rob", "reporte"):
-        shutil.rmtree(run_dir / gate)
-    for rel in ("05_extraction", "06_synthesis", "07_rob", "08_meta", "deliverable"):
-        shutil.rmtree(run_dir / rel)
-    (run_dir / "manifest.yml").unlink()
-    (run_dir / "03_screening" / "exclusions.json").unlink()
 
 
 # ── Corrida v0.7 (anterior a la Ola 1) ──────────────────────────────────

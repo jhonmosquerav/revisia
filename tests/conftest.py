@@ -8,10 +8,14 @@ a cada test. Se genera una vez por sesión con ``ScriptedProvider`` (vota
 ``exclude`` ante "irrelevante", así hay exclusiones IA y un gold de dos
 clases) y cada test recibe su propia copia.
 
-Fase 1 de PR-E: los ``decision.yml`` humanos se escriben antes de correr, como
-en ``tests/test_pipeline_fake.py``. La recuperación de texto completo se
-inyecta con ``fetch_disponible`` desde el principio: con el FT estricto de
-PR-B (D2) un registro sin texto en abierto ya no llega a extracción.
+Fase 2 de PR-E: la corrida avanza como en la vida real, con ``correr_hasta``
+(``tests/hitl_helpers.py``): pausa en cada gate, ``decision.yml`` con el
+``request_sha256`` de la solicitud vigente y reanudación. En el cribado a
+texto completo (A0) la revisora etiqueta cada registro recuperado con la
+propuesta de la IA (``etiquetar_auditoria``). El gold va en ``gold.yml`` de
+una copia del demo, porque ``correr_hasta`` no pasa ``gold_labels``. La
+recuperación de texto completo se inyecta con ``fetch_disponible``: con el FT
+estricto (D2) un registro sin texto en abierto no llegaría a extracción.
 """
 
 from __future__ import annotations
@@ -22,7 +26,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+import yaml
 from fakes import ScriptedProvider, fetch_disponible
+from hitl_helpers import correr_hasta
 
 from revisia.config import load_protocol
 from revisia.llm.registry import ProviderConfig
@@ -35,7 +41,7 @@ DEMO = Path(__file__).resolve().parent.parent / "examples" / "demo-mini-review"
 
 # Búsqueda simulada de la corrida de auditoría: 7 identificados (OpenAlex 4,
 # Crossref 3), 1 duplicado por DOI, 2 exclusiones IA en T/A ("irrelevante") y
-# 1 exclusión IA a texto completo ("secundario", solo para el proveedor FT).
+# 1 exclusión a texto completo ("secundario", solo para el proveedor FT).
 REGISTROS_AUDITORIA: tuple[SearchRecord, ...] = (
     SearchRecord(
         record_id="10.1000/llm-1",
@@ -108,8 +114,7 @@ GOLD_AUDITORIA: dict[str, bool] = {
 # El proveedor de texto completo (el `default` del demo, `fake-1`) excluye
 # además lo "secundario"; los miembros del ensemble T/A no.
 PALABRAS_FT = {"irrelevante": "exclude", "dudoso": "unclear", "secundario": "exclude"}
-
-DECISION_HUMANA = "approved: true\nactor: human:revisora\n"
+RAZON_EXCLUSION_FT = "fuera de alcance"
 
 
 def busqueda_auditoria(_query: str, n: int) -> list[SearchRecord]:
@@ -123,76 +128,135 @@ def proveedor_auditoria(cfg: ProviderConfig) -> ScriptedProvider:
     return ScriptedProvider(model=cfg.model, palabras=palabras)
 
 
+def etiquetar_auditoria(stage: str, solicitud: dict) -> dict | None:
+    """La revisora humana de la corrida de auditoría.
+
+    En T/A (A1) aprueba la propuesta en bloque (D5: sin etiquetas). En el texto
+    completo (A0) etiqueta cada registro de ``must_label`` con la propuesta de
+    la IA, con razón al excluir. En el resto de gates aprueba sin más.
+    """
+    if stage != "screening_ft":
+        return None
+    propuestas = {r["record_id"]: r.get("proposal") for r in solicitud.get("records", [])}
+    records = {}
+    for record_id in solicitud.get("must_label", []):
+        if propuestas.get(record_id) == "exclude":
+            records[record_id] = {"label": "exclude", "reason": RAZON_EXCLUSION_FT}
+        else:
+            records[record_id] = {"label": "include", "reason": None}
+    return {"records": records} if records else None
+
+
 @pytest.fixture(scope="session")
-def _corrida_auditoria(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Corrida real del pipeline, generada una vez por sesión."""
-    protocol = load_protocol(DEMO)
+def protocolo_auditoria(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Copia del demo con el gold de la corrida de auditoría en ``gold.yml``."""
+    destino = tmp_path_factory.mktemp("protocolo") / DEMO.name
+    shutil.copytree(DEMO, destino)
+    (destino / "gold.yml").write_text(
+        yaml.safe_dump({"gold": GOLD_AUDITORIA}, allow_unicode=True), encoding="utf-8"
+    )
+    return destino
+
+
+def _correr(
+    base_dir: Path,
+    protocol_dir: Path,
+    *,
+    parar_en: str | None,
+    rechazar: str | None = None,
+) -> Path:
+    """Corre el pipeline real con la revisora de ``etiquetar_auditoria``.
+
+    Se detiene en la pausa de ``parar_en`` o, con ``rechazar``, cuando la revisora
+    rechaza ese gate (``approved: false`` atado a su solicitud, como en la vida real).
+    """
+    protocol = load_protocol(protocol_dir)
     # Timestamp UTC real: el auditor lo usa como límite inferior de las marcas
     # de tiempo cuando no hay `run.json` (spec §9.3, `timing`).
     timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    ctx = RunContext(protocol.slug, tmp_path_factory.mktemp("auditoria"), timestamp)
-    for stage in GATED_STAGES:
-        (ctx.stage_dir(stage) / "decision.yml").write_text(DECISION_HUMANA, encoding="utf-8")
+    ctx = RunContext(protocol.slug, base_dir, timestamp)
+
+    def _revisora(stage: str, solicitud: dict) -> dict | None:
+        if stage == rechazar:
+            return {"approved": False, "reason": "sin respaldo"}
+        return etiquetar_auditoria(stage, solicitud)
+
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(pipeline_mod, "build_provider", proveedor_auditoria)
-        result = pipeline_mod.run_pipeline(
+        result = correr_hasta(
             protocol,
-            DEMO,
+            protocol_dir,
             ctx,
-            max_results=50,
             search_fn=busqueda_auditoria,
             fetch_fn=fetch_disponible,
-            gold_labels=GOLD_AUDITORIA,
+            etiquetar=_revisora,
+            parar_en=parar_en,
         )
-    assert result.status == "completed", result.message
+    esperado = "rejected" if rechazar else "paused" if parar_en else "completed"
+    assert result.status == esperado, result.message
+    assert result.stage == (rechazar or parar_en), result.message
     return ctx.run_dir
+
+
+@pytest.fixture(scope="session")
+def _corrida_auditoria(tmp_path_factory: pytest.TempPathFactory, protocolo_auditoria: Path) -> Path:
+    """Corrida real completada, generada una vez por sesión."""
+    return _correr(tmp_path_factory.mktemp("auditoria"), protocolo_auditoria, parar_en=None)
+
+
+@pytest.fixture(scope="session")
+def _corrida_en_pausa_ft(
+    tmp_path_factory: pytest.TempPathFactory, protocolo_auditoria: Path
+) -> Path:
+    """La misma corrida, detenida en el gate de texto completo."""
+    return _correr(
+        tmp_path_factory.mktemp("auditoria"), protocolo_auditoria, parar_en="screening_ft"
+    )
+
+
+def _copia(origen: Path, tmp_path: Path) -> Path:
+    destino = tmp_path / "runs" / origen.name
+    shutil.copytree(origen, destino)
+    return destino
 
 
 @pytest.fixture
 def corrida(_corrida_auditoria: Path, tmp_path: Path) -> Path:
     """Copia propia de la corrida real, en ``tmp_path/runs/<slug>-<timestamp>``."""
-    destino = tmp_path / "runs" / _corrida_auditoria.name
-    shutil.copytree(_corrida_auditoria, destino)
-    return destino
+    return _copia(_corrida_auditoria, tmp_path)
+
+
+@pytest.fixture
+def corrida_en_pausa_ft(_corrida_en_pausa_ft: Path, tmp_path: Path) -> Path:
+    """Copia propia de la corrida en pausa en ``screening_ft``."""
+    return _copia(_corrida_en_pausa_ft, tmp_path)
 
 
 @pytest.fixture
 def detener_corrida(
-    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+    tmp_path_factory: pytest.TempPathFactory, protocolo_auditoria: Path
 ) -> Callable[..., Path]:
     """Fábrica de corridas reales detenidas en un gate (pausadas o rechazadas).
 
     ``detener_corrida(aprobados=("screening_ta", "screening_ft"))`` aprueba esos gates y deja la
     corrida en pausa en el siguiente; con ``rechazar="extraccion"`` ese gate se rechaza. Es el
-    mismo pipeline y el mismo proveedor que ``corrida``, pero sin llegar al gate final: en esas
-    corridas el manifiesto y el entregable todavía no existen (spec 2026-10-04 §4.2), y lo que
-    el auditor exige de ellas no puede inventarse editando una corrida terminada.
+    mismo pipeline, el mismo proveedor y la misma revisora que ``corrida`` (con
+    ``correr_hasta``), pero sin llegar al gate final: en esas corridas el manifiesto y el
+    entregable todavía no existen (spec 2026-10-04 §4.2), y lo que el auditor exige de ellas
+    no puede inventarse editando una corrida terminada. ``aprobados`` son los primeros gates de
+    ``GATED_STAGES``, en orden: el pipeline no puede decidir un gate sin pasar por los previos.
     """
-    counter = [0]
 
-    def _correr(*, aprobados: Sequence[str], rechazar: str | None = None) -> Path:
-        counter[0] += 1
-        protocol = load_protocol(DEMO)
-        timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-        base_dir = tmp_path_factory.mktemp(f"detenida-{counter[0]}")
-        ctx = RunContext(protocol.slug, base_dir, timestamp)
-        for stage in aprobados:
-            (ctx.stage_dir(stage) / "decision.yml").write_text(DECISION_HUMANA, encoding="utf-8")
-        if rechazar is not None:
-            (ctx.stage_dir(rechazar) / "decision.yml").write_text(
-                "approved: false\nactor: human:revisora\nreason: sin respaldo\n", encoding="utf-8"
-            )
-        monkeypatch.setattr(pipeline_mod, "build_provider", proveedor_auditoria)
-        result = pipeline_mod.run_pipeline(
-            protocol,
-            DEMO,
-            ctx,
-            max_results=50,
-            search_fn=busqueda_auditoria,
-            fetch_fn=fetch_disponible,
-            gold_labels=GOLD_AUDITORIA,
+    def _detener(*, aprobados: Sequence[str], rechazar: str | None = None) -> Path:
+        aprobados = tuple(aprobados)
+        assert aprobados == GATED_STAGES[: len(aprobados)], f"no es un prefijo: {aprobados}"
+        siguiente = GATED_STAGES[len(aprobados)]
+        assert rechazar in (None, siguiente), f"solo se rechaza `{siguiente}`, no `{rechazar}`"
+        return _correr(
+            tmp_path_factory.mktemp("detenida"),
+            protocolo_auditoria,
+            parar_en=None if rechazar else siguiente,
+            rechazar=rechazar,
         )
-        assert result.status == ("rejected" if rechazar else "paused"), result.message
-        return ctx.run_dir
 
-    return _correr
+    return _detener
