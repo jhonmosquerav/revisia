@@ -70,6 +70,8 @@ _ALIAS_DESMESURADOS = "estructura YAML con alias que se expanden más allá del 
 _NO_ES_JSON = "valores que no son JSON"
 # Claves del `detail` de un `approve`/`reject` que añade el motor y no vienen de `decision.yml`.
 _CLAVES_DEL_MOTOR = frozenset({"request_sha256", "decision_sha256", "n_labels", "forced_human"})
+# Entradas de la plantilla sin etiquetar: (ids de `records`, claves de `flags`).
+_SinEtiquetar = tuple[tuple[str, ...], tuple[str, ...]]
 
 
 def indice_de_bandera(target: str | None) -> int | None:
@@ -738,15 +740,19 @@ def _entrada_efectiva(ctx: AuditContext, stage: str) -> DecisionEntry | None:
     return efectiva
 
 
-def _decision_del_ledger(ctx: AuditContext, stage: str, gate: GateSummary) -> HumanDecision | None:
+def _decision_del_ledger(
+    ctx: AuditContext, stage: str, gate: GateSummary, sin_etiquetar: _SinEtiquetar = ((), ())
+) -> HumanDecision | None:
     """La ``HumanDecision`` que el motor hasheó, rehecha solo con el ledger.
 
     Es lo que hace el motor al reanudar sin ``decision.yml`` (``review_gate``: el ledger manda,
     ``_from_ledger``) y es la inversa de ``_register``: ``approved`` sale de la acción, ``actor``
     del actor, ``reason`` y los campos extra del ``detail`` del ``approve`` (sin los hashes,
     ``n_labels`` ni ``forced_human``, que añade el motor), ``records`` de las ``label`` y ``flags``
-    de las ``flag_review`` de la decisión efectiva (un ``reject`` no registra ninguna). ``None`` si
-    el ledger no describe una decisión válida (una ``label`` con un valor que no existe).
+    de las ``flag_review`` de la decisión efectiva (un ``reject`` no registra ninguna). Las
+    entradas de ``sin_etiquetar`` (``{label: null}`` o ``{verdict: null}``) no dejan rastro en el
+    ledger pero sí en el hash: son las de la plantilla que el humano no rellenó. ``None`` si el
+    ledger no describe una decisión válida (una ``label`` con un valor que no existe).
     """
     entrada = _entrada_efectiva(ctx, stage)
     if entrada is None or gate.request_sha256 is None:
@@ -767,6 +773,10 @@ def _decision_del_ledger(ctx: AuditContext, stage: str, gate: GateSummary) -> Hu
                 "verdict": entry.detail.get("verdict"),
                 "reason": entry.detail.get("reason"),
             }
+    for rid in sin_etiquetar[0]:
+        records.setdefault(rid, {"label": None, "reason": None})
+    for indice in sin_etiquetar[1]:
+        flags.setdefault(indice, {"verdict": None, "reason": None})
     extras = {k: v for k, v in entrada.detail.items() if k not in _CLAVES_DEL_MOTOR}
     try:
         return HumanDecision.model_validate(
@@ -783,7 +793,21 @@ def _decision_del_ledger(ctx: AuditContext, stage: str, gate: GateSummary) -> Hu
         return None
 
 
-def _sin_decision_yml(ctx: AuditContext, stage: str, gate: GateSummary) -> _Hallazgos:
+def _entradas_de_la_plantilla(stage: str, request: dict) -> _SinEtiquetar:
+    """Las entradas que ``decision.template.yml`` trae para ``request``: un ``{label: null}`` por
+    registro (cribado) y un ``{verdict: null}`` por cita a adjudicar (``reporte``)."""
+    if stage in DECISIONES_DE_CRIBADO:
+        ids = _ids_de_la_solicitud(request) or []
+        return tuple(rid for rid in ids if rid is not None), ()
+    pedidas = request.get("must_adjudicate")
+    if stage == "reporte" and isinstance(pedidas, list):
+        return (), tuple(str(i) for i in pedidas if isinstance(i, int) and not isinstance(i, bool))
+    return (), ()
+
+
+def _sin_decision_yml(
+    ctx: AuditContext, stage: str, gate: GateSummary, request: dict
+) -> _Hallazgos:
     """Una decisión humana sin ``decision.yml``: se rehace del ledger y se recalcula su hash.
 
     ``decision.yml`` es el canal de entrada del humano, no un artefacto de la corrida (spec
@@ -791,18 +815,23 @@ def _sin_decision_yml(ctx: AuditContext, stage: str, gate: GateSummary) -> _Hall
     registrado, la decisión está atada igual que con el fichero (PASS con nota); si no, el hash
     no se puede comprobar, pero ausente el fichero tampoco hay contradicción que probar: WARN
     (las contradicciones del ledger las dan ``ledger``, ``hitl`` y el resto de las filas).
+
+    Se prueba la decisión con solo lo etiquetado y, si la plantilla trae entradas, la que las deja
+    en ``null`` (quien rellena ``decision.template.yml`` solo etiqueta unos pocos y el motor
+    hashea el resto): que alguna dé el hash registrado prueba que es la que se hasheó.
     """
     if gate.decision_sha256 is None:
         return _Hallazgos()  # `_atada` ya dice que la decisión efectiva no lleva decision_sha256
-    decision = _decision_del_ledger(ctx, stage, gate)
-    sha = None
-    if decision is not None:
+    for sin_etiquetar in dict.fromkeys([((), ()), _entradas_de_la_plantilla(stage, request)]):
+        decision = _decision_del_ledger(ctx, stage, gate, sin_etiquetar)
+        if decision is None:
+            continue
         try:
             sha = canonical_sha256(decision.model_dump(mode="json"))
         except (TypeError, ValueError, RecursionError, OverflowError):
-            sha = None
-    if sha == gate.decision_sha256:
-        return _Hallazgos(reconstruidas=[stage])
+            continue
+        if sha == gate.decision_sha256:
+            return _Hallazgos(reconstruidas=[stage])
     return _Hallazgos(
         warns=[
             f"`{stage}`: decision_sha256 no recalculable sin decision.yml (el ledger no "
@@ -811,7 +840,7 @@ def _sin_decision_yml(ctx: AuditContext, stage: str, gate: GateSummary) -> _Hall
     )
 
 
-def _decision_yml(ctx: AuditContext, stage: str, gate: GateSummary, declared: object) -> _Hallazgos:
+def _decision_yml(ctx: AuditContext, stage: str, gate: GateSummary, request: dict) -> _Hallazgos:
     """``decision.yml`` es la decisión registrada: misma solicitud, mismo hash, mismo actor.
 
     Si falta, la decisión se rehace del ledger (:func:`_sin_decision_yml`). Una decisión que no
@@ -819,14 +848,16 @@ def _decision_yml(ctx: AuditContext, stage: str, gate: GateSummary, declared: ob
     """
     loaded = ctx.art.decision(stage)
     if not loaded.present:
-        return _sin_decision_yml(ctx, stage, gate) if is_human_actor(gate.actor) else _Hallazgos()
+        if is_human_actor(gate.actor):
+            return _sin_decision_yml(ctx, stage, gate, request)
+        return _Hallazgos()
     if not loaded.ok:
         return _Hallazgos(
             fails=[f"`{stage}/decision.yml` inválido ({short_text(loaded.error)}; ver `schemas`)"]
         )
     decision: HumanDecision = loaded.value
     problems: list[str] = []
-    if decision.request_sha256 != declared:
+    if decision.request_sha256 != request["request_sha256"]:
         problems.append(f"`{stage}`: decision.yml responde a otra solicitud")
     rel = f"{stage}/decision.yml"
     crudo = ctx.art.yaml(rel)
@@ -993,7 +1024,7 @@ def _atada(ctx: AuditContext, stage: str, gate: GateSummary) -> _Hallazgos:
                 f"solicitud: {_ids(ajenas)}"
             )
         problems += _n_labels(ctx, stage)
-    hallazgos.sumar(_decision_yml(ctx, stage, gate, declared))
+    hallazgos.sumar(_decision_yml(ctx, stage, gate, request))
     problems += _contenido(ctx, stage, gate, request)
     return hallazgos
 

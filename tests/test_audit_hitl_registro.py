@@ -1292,6 +1292,38 @@ def test_corridas_reales_sin_fail_falso_en_la_supervision_humana(escenario, nomb
     ]
 
 
+def _desde_la_plantilla(stage: str, solicitud: dict) -> dict | None:
+    """La revisora rellena ``decision.template.yml`` y deja el resto de las entradas en ``null``.
+
+    La plantilla lista cada registro como ``{label: null, reason: null}``: quien solo etiqueta
+    unos pocos guarda el fichero con todas las demás entradas sin etiquetar, y el motor hashea
+    esa decisión entera (``records`` incluye los ``null``).
+    """
+    etiquetas = (_con_excepcion_en_ta(stage, solicitud) or {}).get("records", {})
+    if stage not in ("screening_ta", "screening_ft"):
+        return _con_excepcion_en_ta(stage, solicitud)
+    sin_etiquetar = {r["record_id"]: {"label": None, "reason": None} for r in solicitud["records"]}
+    return {"records": {**sin_etiquetar, **etiquetas}}
+
+
+def test_request_hash_sin_decision_yml_rehace_tambien_las_entradas_de_la_plantilla_sin_etiquetar(
+    tmp_path, protocolo_auditoria: Path
+) -> None:
+    run, _ = _correr(None, tmp_path, protocolo_auditoria, etiquetar=_desde_la_plantilla)
+    decisiones = sorted(run.glob("*/decision.yml"))
+    assert len(decisiones) == 5
+    crudo = yaml.safe_load((run / "screening_ta" / "decision.yml").read_text(encoding="utf-8"))
+    assert any(r["label"] is None for r in crudo["records"].values())  # la plantilla con nulls
+    assert fila(auditar(run), "request_hash").status == "PASS"
+    for decision in decisiones:
+        decision.unlink()
+    report = auditar(run)
+    request = fila(report, "request_hash")
+    assert request.status == "PASS", request.detail
+    assert "decision.yml ausente en `screening_ta`, `screening_ft`" in request.detail
+    assert report.publishable
+
+
 def test_corrida_con_excepcion_en_ta_registra_la_etiqueta(escenario) -> None:
     run = escenario("humana-a1-con-excepcion")
     hitl = fila(auditar(run), "hitl")
