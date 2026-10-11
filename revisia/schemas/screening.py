@@ -45,6 +45,13 @@ class ScreeningDecision(BaseModel):
         human_label: decisión del revisor humano (HITL), si ya se tomó.
         final_label: decisión final aplicada (== humana cuando existe).
         citations_checked: ids verificados contra el corpus (anti-alucinación).
+        fulltext_status: solo en ``fulltext``: ``"retrieved"`` o
+            ``"not_retrieved"``. Un no recuperado no se criba con IA: lleva
+            ``votes == []`` y ``ensemble_label is None`` (D2; auditoría
+            2026-09-03, M11).
+        human_reason: razón de la etiqueta humana (obligatoria al excluir en FT
+            y al rescatar un no recuperado).
+        human_actor: actor de ``decision.yml`` que puso la etiqueta humana.
     """
 
     record_id: str
@@ -54,3 +61,6 @@ class ScreeningDecision(BaseModel):
     human_label: ScreeningLabel | None = None
     final_label: ScreeningLabel | None = None
     citations_checked: list[str] = Field(default_factory=list)
+    fulltext_status: Literal["retrieved", "not_retrieved"] | None = None
+    human_reason: str | None = None
+    human_actor: str | None = None

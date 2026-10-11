@@ -43,10 +43,18 @@ class PrismaCounts(BaseModel):
             (nota ** de la plantilla oficial · PRISMA-trAIce R1).
         excluded_ta_ai: de los excluidos en T/A, cuántos por la IA sin
             intervención humana.
+        fulltext_sought: informes buscados para recuperación (pasaron T/A).
+        fulltext_not_retrieved: informes buscados que no se recuperaron y que
+            nadie rescató (caja "informes no recuperados").
+        fulltext_rescued: no recuperados que el revisor consiguió por otra vía
+            y evaluó (D2); cuentan como evaluados.
         fulltext_assessed: informes evaluados para elegibilidad.
         fulltext_abstract_only: de los evaluados, cuántos sin texto completo
             recuperable (se evaluaron con título/abstract; limitación declarada).
         excluded_ft: excluidos en la evaluación de elegibilidad.
+        excluded_ft_human: de los excluidos en elegibilidad, cuántos por
+            decisión humana (PRISMA-trAIce R1).
+        excluded_ft_ai: de los excluidos en elegibilidad, cuántos por la IA.
         ft_exclusion_reasons: razones de exclusión en texto completo → n
             (cajas "Reason 1..n" de la plantilla oficial).
         included: estudios incluidos en la síntesis.
@@ -61,9 +69,14 @@ class PrismaCounts(BaseModel):
     excluded_ta: int = 0
     excluded_ta_human: int | None = None
     excluded_ta_ai: int | None = None
+    fulltext_sought: int = 0
+    fulltext_not_retrieved: int = 0
+    fulltext_rescued: int = 0
     fulltext_assessed: int = 0
     fulltext_abstract_only: int = 0
     excluded_ft: int = 0
+    excluded_ft_human: int = 0
+    excluded_ft_ai: int = 0
     ft_exclusion_reasons: dict[str, int] = Field(default_factory=dict)
     included: int = 0
 
