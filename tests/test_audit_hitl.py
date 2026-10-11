@@ -11,7 +11,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from audit_fixtures import auditar, edit_json, edit_ledger, fila
+from audit_fixtures import auditar, edit_json, edit_ledger, edit_yaml, fila
 
 from revisia.audit.artifacts import AuditContext, load_run
 from revisia.audit.checks_hitl import check_final_gate, de_la_decision_efectiva
@@ -32,6 +32,33 @@ def _actor(stage: str, actor: str):
         for entry in entries:
             if entry["stage"] == stage:
                 entry["actor"] = actor
+
+    return _editar
+
+
+def _actor_de_las_etiquetas(actor: str):
+    """``human_actor`` de las decisiones con etiqueta humana (lo escribe ``apply_labels``)."""
+
+    def _editar(decisions: list[dict]) -> None:
+        for decision in decisions:
+            if decision["human_label"] is not None:
+                decision["human_actor"] = actor
+
+    return _editar
+
+
+def _decision_humana(record_id: str, label: str, reason: str):
+    """La etiqueta humana de ``record_id`` en ``decisions.json``, como la aplica el gate."""
+
+    def _editar(decisions: list[dict]) -> None:
+        for decision in decisions:
+            if decision["record_id"] == record_id:
+                decision.update(
+                    human_label=label,
+                    human_reason=reason,
+                    human_actor="human:revisora",
+                    final_label=label,
+                )
 
     return _editar
 
@@ -116,7 +143,21 @@ def _etiquetar(corrida, *etiquetas: dict, excluded_human: int) -> None:
 
 
 def test_hitl_etiquetas_de_la_decision_efectiva_respaldan_las_exclusiones(corrida) -> None:
-    _etiquetar(corrida, _etiqueta("10.1000/cocina"), excluded_human=_EXCLUSIONES_FT + 1)
+    # Desde la fase 2 (Tarea 15) la etiqueta tiene que ser también la de decisions.json y la de
+    # decision.yml (L = H = D), con `from` = la propuesta de la IA: la corrida queda coherente.
+    etiqueta = _etiqueta("10.1000/cocina")
+    etiqueta["detail"]["from"] = "exclude"
+    _etiquetar(corrida, etiqueta, excluded_human=_EXCLUSIONES_FT + 1)
+    edit_json(
+        corrida / "03_screening" / "decisions.json",
+        _decision_humana("10.1000/cocina", "exclude", "fuera de alcance"),
+    )
+    edit_yaml(
+        corrida / "screening_ta" / "decision.yml",
+        lambda d: d.update(
+            records={"10.1000/cocina": {"label": "exclude", "reason": "fuera de alcance"}}
+        ),
+    )
     hitl = fila(auditar(corrida), "hitl")
     assert hitl.status == "PASS", hitl.detail
     assert f"{_ETIQUETAS_FT + 1} etiqueta(s) por registro" in hitl.detail
@@ -180,6 +221,10 @@ def test_hitl_etiquetas_que_no_son_una_exclusion_humana_no_cuentan(corrida, etiq
 
 def test_hitl_actor_desconocido_advierte(corrida) -> None:
     edit_ledger(corrida, _actor("screening_ft", "human:desconocido"))
+    # Coherente con el ledger (desde la Tarea 15, `human_actor` es el actor del `approve`).
+    edit_json(
+        corrida / "04_fulltext" / "decisions.json", _actor_de_las_etiquetas("human:desconocido")
+    )
     hitl = fila(auditar(corrida), "hitl")
     assert hitl.status == "WARN"
     assert "`screening_ft`: actor `human:desconocido`" in hitl.detail
@@ -535,7 +580,12 @@ def test_final_gate_rechazo_sin_decision_efectiva_nombra_un_actor_desconocido(co
     ctx.__dict__["gates"] = {}
     status, detalle = check_final_gate(ctx)
     assert status == "FAIL"
-    assert detalle == "El reporte final fue rechazado por un actor desconocido."
+    # La corrida de partida está completada: sin decisión efectiva del reporte, run.json miente
+    # (relación 18, Tarea 15).
+    assert detalle == (
+        "El reporte final fue rechazado por un actor desconocido. run.json dice `completed` sin "
+        "un `approve` del reporte (relación 18)."
+    )
     ctx.__dict__["state"] = RunState("rejected", frozenset(STAGES), "rob")
     status, detalle = check_final_gate(ctx)
     assert status == "FAIL"

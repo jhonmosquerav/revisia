@@ -81,6 +81,7 @@ CHECKS: tuple[CheckSpec, ...] = (
     CheckSpec("timing", "PRISMA 27 / trAIce M2", None, checks_timing.check_timing),
     CheckSpec("ledger", "trAIce M8 / PRISMA 8", None, checks_hitl.check_ledger),
     CheckSpec("hitl", "trAIce M8/R1 / PRISMA 8", None, checks_hitl.check_hitl),
+    CheckSpec("request_hash", "trAIce M8", None, checks_hitl.check_request_hash),
     CheckSpec("final_gate", "trAIce M8", None, checks_hitl.check_final_gate),
     CheckSpec("stage_artifacts", "PRISMA 16/27", None, checks_flow.check_stage_artifacts),
     CheckSpec("arithmetic", "PRISMA 16 / trAIce R1", "reporte", checks_flow.check_arithmetic),

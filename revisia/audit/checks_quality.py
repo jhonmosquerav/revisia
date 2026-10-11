@@ -2,10 +2,13 @@
 
 ``thresholds`` aplica D7: los umbrales del protocolo según lo que mide cada
 métrica. Un recall bajo ``recall_target`` significa estudios relevantes
-perdidos y es FAIL (la rebaja a WARN cuando todas las exclusiones IA de T/A ya
-tienen etiqueta humana llega con el reanudado por registro); un κ bajo
-``kappa_min`` (acuerdo humano-IA) es una desviación a declarar (WARN). El caso
-de la auditoría 2026-09-03 (A11: κ=0.0 con PASS) deja de pasar en limpio.
+perdidos y es FAIL mientras quede alguna exclusión IA de T/A sin etiqueta
+humana; si un humano las etiquetó todas (en ``screening_ta/decision.yml``,
+reanudando, D14), ningún estudio quedó fuera sin que alguien lo mirara y baja a
+WARN ("decláralo"). Que esas etiquetas de ``decisions.json`` sean de verdad del
+ledger lo verifica ``hitl`` por registro. Un κ bajo ``kappa_min`` (acuerdo
+humano-IA) es una desviación a declarar (WARN). El caso de la auditoría
+2026-09-03 (A11: κ=0.0 con PASS) deja de pasar en limpio.
 ``grounding`` aplica D8: una cita marcada por el verificador sin adjudicar por
 un humano es FAIL.
 
@@ -20,7 +23,6 @@ excepción, y todo valor interpolado pasa por ``short_text``/``short_repr``.
 from __future__ import annotations
 
 import math
-import re
 from typing import Any
 
 from revisia.audit.artifacts import NA_PROTOCOLO, AuditContext, short_repr, short_text
@@ -28,8 +30,9 @@ from revisia.audit.checks_flow import TA, included_ids
 
 # La adjudicación de una cita (`flag_review`) y la etiqueta de un registro (`label`) pertenecen
 # a la decisión efectiva con el mismo criterio (`decision_sha256` + `request_sha256`), y una sola
-# regla, la de `hitl`, evita que se contradigan.
-from revisia.audit.checks_hitl import de_la_decision_efectiva
+# regla, la de `hitl`, evita que se contradigan. El índice de una `flag_review` también se lee
+# igual aquí y en la relación 17 de `final_gate`.
+from revisia.audit.checks_hitl import de_la_decision_efectiva, indice_de_bandera
 from revisia.audit.model import Verdict
 from revisia.config import KNOWN_THRESHOLDS
 from revisia.metrics import ScreeningMetrics, wilson_interval
@@ -46,7 +49,6 @@ _LIMITE_NUMERO = 40  # caracteres de un número (un entero puede tener 4 000 cif
 _LIMITE_DECIMAL = 1e15  # un float de módulo mayor deja la notación decimal (`_num`)
 _TOLERANCIA_RANGO = 1e-9  # holgura del redondeo de coma flotante en los límites de κ y MCC
 _LIMITE_ID = 60  # caracteres de un id de cita, una clave o un actor
-_BANDERA = re.compile(r"flag:([0-9]{1,9})", re.ASCII)  # objetivo de una `flag_review`
 # Sufijo de `thresholds` cuando el protocolo no valida y los umbrales salen del mapa crudo.
 _NOTA_CRUDOS = " (leídos del protocolo en crudo: no valida, ver `protocol_snapshot` y `schemas`)"
 
@@ -224,6 +226,13 @@ def _recall(
     recall = f"recall {valor:.2f} {_ic(m.tp, positives)}"
     if valor < target:
         pending = ai_exclusions_without_label(ctx)
+        if pending == 0:
+            # D7: un humano revisó cada exclusión de la IA; ningún estudio relevante quedó
+            # fuera sin que alguien lo mirara. La desviación del protocolo se declara.
+            return "WARN", (
+                f"{recall} < {objetivo} con {_num(positives)} positivos, pero todas las "
+                "exclusiones IA de T/A tienen etiqueta humana: decláralo (D7)"
+            )
         quedan = "un número no verificable de" if pending is None else str(pending)
         return "FAIL", (
             f"{recall} < {objetivo} con {_num(positives)} positivos y {quedan} exclusiones IA de "
@@ -358,9 +367,9 @@ def _adjudications(ctx: AuditContext) -> dict[int, list[str]]:
             continue
         if not isinstance(reason, str) or not reason.strip():
             continue
-        target = _BANDERA.fullmatch(entry.target or "")
-        if target:
-            result.setdefault(int(target.group(1)), []).append(entry.actor)
+        indice = indice_de_bandera(entry.target)
+        if indice is not None:
+            result.setdefault(indice, []).append(entry.actor)
     return result
 
 
