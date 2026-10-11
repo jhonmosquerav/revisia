@@ -30,20 +30,34 @@ from pathlib import Path
 from typing import Any, Generic, TypeVar
 
 import yaml
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, StrictBool, TypeAdapter, ValidationError
 
 from revisia.audit.state import RunState, derive_state
-from revisia.config import STAGES, ReviewProtocol
+from revisia.config import STAGES, YAML_MERGE_TAG, ReviewProtocol
 from revisia.exclusions import ExclusionBreakdown
 from revisia.exports import PrismaCounts
 from revisia.extraction_agreement import ExtractionAgreement
 from revisia.meta_analysis import MetaAnalysisResult
 from revisia.metrics import ScreeningMetrics
 from revisia.orchestration.hitl import HumanDecision
+from revisia.orchestration.snapshot import SNAPSHOT_DIR
 from revisia.provenance.ledger import DecisionEntry, summarize_gates
 from revisia.provenance.runmeta import RunMeta
-from revisia.schemas.artifacts import GATED_STAGES, GateSummary, RunInfo
+from revisia.schemas.artifacts import (
+    GATED_STAGES,
+    JOURNAL_PATHS,
+    DedupReport,
+    ExcludedReport,
+    GateSummary,
+    JournalEntry,
+    LLMCall,
+    RetrievalOutcome,
+    RunInfo,
+    RunStatus,
+    SearchLog,
+)
 from revisia.schemas.extraction import ExtractionRecord
+from revisia.schemas.records import SearchRecord
 from revisia.schemas.rob import RoBAssessment
 from revisia.schemas.screening import ScreeningDecision
 from revisia.schemas.verification import VerificationReport
@@ -99,7 +113,7 @@ _YAML_LOADER: type = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 _YAML_MAX_DEPTH = 500  # niveles de colección (mapas/listas), también el mapa raíz
 _YAML_MAX_ESCALAR_NUMERICO = 1_000  # caracteres de un escalar que resuelve a int o float
 _YAML_MAX_CLAVES_ENTERAS = 10_000  # claves de mapa planas que resuelven a int, por documento
-_YAML_MERGE_TAG = "tag:yaml.org,2002:merge"
+_YAML_MERGE_TAG = YAML_MERGE_TAG  # la misma etiqueta que el motor rechaza en `protocol.yml`
 _YAML_INT_TAG = "tag:yaml.org,2002:int"
 _YAML_FLOAT_TAG = "tag:yaml.org,2002:float"
 # Con qué carácter puede empezar un entero plano (YAML 1.1: `+5`, `-5`, `0x1F`, `1_000`, `1:30`):
@@ -126,6 +140,28 @@ _YAML_ERR_CLAVES = (
 _YAML_ERR_ALIAS_CLAVE = (
     "alias como clave de mapping: no admitido en artefactos del motor; no se carga porque los "
     "alias de enteros que colisionan en el hash cuestan tiempo cuadrático"
+)
+
+# `00_protocol/protocol.yml` es una copia literal del `protocol.yml` de la persona que revisa, no
+# un artefacto del motor: «no admitido en artefactos del motor» sería un mensaje engañoso (el
+# motor sí lo escribió tal cual, y quien debe corregirlo es su autora). El motor rechaza las claves
+# de fusión al cargar el protocolo (`config.load_protocol`), así que una corrida real no las trae;
+# las demás guardas solo saltan con un protocolo hostil o editado a mano. Mismo veredicto, texto
+# neutro (Tarea 12, adaptación 1).
+_YAML_ERR_MERGE_USUARIO = (
+    "claves de fusión YAML (<<) no admitidas por el auditor: riesgo de expansión exponencial"
+)
+_YAML_ERR_NUMERO_USUARIO = (
+    f"escalar numérico de más de {_YAML_MAX_ESCALAR_NUMERICO} caracteres no admitido por el "
+    "auditor: construirlo cuesta tiempo cuadrático"
+)
+_YAML_ERR_CLAVES_USUARIO = (
+    f"más de {_YAML_MAX_CLAVES_ENTERAS} claves enteras en el documento, no admitidas por el "
+    "auditor: las que colisionan en el hash cuestan tiempo cuadrático"
+)
+_YAML_ERR_ALIAS_CLAVE_USUARIO = (
+    "alias como clave de mapping no admitido por el auditor: los alias de enteros que "
+    "colisionan en el hash cuestan tiempo cuadrático"
 )
 
 
@@ -156,6 +192,47 @@ class SearchFailure(BaseModel):
 
     db: str
     error: str
+
+
+class RetrievalRow(RetrievalOutcome):
+    """Una fila de ``04_fulltext/retrieval.json``: ``{record_id, **RetrievalOutcome}``."""
+
+    record_id: str
+
+
+class LegacyDecision(BaseModel):
+    """``decision.yml`` de una corrida anterior a la Ola 1 (sin ``request_sha256``).
+
+    Se valida con su propio modelo: la corrida ya falla ``protocol_snapshot``
+    (D13) y exigirle el contrato nuevo solo repetiría ese FAIL en ``schemas``.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    approved: StrictBool
+    actor: str = "human:desconocido"
+    reason: str | None = None
+
+
+class ManifestRun(BaseModel):
+    """Bloque ``run`` del manifiesto (copia de ``run.json``, spec §4.3)."""
+
+    started_utc: str
+    resumes: list[str]
+    engine_version: str
+    python_version: str
+    status: RunStatus
+
+
+class ManifestFinalGate(BaseModel):
+    """Bloque ``final_gate`` del manifiesto (M5, spec §4.3).
+
+    ``forced_human`` es un booleano estricto, como ``approved`` en ``decision.yml``: el motor
+    escribe un ``bool`` y un ``"yes"`` o un ``1`` solo puede venir de una edición a mano.
+    """
+
+    forced_human: StrictBool
+    reason: str | None = None
 
 
 def _type_names(root: type | tuple[type, ...]) -> str:
@@ -250,10 +327,13 @@ def short_text(value: object, *, limit: int = 120) -> str:
 # `response_overlap`.
 NA_MANIFIESTO = "no aplica: el manifiesto no se pudo leer (ver `manifest`)."
 
-# Ídem para los checks que leen el protocolo registrado en el manifiesto (``thresholds``,
-# ``search_window`` y ``registration``): sin manifiesto, o con ``protocol`` ausente o inválido, la
-# causa ya está en otra fila (``manifest`` o ``schemas``) y aquí es un N/A (§9.2).
-NA_PROTOCOLO = "no aplica: sin protocolo legible en el manifiesto (ver las filas en FAIL)."
+# Ídem para los checks que leen el protocolo de la corrida (``thresholds``, ``search_window`` y
+# ``registration``): sin instantánea ``00_protocol/`` ni protocolo legible en el manifiesto, la
+# causa ya está en otra fila (``manifest``, ``schemas`` o ``protocol_snapshot``) y aquí es un
+# N/A (§9.2).
+NA_PROTOCOLO = (
+    "no aplica: sin protocolo legible (ni instantánea ni manifiesto; ver las filas en FAIL)."
+)
 
 
 def sufijo_mas(resto: int, unidad: str = "") -> str:
@@ -325,8 +405,11 @@ def read_json(
     return Loaded(rel, True, value)
 
 
-def _yaml_guard(text: str) -> str | None:
+def _yaml_guard(text: str, *, de_usuario: bool = False) -> str | None:
     """Por qué el YAML se rechaza sin cargarlo, o ``None`` si pasa la guarda.
+
+    ``de_usuario``: el fichero es una copia del protocolo de quien revisa (``00_protocol/``),
+    no un artefacto del motor: el veredicto es el mismo y el motivo no dice «del motor».
 
     Recorre los eventos del parser (pila en el heap: aquí no hay la recursión nativa que
     sí tiene el compositor y que desborda) y rechaza el anidamiento por encima de
@@ -361,22 +444,22 @@ def _yaml_guard(text: str) -> str | None:
                 abiertas[-1][0] += 1
             if isinstance(event, yaml.AliasEvent):
                 if es_clave:
-                    return _YAML_ERR_ALIAS_CLAVE
+                    return _YAML_ERR_ALIAS_CLAVE_USUARIO if de_usuario else _YAML_ERR_ALIAS_CLAVE
             elif isinstance(event, yaml.ScalarEvent):
                 if event.tag == _YAML_MERGE_TAG or (event.value == "<<" and not event.style):
-                    return _YAML_ERR_MERGE
+                    return _YAML_ERR_MERGE_USUARIO if de_usuario else _YAML_ERR_MERGE
                 largo = len(event.value) > _YAML_MAX_ESCALAR_NUMERICO
                 if largo or (es_clave and (event.tag or event.value[:1] in _YAML_INICIO_ENTERO)):
                     tag = _etiqueta_escalar(loader, event)
                     if largo and tag in (_YAML_INT_TAG, _YAML_FLOAT_TAG):
-                        return _YAML_ERR_NUMERO
+                        return _YAML_ERR_NUMERO_USUARIO if de_usuario else _YAML_ERR_NUMERO
                     if es_clave and tag == _YAML_INT_TAG:
                         claves_enteras += 1
                         if claves_enteras > _YAML_MAX_CLAVES_ENTERAS:
-                            return _YAML_ERR_CLAVES
+                            return _YAML_ERR_CLAVES_USUARIO if de_usuario else _YAML_ERR_CLAVES
             elif isinstance(event, yaml.SequenceStartEvent | yaml.MappingStartEvent):
                 if event.tag == _YAML_MERGE_TAG:
-                    return _YAML_ERR_MERGE
+                    return _YAML_ERR_MERGE_USUARIO if de_usuario else _YAML_ERR_MERGE
                 abiertas.append(None if isinstance(event, yaml.SequenceStartEvent) else [0])
                 if len(abiertas) > _YAML_MAX_DEPTH:
                     return _YAML_ERR_DEPTH
@@ -417,12 +500,15 @@ def read_yaml(run_dir: Path, rel: str, *, root: type | tuple[type, ...] = dict) 
     ``YAMLError``: una etiqueta explícita como ``!!timestamp foo`` o ``!!bool maybe``
     produce ``AttributeError``/``KeyError``, por eso se captura ``Exception``, guarda
     incluida («nunca lanza» vale también para ella).
+
+    Un fichero de ``00_protocol/`` es una copia del protocolo de quien revisa y no un artefacto
+    del motor: se guarda con el mismo criterio, pero sus motivos no dicen «del motor».
     """
     text = read_text(run_dir, rel)
     if not text.ok:
         return Loaded(rel, text.present, error=text.error)
     try:
-        problem = _yaml_guard(text.value)
+        problem = _yaml_guard(text.value, de_usuario=rel.startswith(f"{SNAPSHOT_DIR}/"))
         if problem:
             return Loaded(rel, True, error=problem)
         value = yaml.load(text.value, Loader=_YAML_LOADER)
@@ -487,6 +573,19 @@ ARTIFACT_ADAPTERS: dict[str, TypeAdapter[Any]] = {
     "06_synthesis/verification.json": TypeAdapter(VerificationReport),
     "07_rob/assessments.json": TypeAdapter(dict[str, RoBAssessment]),
     "08_meta/meta_analysis.json": TypeAdapter(MetaAnalysisResult),
+    "01_search/records.json": TypeAdapter(list[SearchRecord]),
+    "01_search/log.json": TypeAdapter(SearchLog),
+    "02_dedup/records.json": TypeAdapter(list[SearchRecord]),
+    "02_dedup/dedup.json": TypeAdapter(DedupReport),
+    "03_screening/gold.json": TypeAdapter(dict[str, bool]),
+    "04_fulltext/retrieval.json": TypeAdapter(list[RetrievalRow]),
+    "04_fulltext/excluded.json": TypeAdapter(list[ExcludedReport]),
+}
+
+# Artefactos ``.jsonl`` (una línea, un modelo): llamadas y diarios (D3).
+JSONL_ADAPTERS: dict[str, TypeAdapter[Any]] = {
+    "llm_calls.jsonl": TypeAdapter(LLMCall),
+    **{rel: TypeAdapter(JournalEntry) for rel in JOURNAL_PATHS.values()},
 }
 
 # Secciones de ``manifest.yml`` con modelo (las copias de los artefactos y los
@@ -503,9 +602,18 @@ MANIFEST_ADAPTERS: dict[str, TypeAdapter[Any]] = {
     "extraction_agreement": TypeAdapter(ExtractionAgreement),
     "meta_analysis": TypeAdapter(MetaAnalysisResult),
     "risk_of_bias": TypeAdapter(dict[str, RoBAssessment]),
+    "run": TypeAdapter(ManifestRun),
+    "autonomy_effective": TypeAdapter(dict[str, str]),
+    "final_gate": TypeAdapter(ManifestFinalGate),
 }
 
+# Líneas inválidas de un `.jsonl` que se nombran en su error (el resto se cuenta) y caracteres de
+# cada una: el error de un diario hostil de cien mil líneas rotas no llena el detalle.
+_MAX_LINEAS = 3
+_LIMITE_LINEA_JSONL = 200
+
 _DECISION_ADAPTER: TypeAdapter[HumanDecision] = TypeAdapter(HumanDecision)
+_LEGACY_DECISION_ADAPTER: TypeAdapter[LegacyDecision] = TypeAdapter(LegacyDecision)
 _RUN_INFO_ADAPTER: TypeAdapter[RunInfo] = TypeAdapter(RunInfo)
 
 
@@ -541,10 +649,44 @@ class RunArtifacts:
         """Artefacto JSON de :data:`ARTIFACT_ADAPTERS`, validado contra su modelo."""
         return self._memo("model", rel, lambda: validate(self.json(rel), ARTIFACT_ADAPTERS[rel]))
 
-    def decision(self, gate: str) -> Loaded[HumanDecision]:
-        """``<gate>/decision.yml`` validado como ``HumanDecision``."""
+    def jsonl_models(self, rel: str) -> Loaded[list[tuple[int, Any]]]:
+        """Artefacto ``.jsonl`` de :data:`JSONL_ADAPTERS`, validado línea a línea.
+
+        ``value`` = ``[(número de línea, modelo)]`` de las líneas válidas; ``error`` = las
+        líneas inválidas (no JSON o que no validan), cada una con su número, separadas por
+        ``; `` y acotadas (un ``.jsonl`` hostil puede tener cien mil líneas rotas): una fila
+        de ``schemas`` es una línea de texto y un salto de línea en el error se escaparía.
+        """
+
+        def _load() -> Loaded[list[tuple[int, Any]]]:
+            raw = self.jsonl(rel)
+            if not raw.present or raw.value is None:
+                return raw
+            adapter = JSONL_ADAPTERS[rel]
+            items: list[tuple[int, Any]] = []
+            errors = (raw.error or "").split("\n") if raw.error else []
+            for number, obj in raw.value:
+                one = validate(Loaded(rel, True, obj), adapter)
+                if one.ok:
+                    items.append((number, one.value))
+                else:
+                    errors.append(f"línea {number}: {one.error}")
+            if not errors:
+                return Loaded(rel, True, items)
+            shown = "; ".join(
+                short_text(e, limit=_LIMITE_LINEA_JSONL) for e in errors[:_MAX_LINEAS]
+            )
+            more = sufijo_mas(len(errors) - _MAX_LINEAS, "línea")
+            return Loaded(rel, True, items, shown + more)
+
+        return self._memo("jsonl_models", rel, _load)
+
+    def decision(self, gate: str) -> Loaded[Any]:
+        """``<gate>/decision.yml`` validado: ``HumanDecision`` o, sin ``run.json``
+        (corrida anterior a la Ola 1), ``LegacyDecision``."""
         rel = f"{gate}/decision.yml"
-        return self._memo("decision", rel, lambda: validate(self.yaml(rel), _DECISION_ADAPTER))
+        adapter = _DECISION_ADAPTER if self.exists("run.json") else _LEGACY_DECISION_ADAPTER
+        return self._memo("decision", rel, lambda: validate(self.yaml(rel), adapter))
 
     def run_info(self) -> Loaded[RunInfo]:
         """``run.json`` validado (ausente en corridas anteriores a la Ola 1)."""
@@ -621,10 +763,27 @@ class AuditContext:
         return self._sections[key]
 
     @cached_property
-    def llm_calls(self) -> list[dict[str, Any]]:
-        """Las llamadas del manifiesto que son mapas (las demás las marca ``schemas``)."""
+    def manifest_llm_calls(self) -> list[dict[str, Any]]:
+        """Las llamadas del manifiesto que son mapas (las demás las marca ``schemas``).
+
+        Solo las comprueba ``manifest``, que audita lo que el manifiesto dice de sí mismo
+        (§9.3 fila 1); el resto de checks usa :attr:`llm_calls`.
+        """
         calls = (self.manifest_dict or {}).get("llm_calls")
         return [c for c in calls if isinstance(c, dict)] if isinstance(calls, list) else []
+
+    @cached_property
+    def llm_calls(self) -> list[dict[str, Any]]:
+        """Las llamadas IA de la corrida, como mapas.
+
+        Las de ``llm_calls.jsonl`` si existe (la fuente, escrita en cada llamada, D3); si no,
+        las del manifiesto (una corrida anterior a la Ola 1). Las que no son mapas las marca
+        ``schemas``. Que el manifiesto las copie bien lo comprueba ``arithmetic``.
+        """
+        raw = self.art.jsonl("llm_calls.jsonl")
+        if raw.present and raw.value is not None:
+            return [c for _, c in raw.value if isinstance(c, dict)]
+        return self.manifest_llm_calls
 
     @cached_property
     def ledger(self) -> LedgerView:
@@ -672,7 +831,48 @@ class AuditContext:
             return RunState("unknown", frozenset(STAGES))
 
     @cached_property
+    def snapshot_protocol(self) -> Loaded[Any]:
+        """``00_protocol/protocol.yml`` validado como ``ReviewProtocol``.
+
+        Como ``load_protocol`` al reanudar (spec §2, hallazgo 4), el ``slug`` que el protocolo
+        no declare sale de ``run.json``, no del nombre de la carpeta. Sin ``run.json`` válido,
+        del manifiesto (solo si es texto: el manifiesto es entrada no confiable).
+        """
+        raw = self.art.yaml(f"{SNAPSHOT_DIR}/protocol.yml")
+        if not raw.ok:
+            return raw
+        data = dict(raw.value)
+        slug = self.run_info.slug if self.run_info else (self.manifest_dict or {}).get("slug")
+        if isinstance(slug, str) and slug:
+            data.setdefault("slug", slug)
+        return validate(Loaded(raw.path, True, data), MANIFEST_ADAPTERS["protocol"])
+
+    @cached_property
+    def protocol_raw(self) -> dict[str, Any] | None:
+        """El protocolo como mapa, sin validar: la instantánea si se lee; si no, el manifiesto.
+
+        Lo usan los checks que, con el protocolo inválido, aún pueden decir algo del valor
+        crudo (``thresholds`` lee un ``.nan`` que ``ReviewProtocol`` rechaza, D7) o que solo
+        miran una sección (``search_window``, ``registration``). ``None`` si no hay mapa en
+        ninguna de las dos fuentes.
+        """
+        snapshot = self.art.yaml(f"{SNAPSHOT_DIR}/protocol.yml")
+        if snapshot.ok:
+            return snapshot.value
+        raw = (self.manifest_dict or {}).get("protocol")
+        return raw if isinstance(raw, dict) else None
+
+    @cached_property
     def protocol(self) -> ReviewProtocol | None:
-        """El protocolo tal como lo registró el manifiesto (``None`` si no valida)."""
-        loaded = self.manifest_section("protocol")
+        """El protocolo de la corrida (``None`` si no valida).
+
+        ``00_protocol/`` es la única fuente desde la Ola 1 (D3): editar el protocolo original
+        a mitad de corrida no la cambia. Sin instantánea (una corrida anterior a la Ola 1), el
+        que registró el manifiesto. Con una instantánea que no valida no se vuelve al
+        manifiesto: ``protocol_snapshot`` ya da el FAIL y leer otra fuente lo disimularía.
+        """
+        if self.art.exists(f"{SNAPSHOT_DIR}/protocol.yml"):
+            loaded = self.snapshot_protocol
+        else:
+            loaded = self.manifest_section("protocol")
         return loaded.value if loaded.ok else None

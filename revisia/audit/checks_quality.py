@@ -48,7 +48,7 @@ _TOLERANCIA_RANGO = 1e-9  # holgura del redondeo de coma flotante en los límite
 _LIMITE_ID = 60  # caracteres de un id de cita, una clave o un actor
 _BANDERA = re.compile(r"flag:([0-9]{1,9})", re.ASCII)  # objetivo de una `flag_review`
 # Sufijo de `thresholds` cuando el protocolo no valida y los umbrales salen del mapa crudo.
-_NOTA_CRUDOS = " (leídos del manifiesto en crudo: el protocolo no valida, ver `schemas`)"
+_NOTA_CRUDOS = " (leídos del protocolo en crudo: no valida, ver `protocol_snapshot` y `schemas`)"
 
 
 def _num(value: object, spec: str = ".3f") -> str:
@@ -179,7 +179,7 @@ def _ic(k: int, n: int) -> str:
 def _como_umbral(value: object) -> float | None:
     """Un umbral del protocolo como número finito; ``None`` si no lo es.
 
-    Leído del manifiesto en crudo (:func:`_umbrales`), un umbral puede ser ``nan``, ``inf``,
+    Leído en crudo (:func:`_umbrales`), un umbral puede ser ``nan``, ``inf``,
     texto, un booleano o un entero que no cabe en un float: ninguno se puede medir y ninguno
     puede lanzar (``math.isfinite`` de un entero enorme es un ``OverflowError``).
     """
@@ -271,18 +271,20 @@ def _kappa(m: ScreeningMetrics | None, why: str, declarado: object) -> tuple[str
 
 
 def _umbrales(ctx: AuditContext) -> tuple[dict[Any, Any], bool] | None:
-    """``thresholds`` del protocolo registrado y si se leyeron del manifiesto en crudo.
+    """``thresholds`` del protocolo de la corrida y si se leyeron en crudo.
 
     Con el protocolo válido, los validados. Desde PR-D ``ReviewProtocol`` rechaza al cargar
-    un umbral no finito o fuera de rango, así que un manifiesto con ``recall_target: .nan``
-    deja inválido el protocolo entero (el FAIL lo da ``schemas``) y el umbral pasaba a N/A:
-    entonces se lee el mapa ``thresholds`` crudo, para que cada umbral siga recibiendo su WARN
-    «no medible» (D7). ``None`` si tampoco hay eso: sin manifiesto legible, sin ``protocol``
-    o sin un mapa ``thresholds`` en él (la causa la da otra fila).
+    un umbral no finito o fuera de rango, así que un protocolo con ``recall_target: .nan``
+    queda inválido entero (el FAIL lo dan ``protocol_snapshot`` y ``schemas``) y el umbral
+    pasaba a N/A: entonces se lee el mapa ``thresholds`` crudo, para que cada umbral siga
+    recibiendo su WARN «no medible» (D7). El crudo es el de la instantánea ``00_protocol/``
+    (``AuditContext.protocol_raw``; el del manifiesto en corridas anteriores a la Ola 1 o con
+    la instantánea ilegible). ``None`` si tampoco hay eso: sin protocolo legible en ninguna
+    fuente o sin un mapa ``thresholds`` en él (la causa la da otra fila).
     """
     if ctx.protocol is not None:
         return dict(ctx.protocol.thresholds), False
-    protocolo = (ctx.manifest_dict or {}).get("protocol")
+    protocolo = ctx.protocol_raw
     crudos = protocolo.get("thresholds") if isinstance(protocolo, dict) else None
     return (crudos, True) if isinstance(crudos, dict) else None
 

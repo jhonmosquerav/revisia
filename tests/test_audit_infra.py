@@ -555,7 +555,7 @@ def test_na_protocolo_no_apunta_a_una_fila_concreta() -> None:
     # La causa de un protocolo ilegible puede estar en `manifest`, en `schemas` o en cualquier
     # otra fila que lo lea: el N/A manda a mirar las filas en FAIL, no a dos filas fijas.
     assert NA_PROTOCOLO == (
-        "no aplica: sin protocolo legible en el manifiesto (ver las filas en FAIL)."
+        "no aplica: sin protocolo legible (ni instantánea ni manifiesto; ver las filas en FAIL)."
     )
 
 

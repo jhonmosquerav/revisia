@@ -168,7 +168,7 @@ def test_thresholds_de_un_protocolo_que_no_valida_se_leen_en_crudo(corrida) -> N
     thresholds = fila(report, "thresholds")
     assert thresholds.status == "WARN"
     assert "recall_target 1.5 no medible (debe ser un número en (0, 1])" in thresholds.detail
-    assert "leídos del manifiesto en crudo: el protocolo no valida" in thresholds.detail
+    assert "leídos del protocolo en crudo: no valida" in thresholds.detail
     assert fila(report, "schemas").status == "FAIL"
     assert not report.publishable
 
@@ -187,7 +187,7 @@ def test_thresholds_crudos_hostiles_advierten_sin_lanzar(corrida, umbrales: dict
     thresholds = fila(auditar(corrida), "thresholds")
     assert thresholds.status == "WARN"
     assert "error interno" not in thresholds.detail
-    assert "leídos del manifiesto en crudo" in thresholds.detail
+    assert "leídos del protocolo en crudo" in thresholds.detail
     assert len(thresholds.detail) < 400
 
 
@@ -652,9 +652,23 @@ def test_search_window_con_una_fecha_yaml_sin_comillas_se_muestra_en_iso(corrida
 # ── Sin protocolo legible: thresholds, search_window y registration no aplican ──
 
 
-def test_sin_manifiesto_legible_los_tres_checks_del_protocolo_no_aplican(corrida) -> None:
-    # `thresholds` daba WARN y los otros dos N/A ante la misma causa. El FAIL lo da `manifest`.
+def test_sin_manifiesto_legible_los_tres_checks_del_protocolo_leen_la_instantanea(corrida) -> None:
+    # Desde la Ola 1 el protocolo sale de `00_protocol/`, no del manifiesto (D3): sin manifiesto
+    # legible los tres checks siguen teniendo de dónde leer. El FAIL lo da `manifest`.
     (corrida / "manifest.yml").write_text("{\n", encoding="utf-8")
+    report = auditar(corrida)
+    for check_id in ("thresholds", "search_window", "registration"):
+        assert fila(report, check_id).status != "N/A", check_id
+    assert fila(report, "registration").status == "PASS"
+    assert fila(report, "manifest").status == "FAIL"
+    assert not report.publishable
+
+
+def test_sin_manifiesto_ni_instantanea_los_tres_checks_del_protocolo_no_aplican(corrida) -> None:
+    # `thresholds` daba WARN y los otros dos N/A ante la misma causa. El FAIL lo da `manifest`
+    # (y `protocol_snapshot`, que echa en falta el protocolo congelado).
+    (corrida / "manifest.yml").write_text("{\n", encoding="utf-8")
+    (corrida / "00_protocol" / "protocol.yml").unlink()
     report = auditar(corrida)
     for check_id in ("thresholds", "search_window", "registration"):
         assert fila(report, check_id).status == "N/A", check_id
@@ -674,6 +688,7 @@ def test_thresholds_sin_protocolo_en_un_manifiesto_legible_no_aplica_y_otra_fila
     corrida, editar, fila_que_falla: str
 ) -> None:
     edit_yaml(corrida / "manifest.yml", editar)
+    (corrida / "00_protocol" / "protocol.yml").unlink()  # la instantánea también lo perdió
     report = auditar(corrida)
     thresholds = fila(report, "thresholds")
     assert thresholds.status == "N/A"
@@ -682,9 +697,35 @@ def test_thresholds_sin_protocolo_en_un_manifiesto_legible_no_aplica_y_otra_fila
     assert not report.publishable
 
 
-def test_thresholds_de_una_corrida_en_pausa_sin_manifiesto_no_aplica(detener_corrida) -> None:
+@pytest.mark.parametrize(
+    "editar",
+    [
+        pytest.param(lambda m: m.update(protocol={"slug": 5}), id="protocolo-invalido"),
+        pytest.param(lambda m: m.pop("protocol"), id="protocolo-ausente"),
+    ],
+)
+def test_thresholds_lee_el_protocolo_de_la_instantanea_aunque_el_manifiesto_lo_pierda(
+    corrida, editar
+) -> None:
+    # El manifiesto ya no es la fuente del protocolo: dañarlo no apaga `thresholds`, y la
+    # discrepancia con la instantánea la marca `protocol_snapshot`.
+    edit_yaml(corrida / "manifest.yml", editar)
+    report = auditar(corrida)
+    thresholds = fila(report, "thresholds")
+    assert thresholds.status != "N/A"
+    assert "recall" in thresholds.detail
+    assert fila(report, "protocol_snapshot").status == "FAIL"
+    assert not report.publishable
+
+
+def test_thresholds_de_una_corrida_en_pausa_sin_manifiesto_ni_instantanea_no_aplica(
+    detener_corrida,
+) -> None:
     # Pausada en `extraccion` el manifiesto aún no existe: el FAIL de la pausa lo da `final_gate`.
-    report = auditar(detener_corrida(aprobados=("screening_ta", "screening_ft")))
+    # Sin la instantánea tampoco hay protocolo que leer.
+    corrida = detener_corrida(aprobados=("screening_ta", "screening_ft"))
+    (corrida / "00_protocol" / "protocol.yml").unlink()
+    report = auditar(corrida)
     assert fila(report, "thresholds").status == "N/A"
     assert fila(report, "thresholds").detail == NA_PROTOCOLO
     assert fila(report, "final_gate").status == "FAIL"

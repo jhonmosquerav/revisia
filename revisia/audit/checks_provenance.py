@@ -1,22 +1,32 @@
-"""Checks de procedencia: ``manifest``, ``provenance``, ``schemas``, ``prompts``.
+"""Checks de procedencia: ``manifest``, ``provenance``, ``schemas``, ``prompts`` y
+``protocol_snapshot``.
 
 ``schemas`` valida cada artefacto presente contra el modelo que lo produce:
 la reconstrucción de la auditoría 2026-09-03 (C3) traía un ``metrics.json``
 sin matriz de confusión y un ``verification.json`` sin ``stage`` que ningún
 código del motor puede escribir, y el auditor anterior los daba por buenos
-porque solo miraba que existieran.
+porque solo miraba que existieran. Desde la Ola 1 valida también los
+artefactos nuevos, cada línea de ``llm_calls.jsonl`` y de los diarios (con su
+número de línea) y los bloques nuevos del manifiesto.
 
-El manifiesto es entrada no confiable: ningún valor suyo se interpola en un
-detalle sin pasar por ``short_text``/``short_repr`` (bomba de alias; revisiones
-de la Tarea 4).
+``protocol_snapshot`` comprueba que la corrida usó el protocolo que dice haber
+usado (``00_protocol/`` frente a las huellas de ``run.json`` y al protocolo del
+manifiesto). Sin ``run.json`` la corrida es anterior a la Ola 1 y no es
+publicable (D13).
+
+El manifiesto, ``run.json`` y la instantánea son entrada no confiable: ningún
+valor suyo se interpola en un detalle sin pasar por ``short_text``/``short_repr``
+(bomba de alias; revisiones de la Tarea 4).
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from revisia.audit.artifacts import (
     ARTIFACT_ADAPTERS,
+    JSONL_ADAPTERS,
     MANIFEST_ADAPTERS,
     NA_MANIFIESTO,
     AuditContext,
@@ -27,12 +37,21 @@ from revisia.audit.artifacts import (
 )
 from revisia.audit.model import Verdict
 from revisia.orchestration.run_context import PROVENANCE_PIPELINE
+from revisia.orchestration.snapshot import SNAPSHOT_DIR, protocol_fingerprint
 from revisia.schemas.artifacts import GATED_STAGES
+
+# D13: una corrida sin run.json no es publicable (spec 2026-10-04 §3).
+LEGACY_RUN = (
+    "anterior a la Ola 1 (motor < 0.8): sin instantánea ni decisiones por registro; "
+    "regenera la corrida con el motor actual"
+)
 
 _MAX_ERRORES = 5
 _MAX_MODELOS = 10
 _LIMITE_MODELO = 60  # caracteres por modelo listado: diez de 120 ya pasaban de 1 000
 _LIMITE_ERROR = 300  # caracteres por artefacto con error: un `loc` hostil no llena el detalle
+_MAX_FICHEROS = 5  # ficheros de `00_protocol/` que se listan por motivo; el resto se cuenta
+_LIMITE_RUTA = 60  # caracteres de la ruta de un fichero de `00_protocol/` (viene de run.json)
 
 
 def _nombres(models: Any) -> str:
@@ -56,8 +75,9 @@ def check_manifest(ctx: AuditContext) -> Verdict:
     if not loaded.ok:
         # El motivo (YAML inválido, demasiado anidado, raíz de otro tipo…) va en la fila.
         return "FAIL", f"manifest.yml ilegible ({loaded.error}): la corrida no es reproducible."
-    # Las del propio manifiesto (desde la Ola 1, copia de llm_calls.jsonl).
-    calls = ctx.llm_calls
+    # Las del propio manifiesto (desde la Ola 1, copia de llm_calls.jsonl): este check audita lo
+    # que el manifiesto dice de sí mismo, y `arithmetic` que la copia coincida con el original.
+    calls = ctx.manifest_llm_calls
     if not calls:
         return "WARN", "manifest.yml sin llamadas IA registradas: no hay procedencia que auditar."
     fakes = sum(1 for c in calls if c.get("provider") == "fake")
@@ -105,6 +125,7 @@ def _validated(ctx: AuditContext) -> list[Loaded[Any]]:
         results.append(ctx.manifest)  # ausente (se descarta) o ilegible (el error se ve)
     results.append(ctx.art.run_info())
     results += [ctx.art.artifact(rel) for rel in ARTIFACT_ADAPTERS]
+    results += [ctx.art.jsonl_models(rel) for rel in JSONL_ADAPTERS]
     for gate in GATED_STAGES:
         results.append(ctx.art.yaml(f"{gate}/review_request.yml"))
         results.append(ctx.art.decision(gate))
@@ -124,6 +145,102 @@ def check_schemas(ctx: AuditContext) -> Verdict:
             f"{len(errors)} artefacto(s) no cargan o no validan su modelo: {shown}{more}."
         )
     return "PASS", f"{len(validated)} artefactos validan su modelo."
+
+
+def _ruta(rel: str) -> str:
+    """Un fichero de ``00_protocol/`` para un detalle (la ruta viene de ``run.json``: acotada)."""
+    return f"`{SNAPSHOT_DIR}/{short_text(rel, limit=_LIMITE_RUTA)}`"
+
+
+def _fuera_de_la_lista(snapshot: Path, registered: dict[str, str]) -> list[str] | str:
+    """Ficheros de ``00_protocol/`` que ``run.json`` no registra (o el tipo del error si falla)."""
+    try:
+        if not snapshot.is_dir():
+            return []
+        files = sorted(
+            p.relative_to(snapshot).as_posix() for p in snapshot.rglob("*") if p.is_file()
+        )
+    except Exception as exc:  # fail-closed: no listar la carpeta no es no tener extras
+        return type(exc).__name__
+    return [f for f in files if f not in registered]
+
+
+def check_protocol_snapshot(ctx: AuditContext) -> Verdict:
+    """PRISMA 24b / trAIce M1: la corrida usó el protocolo que dice haber usado.
+
+    Compara ``00_protocol/`` con las huellas de ``run.json`` (texto con CRLF convertido a LF,
+    como ``snapshot.protocol_fingerprint``) y la instantánea con el protocolo que registró el
+    manifiesto. Sin ``run.json`` la corrida es anterior a la Ola 1 y no es publicable (D13),
+    aunque el resto se audite como diagnóstico.
+
+    ``run.json``, la instantánea y el manifiesto son entrada no confiable: las rutas y los
+    errores que entran en el detalle van acotados, las listas se cortan y un fichero ilegible
+    de ``00_protocol/`` es un FAIL, no una excepción.
+    """
+    loaded = ctx.art.run_info()
+    if not loaded.present:
+        return "FAIL", f"{LEGACY_RUN}."
+    if not loaded.ok:
+        error = short_text(loaded.error, limit=_LIMITE_ERROR)
+        return "FAIL", f"run.json ilegible o inválido ({error}) (ver `schemas`)."
+    registered = loaded.value.protocol_sha256
+    snapshot = ctx.run_dir / SNAPSHOT_DIR
+    try:
+        actual = protocol_fingerprint(snapshot) if snapshot.is_dir() else {}
+    except Exception as exc:  # un fichero que no es texto UTF-8 o no se puede leer
+        return "FAIL", (
+            f"no se pudo calcular la huella de {SNAPSHOT_DIR}/ ({type(exc).__name__}): un "
+            "fichero no es texto UTF-8 legible."
+        )
+    ausentes = [rel for rel in sorted(registered) if rel not in actual]
+    distintos = [
+        rel for rel in sorted(registered) if rel in actual and actual[rel] != registered[rel]
+    ]
+    fails = [f"{_ruta(rel)} ausente" for rel in ausentes[:_MAX_FICHEROS]]
+    fails += [f"{_ruta(rel)}: hash distinto del de run.json" for rel in distintos[:_MAX_FICHEROS]]
+    resto = max(len(ausentes) - _MAX_FICHEROS, 0) + max(len(distintos) - _MAX_FICHEROS, 0)
+    if "protocol.yml" not in registered:
+        fails.append("run.json no registra la huella de `protocol.yml`")
+    snap = ctx.snapshot_protocol
+    # Una corrida en pausa aún no tiene manifiesto (spec §4.2): no hay con qué contrastar la
+    # instantánea y basta con que valide. Pero un manifiesto legible sin `protocol` no sale del
+    # motor, que lo escribe siempre: se rechaza en vez de dejarlo sin contrastar.
+    manifest = ctx.manifest_dict
+    if not snap.present:
+        if "protocol.yml" not in registered:  # si lo registra, ya consta como ausente
+            fails.append(f"{_ruta('protocol.yml')} ausente")
+    elif not snap.ok:
+        error = short_text(snap.error, limit=_LIMITE_ERROR)
+        fails.append(f"{_ruta('protocol.yml')} no valida ({error})")
+    elif manifest is not None:
+        if "protocol" not in manifest:
+            fails.append("el manifiesto no trae `protocol` con el que contrastar la instantánea")
+        elif snap.value.model_dump(mode="json") != manifest["protocol"]:
+            fails.append(
+                f"la instantánea {_ruta('protocol.yml')} no coincide con `manifest.protocol`"
+            )
+    if fails:
+        return "FAIL", "; ".join(fails) + sufijo_mas(resto, "fichero") + "."
+    extras = _fuera_de_la_lista(snapshot, registered)
+    if isinstance(extras, str):
+        return "WARN", f"no se pudo listar {SNAPSHOT_DIR}/ para buscar ficheros extra ({extras})."
+    if extras:
+        listados = ", ".join(
+            f"`{short_text(f, limit=_LIMITE_RUTA)}`" for f in extras[:_MAX_FICHEROS]
+        )
+        return "WARN", (
+            f"ficheros en {SNAPSHOT_DIR}/ fuera de la lista de hashes de run.json: {listados}"
+            f"{sufijo_mas(len(extras) - _MAX_FICHEROS)}."
+        )
+    contraste = (
+        "coincide con el protocolo del manifiesto"
+        if manifest is not None
+        else "valida como protocolo (sin manifiesto legible con el que compararla)"
+    )
+    return "PASS", (
+        f"{len(registered)} ficheros de {SNAPSHOT_DIR}/ con el hash de run.json; la instantánea "
+        f"{contraste}."
+    )
 
 
 def check_prompts(ctx: AuditContext) -> Verdict:

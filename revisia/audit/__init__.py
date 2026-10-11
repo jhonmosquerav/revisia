@@ -70,6 +70,12 @@ CHECKS: tuple[CheckSpec, ...] = (
     CheckSpec("manifest", "PRISMA 27 / trAIce M2", "reporte", checks_provenance.check_manifest),
     CheckSpec("provenance", "PRISMA 27 / trAIce M2", "reporte", checks_provenance.check_provenance),
     CheckSpec("schemas", "PRISMA 27 / trAIce M5", None, checks_provenance.check_schemas),
+    CheckSpec(
+        "protocol_snapshot",
+        "PRISMA 24b / trAIce M1",
+        "protocolo",
+        checks_provenance.check_protocol_snapshot,
+    ),
     CheckSpec("prompts", "trAIce M6", "reporte", checks_provenance.check_prompts),
     CheckSpec("timing", "PRISMA 27 / trAIce M2", None, checks_timing.check_timing),
     CheckSpec("ledger", "trAIce M8 / PRISMA 8", None, checks_hitl.check_ledger),

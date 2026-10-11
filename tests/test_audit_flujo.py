@@ -443,11 +443,12 @@ def test_arithmetic_corrida_real_cuenta_sus_relaciones_verificadas(corrida) -> N
     # La corrida de la Ola 1 tiene run.json: no lleva la relación v0.7 `fulltext_rescued == 0`
     # (49 en la fase 1, con una corrida sin run.json). Las relaciones que ahora son
     # incondicionales (Σ por base, desglose humano/IA, protocolo, doble extracción) no suman
-    # nada a una corrida sana: en ella ya se verificaban todas.
+    # nada a una corrida sana: en ella ya se verificaban todas. Con `llm_calls.jsonl` suma una:
+    # la copia de las llamadas en el manifiesto es igual al original (§4.3).
     relaciones = _relaciones(corrida)
     assert [n for n, (ok, _) in relaciones.items() if ok is not True] == []
-    assert len(relaciones) == 48
-    assert "48 relaciones verificadas" in fila(auditar(corrida), "arithmetic").detail
+    assert len(relaciones) == 49
+    assert "49 relaciones verificadas" in fila(auditar(corrida), "arithmetic").detail
 
 
 def test_arithmetic_manifiesto_sin_counts_falla(corrida) -> None:
@@ -1009,4 +1010,5 @@ def test_deliverable_fichero_binario_falla_sin_reventar(corrida) -> None:
 def test_deliverable_completo_pasa(corrida) -> None:
     deliverable = fila(auditar(corrida), "deliverable")
     assert deliverable.status == "PASS"
-    assert "12 artefactos" in deliverable.detail  # los 11 de siempre + meta_analisis.md
+    # Los 11 de siempre + meta_analisis.md + la lista 16b de la Ola 1.
+    assert "13 artefactos" in deliverable.detail

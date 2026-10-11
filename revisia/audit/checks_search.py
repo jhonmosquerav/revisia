@@ -10,11 +10,14 @@ _LIMITE_REGISTRO = 40  # caracteres de una clave o de un valor de `registration`
 
 
 def _protocol_section(ctx: AuditContext, key: str) -> dict | None:
-    if ctx.manifest_dict is None:
+    """Sección del protocolo: de la instantánea ``00_protocol/`` si existe (D3).
+
+    Sin instantánea (una corrida anterior a la Ola 1) sale del manifiesto. Con la
+    instantánea ilegible el protocolo crudo es el del manifiesto, como en ``thresholds``.
+    """
+    protocol = ctx.protocol_raw
+    if protocol is None:
         return None
-    protocol = ctx.manifest_dict.get("protocol")
-    if not isinstance(protocol, dict):
-        return {}
     section = protocol.get(key)
     return section if isinstance(section, dict) else {}
 

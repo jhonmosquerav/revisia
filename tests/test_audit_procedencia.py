@@ -20,7 +20,7 @@ from audit_fixtures import (
 )
 
 from revisia.audit import CHECKS
-from revisia.audit.artifacts import ARTIFACT_ADAPTERS
+from revisia.audit.artifacts import ARTIFACT_ADAPTERS, JSONL_ADAPTERS
 from revisia.config import STAGES
 
 ARTEFACTOS_JSON = (
@@ -33,15 +33,36 @@ ARTEFACTOS_JSON = (
     "06_synthesis/verification.json",
     "07_rob/assessments.json",
     "08_meta/meta_analysis.json",
+    "01_search/records.json",
+    "01_search/log.json",
+    "02_dedup/records.json",
+    "02_dedup/dedup.json",
+    "03_screening/gold.json",
+    "04_fulltext/retrieval.json",
+    "04_fulltext/excluded.json",
     # El motor lo escribe solo si alguna base no respondió (`pipeline.py`): no está en la corrida
-    # real, así que los tests lo crean (`01_search/` tampoco existe).
+    # real, así que los tests lo crean.
     "01_search/failures.json",
+)
+
+# Los `.jsonl` que valida el auditor línea a línea: `llm_calls.jsonl` y un diario por etapa.
+ARTEFACTOS_JSONL = (
+    "llm_calls.jsonl",
+    "03_screening/journal.jsonl",
+    "04_fulltext/retrieval.jsonl",
+    "04_fulltext/journal.jsonl",
+    "05_extraction/journal.jsonl",
+    "05_extraction/journal_2.jsonl",
+    "06_synthesis/journal.jsonl",
+    "06_synthesis/verification.jsonl",
+    "07_rob/journal.jsonl",
 )
 
 
 def test_artefactos_json_de_los_tests_son_los_del_auditor() -> None:
     # Si el auditor valida un artefacto nuevo y esta lista no lo sabe, nada lo prueba.
     assert set(ARTEFACTOS_JSON) == set(ARTIFACT_ADAPTERS)
+    assert set(ARTEFACTOS_JSONL) == set(JSONL_ADAPTERS)
 
 
 # ── manifest ───────────────────────────────────────────────────────────
@@ -355,9 +376,23 @@ def test_schemas_review_request_ilegible_falla(corrida, contenido: str, motivo: 
 def test_ledger_sin_protocolo_legible_pasa_y_avisa_de_que_no_verifica_la_autonomia(
     detener_corrida,
 ) -> None:
-    # Una corrida en pausa todavía no escribió el manifiesto: no hay protocolo con el que
-    # comparar la autonomía de cada entrada, y el detalle lo dice en vez de afirmar que cuadra.
+    # Una corrida en pausa todavía no escribió el manifiesto y, sin la instantánea del protocolo,
+    # no hay protocolo con el que comparar la autonomía de cada entrada: el detalle lo dice en
+    # vez de afirmar que cuadra.
     corrida = detener_corrida(aprobados=("screening_ta", "screening_ft"))
+    (corrida / "00_protocol" / "protocol.yml").unlink()
     ledger = fila(auditar(corrida), "ledger")
     assert ledger.status == "PASS"
     assert "(autonomía no verificable: sin protocolo legible)" in ledger.detail
+
+
+def test_ledger_de_una_corrida_en_pausa_verifica_la_autonomia_con_la_instantanea(
+    detener_corrida,
+) -> None:
+    # Desde la Ola 1 el protocolo no espera al manifiesto: `00_protocol/` existe desde el primer
+    # instante, y la autonomía de cada entrada se contrasta con él también en una pausa.
+    corrida = detener_corrida(aprobados=("screening_ta", "screening_ft"))
+    assert not (corrida / "manifest.yml").exists()
+    ledger = fila(auditar(corrida), "ledger")
+    assert ledger.status == "PASS"
+    assert "autonomía no verificable" not in ledger.detail

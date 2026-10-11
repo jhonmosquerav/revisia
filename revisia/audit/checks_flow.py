@@ -46,12 +46,13 @@ from typing import Any
 
 from revisia.audit.artifacts import NA_MANIFIESTO, AuditContext, short_repr, short_text
 from revisia.audit.model import Verdict
-from revisia.config import ReviewProtocol
+from revisia.config import STAGES, ReviewProtocol
 from revisia.exclusions import compute_exclusion_breakdown
 from revisia.exports import PrismaCounts
 from revisia.extraction_agreement import select_double_extraction_subset
 from revisia.llm.ensemble import recall_biased_label
 from revisia.metrics import kappa_from_matrix, mcc, wmcc
+from revisia.schemas.artifacts import TRANSIENT_FULLTEXT_REASONS
 from revisia.schemas.records import SearchRecord
 from revisia.schemas.screening import ScreeningDecision
 
@@ -62,6 +63,7 @@ EXTRACTIONS = "05_extraction/extractions.json"
 ASSESSMENTS = "07_rob/assessments.json"
 AGREEMENT = "05_extraction/agreement.json"
 EXCLUSIONS = "03_screening/exclusions.json"
+RETRIEVAL = "04_fulltext/retrieval.json"
 
 _MAX = 6  # relaciones, ficheros o artefactos que se listan en un detalle
 _MAX_IDS = 3  # ids de registro que se listan dentro de una relación
@@ -80,6 +82,19 @@ STAGE_ARTIFACTS: dict[str, tuple[str, ...]] = {
     "sintesis": ("06_synthesis/verification.json",),
     "reporte": ("manifest.yml",),
 }
+# Artefactos de la Ola 1 (spec §4.2): solo se exigen con run.json. El diario de la recuperación
+# (`04_fulltext/retrieval.jsonl`) no está aquí sino en `_journals_ola1`: el motor no escribe en él
+# los fallos transitorios, así que una corrida legítima cuyas recuperaciones fallaron todas por la
+# red no lo tiene.
+STAGE_ARTIFACTS_OLA1: dict[str, tuple[str, ...]] = {
+    "protocolo": ("run.json", "00_protocol/protocol.yml"),
+    "busqueda": ("01_search/records.json", "01_search/log.json"),
+    "dedup": ("02_dedup/records.json", "02_dedup/dedup.json"),
+    "screening_ta": ("03_screening/journal.jsonl", "llm_calls.jsonl"),
+    "screening_ft": (RETRIEVAL, "04_fulltext/excluded.json"),
+    "sintesis": ("06_synthesis/journal.jsonl", "06_synthesis/verification.jsonl"),
+}
+RETRIEVAL_JOURNAL = "04_fulltext/retrieval.jsonl"
 # Artefactos que existen si el manifiesto registra su copia.
 CONDITIONAL_ARTIFACTS: dict[str, tuple[str, str]] = {
     "screening_metrics": ("screening_ta", "03_screening/metrics.json"),
@@ -212,6 +227,43 @@ def _requiere_doble_extraccion(ctx: AuditContext) -> bool:
     return ids is None or bool(ids)
 
 
+def _recuperacion_con_diario(ctx: AuditContext) -> bool:
+    """La recuperación de texto completo debe haber dejado diario.
+
+    El motor escribe en ``04_fulltext/retrieval.jsonl`` los resultados definitivos (un texto
+    recuperado o un fallo permanente) y no los transitorios (``TRANSIENT_FULLTEXT_REASONS``,
+    que se reintentan al reanudar). Sin ningún resultado definitivo no hay diario. Si
+    ``retrieval.json`` no se lee no se puede saber, y se exige (fail-closed).
+    """
+    retrieval = ctx.art.artifact(RETRIEVAL)
+    if not retrieval.ok:
+        return True
+    return any(row.reason not in TRANSIENT_FULLTEXT_REASONS for row in retrieval.value)
+
+
+def _journals_ola1(ctx: AuditContext) -> list[tuple[str, str]]:
+    """Diarios que existen si su etapa tuvo trabajo: la recuperación con algún resultado
+    definitivo, FT con algún recuperado, extracción y RoB con algún incluido, 2.º extractor con
+    doble extracción."""
+    required: list[tuple[str, str]] = []
+    reached = ctx.state.reached
+    ft = ctx.art.artifact(FT)
+    if "screening_ft" in reached:
+        if _recuperacion_con_diario(ctx):
+            required.append(("screening_ft", RETRIEVAL_JOURNAL))
+        if ft.ok and any(d.votes for d in ft.value):
+            required.append(("screening_ft", "04_fulltext/journal.jsonl"))
+    extractions = ctx.art.artifact(EXTRACTIONS)
+    if extractions.ok and extractions.value:
+        if "extraccion" in reached:
+            required.append(("extraccion", "05_extraction/journal.jsonl"))
+        if "rob" in reached:
+            required.append(("rob", "07_rob/journal.jsonl"))
+    if "extraccion" in reached and ctx.art.exists(AGREEMENT):
+        required.append(("extraccion", "05_extraction/journal_2.jsonl"))
+    return required
+
+
 def check_stage_artifacts(ctx: AuditContext) -> Verdict:
     """PRISMA 16/27: cada etapa alcanzada dejó sus artefactos (§4.2)."""
     required: list[tuple[str, str]] = []
@@ -227,10 +279,15 @@ def check_stage_artifacts(ctx: AuditContext) -> Verdict:
     doble = ("extraccion", AGREEMENT)
     if doble[0] in ctx.state.reached and doble not in required and _requiere_doble_extraccion(ctx):
         required.append(doble)
+    if ctx.art.exists("run.json"):
+        for stage, rels in STAGE_ARTIFACTS_OLA1.items():
+            if stage in ctx.state.reached:
+                required += [(stage, rel) for rel in rels]
+        required += _journals_ola1(ctx)
     missing = [f"{stage}: {rel}" for stage, rel in required if not ctx.art.exists(rel)]
     if missing:
         return "FAIL", f"faltan artefactos de etapas alcanzadas: {_limitar(missing)}."
-    stages = sorted({stage for stage, _ in required}, key=list(STAGE_ARTIFACTS).index)
+    stages = sorted({stage for stage, _ in required}, key=STAGES.index)
     return "PASS", (
         f"{len(required)} artefactos de {len(stages)} etapas alcanzadas presentes "
         f"({', '.join(stages)})."
@@ -618,6 +675,15 @@ def _calls(ctx: AuditContext, rel: _Relations) -> None:
         manifest.get("deterministic_token_level"),
         all(c.get("deterministic") is True for c in calls) if calls else True,
     )
+    if ctx.art.exists("llm_calls.jsonl"):
+        # Los demás checks leen `llm_calls.jsonl` (la fuente) y `manifest` lee la copia del
+        # manifiesto: sin esta igualdad, editar una de las dos pasaría desapercibido. `==` y no un
+        # volcado: con un valor hostil (bomba de alias) termina cuando las formas difieren.
+        rel.check(
+            "§4.3 · manifest.llm_calls == líneas de llm_calls.jsonl",
+            bool(manifest.get("llm_calls") == calls),
+            "distintas (o en otro orden)",
+        )
     c = _seccion(ctx, rel, "counts", "§9.3 · cota inferior de llamadas")
     if c is None:
         return
@@ -814,6 +880,8 @@ def check_exclusions(ctx: AuditContext) -> Verdict:
 def check_deliverable(ctx: AuditContext) -> Verdict:
     """PRISMA 16/16b/17/18/27: entregable completo y sin ficheros vacíos."""
     required = list(DELIVERABLE_FILES)
+    if ctx.art.exists("run.json"):
+        required.append("excluidos_texto_completo.md")  # 16b (desde la Ola 1)
     if "meta_analysis" in (ctx.manifest_dict or {}) or ctx.art.exists("08_meta/meta_analysis.json"):
         required.append("meta_analisis.md")
     problems: list[str] = []
