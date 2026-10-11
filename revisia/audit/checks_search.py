@@ -10,20 +10,24 @@ El log, ``failures.json``, ``records.json`` y el protocolo son entrada no confia
 leído de ellos entra en un detalle sin pasar por ``short_text`` ni sin acotar las listas que se
 muestran, y la cadena de una base solo se lee de un fichero que existe de verdad en
 ``00_protocol/search_strings/`` (un ``db_key`` hostil con ``..`` o ``/`` no se sigue como ruta).
+El fichero se busca por su nombre normalizado (``os.path.normcase``): donde el sistema de
+ficheros no distingue mayúsculas (Windows, macOS) el motor encuentra ``OpenAlex.txt`` para la
+base ``openalex`` y el auditor también; donde sí las distingue (Linux) la búsqueda es exacta.
 """
 
 from __future__ import annotations
 
 import os
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 from revisia.agents import search_backends
 from revisia.audit.artifacts import NA_PROTOCOLO, AuditContext, short_text, sufijo_mas
+from revisia.audit.checks_timing import parse_utc
 from revisia.audit.model import Verdict
-from revisia.exports.checklist import engine_search_date
+from revisia.exports.checklist import _ran_in_engine, engine_search_date
 from revisia.orchestration.snapshot import SEARCH_STRINGS_DIR, SNAPSHOT_DIR
 from revisia.provenance.runmeta import sha256_text
-from revisia.schemas.artifacts import SearchLogEntry
+from revisia.schemas.artifacts import SearchLog, SearchLogEntry
 
 LOG = "01_search/log.json"
 FAILURES = "01_search/failures.json"
@@ -65,18 +69,31 @@ def _lista(items: list[str]) -> str:
     return shown + sufijo_mas(len(items) - _MAX)
 
 
-def _ficheros_de_cadenas(ctx: AuditContext) -> frozenset[str]:
-    """Nombres de los ficheros de ``00_protocol/search_strings/``: los únicos que se leen.
+def _ficheros_de_cadenas(ctx: AuditContext) -> dict[str, str]:
+    """Ficheros de ``00_protocol/search_strings/``, ``{nombre normalizado: nombre real}``.
 
-    El ``db_key`` de una entrada es del log y el log es entrada no confiable: construir con él
-    la ruta de lectura permitiría salir de la carpeta (``../``) o abrir un dispositivo de
-    Windows (``con.txt``). Una cadena solo se compara con un fichero que el directorio lista.
+    Son los únicos que se leen. El ``db_key`` de una entrada es del log y el log es entrada no
+    confiable: construir con él la ruta de lectura permitiría salir de la carpeta (``../``) o
+    abrir un dispositivo de Windows (``con.txt``). Una cadena solo se compara con un fichero que
+    el directorio lista, y se lee con el nombre real que lista, no con el del log. La clave es
+    ``os.path.normcase(nombre)``: la identidad en Linux y las minúsculas en Windows, donde
+    ``OpenAlex.txt`` y ``openalex.txt`` son el mismo fichero (y el motor lo encuentra).
     """
     try:
         with os.scandir(ctx.run_dir / _CADENAS) as entradas:
-            return frozenset(e.name for e in entradas if e.is_file())
+            return {os.path.normcase(e.name): e.name for e in entradas if e.is_file()}
     except Exception:  # fail-closed: sin carpeta legible no hay cadena con la que comparar
-        return frozenset()
+        return {}
+
+
+def _ruta_de_la_cadena(e: SearchLogEntry, cadenas: dict[str, str]) -> str | None:
+    """Ruta relativa de ``search_strings/<db_key>.txt`` si el directorio la lista; si no, ``None``.
+
+    Es siempre ``_CADENAS`` más un nombre que lista el directorio: nunca una ruta armada con el
+    ``db_key`` ni con el ``query_file`` del log.
+    """
+    real = cadenas.get(os.path.normcase(f"{e.db_key}.txt"))
+    return None if real is None else f"{_CADENAS}/{real}"
 
 
 def _bases_declaradas(ctx: AuditContext) -> list[str] | None:
@@ -96,19 +113,41 @@ def _cadena_del_fichero(
     ctx: AuditContext,
     e: SearchLogEntry,
     name: str,
-    cadenas: frozenset[str],
+    cadenas: dict[str, str],
     fails: list[str],
 ) -> None:
     """Relación 3: la cadena del log es la de ``00_protocol/search_strings/<db_key>.txt``."""
     esperado = f"{_CADENAS}/{e.db_key}.txt"
-    if e.query_file != esperado or f"{e.db_key}.txt" not in cadenas:
+    ruta = _ruta_de_la_cadena(e, cadenas)
+    # `query_file` se compara normalizado, como el nombre del fichero: donde no se distinguen
+    # mayúsculas, `OpenAlex.txt` y `openalex.txt` son la misma ruta.
+    mismo_fichero = e.query_file is not None and (
+        os.path.normcase(e.query_file) == os.path.normcase(esperado)
+    )
+    if ruta is None or not mismo_fichero:
         fails.append(f"{name}: la cadena no está en `{short_text(esperado)}`")
         return
-    text = ctx.art.text(esperado)
+    text = ctx.art.text(ruta)
     if not text.ok:
-        fails.append(f"{name}: no se pudo leer `{short_text(esperado)}`")
+        fails.append(f"{name}: no se pudo leer `{short_text(ruta)}`")
     elif text.value.strip() != e.query:
         fails.append(f"{name}: cadena distinta de `{short_text(e.query_file)}`")
+
+
+def _nota_de_la_instantanea(ctx: AuditContext, e: SearchLogEntry, cadenas: dict[str, str]) -> str:
+    """Aviso extra del fallback si la instantánea sí tiene una cadena no vacía para la base.
+
+    El motor usa la pregunta solo cuando ``search_strings/<db_key>.txt`` falta o está vacío; que
+    la instantánea la tenga con texto es una manipulación del log o un fallo del motor. Sigue
+    siendo un WARN (el spec lo manda así), pero «sin cadena propia» sería falso.
+    """
+    ruta = _ruta_de_la_cadena(e, cadenas)
+    if ruta is None:
+        return ""
+    text = ctx.art.text(ruta)
+    if text.ok and text.value.strip():
+        return " (la instantánea sí tiene una cadena no vacía para esta base)"
+    return ""
 
 
 def _revisar_entrada(
@@ -117,7 +156,7 @@ def _revisar_entrada(
     *,
     failed_dbs: set[str],
     importados: int,
-    cadenas: frozenset[str],
+    cadenas: dict[str, str],
     fails: list[str],
     warns: list[str],
 ) -> None:
@@ -142,7 +181,10 @@ def _revisar_entrada(
         warns.append(f"{name} es de importación manual y no hay registros importados")
 
     if e.query_origin == "question_fallback":
-        warns.append(f"{name}: sin cadena propia, se usó la pregunta (PRISMA-S 8)")
+        warns.append(
+            f"{name}: sin cadena propia, se usó la pregunta (PRISMA-S 8)"
+            f"{_nota_de_la_instantanea(ctx, e, cadenas)}"
+        )
     if e.status == "ok" and e.max_results is not None and e.n_returned == e.max_results:
         warns.append(f"{name}: {short_text(e.n_returned)} resultados = max_results (¿truncados?)")
 
@@ -249,9 +291,11 @@ def check_search_log(ctx: AuditContext) -> Verdict:
     if warns:
         return "WARN", f"{_limitar(warns)}."
     ok = sum(1 for e in entries if e.status == "ok")
+    n_entradas, n_registros = len(entries), len(records.value)
     return "PASS", (
-        f"{len(entries)} entradas en el log ({ok} `ok`), cada base con su cadena registrada; "
-        f"{len(records.value)} registros."
+        f"{n_entradas} {'entrada' if n_entradas == 1 else 'entradas'} en el log ({ok} `ok`), "
+        "cada base con su cadena registrada; "
+        f"{n_registros} {'registro' if n_registros == 1 else 'registros'}."
     )
 
 
@@ -269,12 +313,36 @@ def _como_fecha(value: object) -> date | None:
     return None
 
 
+def _fecha_utc(log: SearchLog) -> str | None:
+    """Fecha UTC (``AAAA-MM-DD``) de la más temprana de las búsquedas del motor, por instante.
+
+    Las mismas marcas que usa ``engine_search_date`` (las búsquedas que ejecutó el motor, o, si
+    ninguna tiene hora, el inicio del log), pero leídas como instantes: ``engine_search_date``
+    corta el texto en 10 caracteres y una marca con otra zona (``2026-10-03T20:00-12:00``) daría
+    el día local y no el UTC. ``None`` si alguna marca no se puede leer o no tiene instante UTC
+    representable: entonces vale la fecha textual de los exports.
+    """
+    marcas = [e.started_utc for e in log.entries if _ran_in_engine(e) and e.started_utc]
+    instantes: list[datetime] = []
+    for marca in marcas or [log.started_utc]:
+        instante, _ = parse_utc(marca)
+        if instante is None:
+            return None
+        instantes.append(instante)
+    try:
+        return min(instantes).astimezone(UTC).date().isoformat()
+    except (OverflowError, ValueError):  # p. ej. 0001-01-01T00:00+14:00 no existe en UTC
+        return None
+
+
 def _fecha_del_motor(ctx: AuditContext) -> tuple[str | None, str | None]:
     """``(fecha, None)`` o ``(None, motivo)``: la fecha en que el motor ejecutó la búsqueda.
 
     Es la definición de los exports (``revisia.exports.checklist.engine_search_date``: la más
     temprana de las búsquedas que ejecutó el motor, sin contar las importaciones), para que el
-    entregable y el auditor no den dos fechas distintas. Es UTC (``AAAA-MM-DD``).
+    entregable y el auditor no den dos fechas distintas. Es UTC (``AAAA-MM-DD``). Con las marcas
+    que escribe el motor (siempre ``+00:00``) las dos definiciones coinciden; con una marca en
+    otra zona el auditor da el día UTC del instante (``_fecha_utc``) y ``timing`` avisa.
     """
     log = ctx.art.artifact(LOG)
     if not log.present:
@@ -284,7 +352,7 @@ def _fecha_del_motor(ctx: AuditContext) -> tuple[str | None, str | None]:
     fecha = engine_search_date(log.value)
     if _como_fecha(fecha) is None:
         return None, f"fecha del motor ilegible (`{short_text(fecha, limit=_LIMITE_NOMBRE)}`)"
-    return fecha, None
+    return _fecha_utc(log.value) or fecha, None
 
 
 def _dias_entre(tecleada: object, motor: str) -> int | None:
@@ -325,7 +393,9 @@ def check_search_window(ctx: AuditContext) -> Verdict:
         else:
             warns.append(f"sin fecha de ejecución: ni `executed` ni fecha del motor ({motivo})")
     elif executed:
-        tecleada = executed.isoformat() if isinstance(executed, date) else executed
+        # Una fecha YAML (`date` o `datetime`) se compara por su día, no por su ISO con hora.
+        dia = _como_fecha(executed)
+        tecleada = executed if isinstance(executed, str) or dia is None else dia.isoformat()
         if tecleada != engine:
             nota = ""
             if _dias_entre(executed, engine) == 1:

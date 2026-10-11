@@ -19,7 +19,8 @@ Reglas (spec 2026-10-04 §9.3):
   mediana de separación < 5 ms; ≥ 4 marcas del ledger con ≥ 50 % sin
   fracción de segundo; límite inferior o superior no verificable (sin ``run.json`` válido ni
   ``manifest.timestamp`` con forma de corrida; sin ``manifest.created_utc`` o con el
-  manifiesto ilegible). Un límite que no se puede comprobar nunca da PASS en silencio
+  manifiesto ilegible); una marca de ``01_search/log.json`` con una zona distinta de UTC (el
+  motor escribe ``+00:00``). Un límite que no se puede comprobar nunca da PASS en silencio
   (revisión de la Tarea 6): borrar ``created_utc`` de un manifiesto editado a mano no
   relaja el límite superior.
 - Solo ``provider == "fake" and deterministic`` está exento de las
@@ -58,6 +59,7 @@ UMBRAL_SOLAPE = 0.5
 _TIMESTAMP_CORRIDA = re.compile(r"[0-9]{8}-[0-9]{6}")  # `fullmatch`; solo dígitos ASCII
 _MAX = 5
 _MAX_SOLAPES = 3
+_MAX_DESPLAZADAS = 3  # marcas del log con otra zona que se listan; el resto se cuenta
 # Modelos que `response_overlap` compara entre sí: las parejas crecen al cuadrado y una lista
 # hostil con 10⁵ modelos colgaría el auditor. El motor usa un puñado; el resto se avisa.
 _MAX_MODELOS_SOLAPE = 20
@@ -142,7 +144,9 @@ def _antes(a: datetime, b: datetime) -> bool:
     return b - a > TOLERANCIA
 
 
-def _marcas_ola1(ctx: AuditContext, fails: list[str]) -> list[tuple[str, datetime]]:
+def _marcas_ola1(
+    ctx: AuditContext, fails: list[str], warns: list[str]
+) -> list[tuple[str, datetime]]:
     """Marcas de ``run.json`` (reanudaciones, interrupciones) y del log de búsqueda.
 
     Devuelve las que se pudieron leer, para que entren en las mismas cotas (inicio de la
@@ -150,15 +154,22 @@ def _marcas_ola1(ctx: AuditContext, fails: list[str]) -> list[tuple[str, datetim
     También son imposibles un ``resumes`` que no sube y una entrada del log que termina antes
     de empezar, con la misma tolerancia de 2 s (relación 14 de §4.4). Los nombres de las bases
     vienen del log, que es entrada no confiable: siempre acotados (``_mostrar``).
+
+    El motor escribe las horas del log siempre en UTC (``+00:00``): una marca del log con otro
+    desplazamiento es posible, pero no la escribió el motor y la fecha de la búsqueda (que se
+    corta del texto en los exports) puede salir corrida un día; va a ``warns``.
     """
     marks: list[tuple[str, datetime]] = []
+    desplazadas: list[str] = []
 
-    def _marca(label: str, value: object) -> datetime | None:
+    def _marca(label: str, value: object, *, del_log: bool = False) -> datetime | None:
         parsed, error = parse_utc(value)
         if parsed is None:
             fails.append(f"{label}: {error}")
             return None
         marks.append((label, parsed))
+        if del_log and parsed.utcoffset() != timedelta(0):
+            desplazadas.append(f"{label} ({_mostrar(value)})")
         return parsed
 
     if ctx.run_info is not None:
@@ -182,10 +193,16 @@ def _marcas_ola1(ctx: AuditContext, fails: list[str]) -> list[tuple[str, datetim
             for i, e in enumerate(log.value.entries)
         ]
         for label, start, end in spans:
-            started = _marca(f"{label} started_utc", start) if start else None
-            finished = _marca(f"{label} finished_utc", end) if end else None
+            started = _marca(f"{label} started_utc", start, del_log=True) if start else None
+            finished = _marca(f"{label} finished_utc", end, del_log=True) if end else None
             if started and finished and _antes(finished, started):
                 fails.append(f"{label}: finished_utc anterior a started_utc")
+    if desplazadas:
+        warns.append(
+            f"{len(desplazadas)} marca(s) de 01_search/log.json con zona distinta de UTC (el "
+            "motor escribe +00:00): la fecha de la búsqueda puede salir corrida un día "
+            f"({_limitar(desplazadas, _MAX_DESPLAZADAS)})"
+        )
     return marks
 
 
@@ -223,7 +240,7 @@ def check_timing(ctx: AuditContext) -> Verdict:
         # Sin llamadas que leer no se cae a la copia del manifiesto: sus marcas no se comprobaron.
         warns.append(f"no se pueden comprobar las marcas de las llamadas: {LLM_CALLS_ILEGIBLE}")
 
-    marks += _marcas_ola1(ctx, fails)
+    marks += _marcas_ola1(ctx, fails, warns)
 
     lower, lower_warn, lower_fail = _limite_inferior(ctx)
     warns += [lower_warn] if lower_warn else []

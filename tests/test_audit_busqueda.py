@@ -8,10 +8,12 @@ convierte en la de una base declarada, como la dejaría ``revisia run``.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import tempfile
 import time
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -84,6 +86,22 @@ def _anadir_entrada(run, entrada: dict) -> None:
     edit_json(run / LOG, _editar)
 
 
+def _renombrar_cadena(run, nuevo: str) -> None:
+    """Cambia el nombre de la cadena congelada de OpenAlex (``openalex.txt``) a ``nuevo``."""
+    carpeta = run / "00_protocol" / "search_strings"
+    (carpeta / "openalex.txt").rename(carpeta / nuevo)
+
+
+@pytest.fixture
+def normcase_sin_mayusculas(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``os.path.normcase`` como en Windows (minúsculas), para que el test valga también en Linux.
+
+    En Windows y macOS el sistema de ficheros no distingue mayúsculas y ``normcase`` lo refleja;
+    en Linux es la identidad. Aquí se fija a minúsculas en todas partes.
+    """
+    monkeypatch.setattr(os.path, "normcase", lambda ruta: os.fspath(ruta).lower())
+
+
 # ── search_log ─────────────────────────────────────────────────────────
 
 
@@ -98,6 +116,27 @@ def test_search_log_base_con_su_cadena_pasa(corrida) -> None:
     search_log = fila(auditar(corrida), "search_log")
     assert search_log.status == "PASS"
     assert "cada base con su cadena registrada; 7 registros" in search_log.detail
+
+
+def test_search_log_con_una_sola_entrada_va_en_singular(corrida) -> None:
+    _log_de_bases(corrida)
+    search_log = fila(auditar(corrida), "search_log")
+    assert search_log.status == "PASS"
+    assert "1 entrada en el log (1 `ok`)" in search_log.detail
+    assert "1 entradas" not in search_log.detail
+
+
+def test_search_log_con_un_solo_registro_va_en_singular(corrida) -> None:
+    def _dejar_uno(registros: list) -> None:
+        del registros[1:]
+
+    ruta = corrida / "01_search" / "records.json"
+    source_db = json.loads(ruta.read_text(encoding="utf-8"))[0]["source_db"]
+    edit_json(ruta, _dejar_uno)
+    _log_de_bases(corrida, n_returned=1, source_db=[source_db])
+    search_log = fila(auditar(corrida), "search_log")
+    assert search_log.status == "PASS", search_log.detail
+    assert "cada base con su cadena registrada; 1 registro." in search_log.detail
 
 
 def test_search_log_ausente_falla(corrida) -> None:
@@ -190,18 +229,63 @@ def test_search_log_fallo_que_no_esta_en_failures_json_falla(corrida) -> None:
     assert "no está en 01_search/failures.json (relación 2)" in search_log.detail
 
 
-def test_search_log_fallback_a_la_pregunta_advierte(corrida) -> None:
+def _con_fallback_a_la_pregunta(run) -> None:
     pregunta = "machine learning and large language models for systematic review screening"
     _log_de_bases(
-        corrida,
+        run,
         query=pregunta,
         query_origin="question_fallback",
         query_file=None,
         query_sha256=sha256_text(pregunta),
     )
+
+
+def test_search_log_fallback_a_la_pregunta_advierte(corrida) -> None:
+    _con_fallback_a_la_pregunta(corrida)
     search_log = fila(auditar(corrida), "search_log")
     assert search_log.status == "WARN"
     assert "`OpenAlex`: sin cadena propia, se usó la pregunta (PRISMA-S 8)" in search_log.detail
+
+
+NOTA_INSTANTANEA = "(la instantánea sí tiene una cadena no vacía para esta base)"
+
+
+def test_search_log_fallback_con_cadena_no_vacia_en_la_instantanea_lo_dice(corrida) -> None:
+    # El motor usa siempre una cadena no vacía: que la instantánea la tenga y el log diga que se
+    # usó la pregunta es una manipulación o un fallo. Sigue siendo un WARN (lo manda el spec), pero
+    # «sin cadena propia» sería falso y el aviso lo dice.
+    _con_fallback_a_la_pregunta(corrida)
+    search_log = fila(auditar(corrida), "search_log")
+    assert search_log.status == "WARN"
+    assert "sin cadena propia, se usó la pregunta (PRISMA-S 8) " + NOTA_INSTANTANEA in (
+        search_log.detail
+    )
+
+
+def test_search_log_fallback_encuentra_la_cadena_de_la_instantanea_sin_mayusculas(
+    corrida, normcase_sin_mayusculas
+) -> None:
+    _con_fallback_a_la_pregunta(corrida)
+    _renombrar_cadena(corrida, "OpenAlex.txt")
+    search_log = fila(auditar(corrida), "search_log")
+    assert search_log.status == "WARN"
+    assert NOTA_INSTANTANEA in search_log.detail
+
+
+@pytest.mark.parametrize("contenido", [None, "", "  \n"])
+def test_search_log_fallback_sin_cadena_en_la_instantanea_no_dice_que_la_tenga(
+    corrida, contenido: str | None
+) -> None:
+    _con_fallback_a_la_pregunta(corrida)
+    fichero = corrida / "00_protocol" / "search_strings" / "openalex.txt"
+    if contenido is None:
+        fichero.unlink()
+    else:
+        fichero.write_text(contenido, encoding="utf-8")
+    search_log = fila(auditar(corrida), "search_log")
+    assert search_log.status == "WARN"
+    assert "sin cadena propia, se usó la pregunta (PRISMA-S 8)" in search_log.detail
+    assert NOTA_INSTANTANEA not in search_log.detail
 
 
 def test_search_log_base_desconocida_falla(corrida) -> None:
@@ -592,9 +676,55 @@ def test_ficheros_de_cadenas_solo_lista_ficheros_reales(corrida) -> None:
     carpeta = corrida / "00_protocol" / "search_strings"
     (carpeta / "subcarpeta.txt").mkdir()
     ctx = AuditContext(load_run(corrida))
-    assert _ficheros_de_cadenas(ctx) == frozenset({"openalex.txt"})
+    assert _ficheros_de_cadenas(ctx) == {"openalex.txt": "openalex.txt"}
     shutil.rmtree(carpeta)
-    assert _ficheros_de_cadenas(AuditContext(load_run(corrida))) == frozenset()
+    assert _ficheros_de_cadenas(AuditContext(load_run(corrida))) == {}
+
+
+def test_ficheros_de_cadenas_indexa_por_nombre_normalizado_y_guarda_el_real(
+    corrida, normcase_sin_mayusculas
+) -> None:
+    # Es lo que se lee: el nombre real que lista el directorio, buscado por su forma normalizada.
+    _renombrar_cadena(corrida, "OpenAlex.txt")
+    ctx = AuditContext(load_run(corrida))
+    assert _ficheros_de_cadenas(ctx) == {"openalex.txt": "OpenAlex.txt"}
+
+
+@pytest.mark.parametrize("query_file", ["openalex.txt", "OpenAlex.txt"])
+def test_search_log_cadena_con_otras_mayusculas_que_el_db_key_se_encuentra(
+    corrida, normcase_sin_mayusculas, query_file: str
+) -> None:
+    # Donde el sistema de ficheros no distingue mayúsculas el motor encuentra `OpenAlex.txt` para
+    # la base `openalex` y el log dice `.../openalex.txt`: el auditor no puede dar FAIL por eso.
+    _log_de_bases(corrida, query_file=f"00_protocol/search_strings/{query_file}")
+    _renombrar_cadena(corrida, "OpenAlex.txt")
+    search_log = fila(auditar(corrida), "search_log")
+    assert search_log.status == "PASS", search_log.detail
+
+
+def test_search_log_cadena_de_otro_nombre_sigue_fallando_sin_mayusculas(
+    corrida, normcase_sin_mayusculas
+) -> None:
+    _log_de_bases(corrida)
+    _renombrar_cadena(corrida, "OtraBase.txt")
+    search_log = fila(auditar(corrida), "search_log")
+    assert search_log.status == "FAIL"
+    assert "la cadena no está en `00_protocol/search_strings/openalex.txt`" in search_log.detail
+
+
+@pytest.mark.parametrize("clave", ["../../senuelo", "con", "nul", "a/b", "a\\b", "x\x00y", ""])
+def test_search_log_sin_mayusculas_el_db_key_hostil_sigue_sin_abrirse(
+    corrida, normcase_sin_mayusculas, clave: str
+) -> None:
+    # La normalización no relaja la defensa: solo se abre un nombre que lista el directorio.
+    cadena = (corrida / "00_protocol" / "search_strings" / "openalex.txt").read_text("utf-8")
+    (corrida / "senuelo.txt").write_text(cadena, encoding="utf-8")
+    _log_de_bases(corrida, db_key=clave, query_file=f"00_protocol/search_strings/{clave}.txt")
+    informe = auditar(corrida)
+    search_log = fila(informe, "search_log")
+    assert search_log.status == "FAIL"
+    assert "la cadena no está en" in search_log.detail
+    _sin_error_interno(informe)
 
 
 def test_search_log_con_json_anidado_hasta_el_limite_no_cuelga_el_auditor(corrida) -> None:
@@ -723,6 +853,68 @@ def test_search_window_dos_dias_de_diferencia_no_dice_que_sea_utc(corrida) -> No
     assert "difieren en un día" not in window.detail
 
 
+def test_search_window_una_fecha_yaml_con_hora_del_mismo_dia_pasa(corrida) -> None:
+    # `executed: 2026-10-04T10:00:00` sin comillas es un `datetime.datetime` para PyYAML; se
+    # compara por fecha, no por su ISO con hora.
+    fecha = _fecha_del_motor(corrida)
+    for ruta in ("manifest.yml", "00_protocol/protocol.yml"):
+        path = corrida / ruta
+        texto = path.read_text(encoding="utf-8")
+        con_hora, cambios = re.subn(
+            r"executed: ['\"]2026-06-26['\"]", f"executed: {fecha}T10:00:00", texto
+        )
+        assert cambios == 1, ruta
+        path.write_text(con_hora, encoding="utf-8")
+    window = fila(auditar(corrida), "search_window")
+    assert window.status == "PASS", window.detail
+
+
+def test_search_window_con_la_marca_en_otra_zona_da_la_fecha_utc(corrida) -> None:
+    # 2026-10-03T20:00-12:00 es 2026-10-04T08:00Z: el texto da el 3 y el instante, el 4.
+    edit_json(
+        corrida / LOG,
+        lambda log: log["entries"][0].update(started_utc="2026-10-03T20:00:00-12:00"),
+    )
+    editar_protocolo(corrida, lambda p: p["search_window"].update(executed="2026-10-04"))
+    window = fila(auditar(corrida), "search_window")
+    assert window.status == "PASS", window.detail
+    assert "ejecutada por el motor el 2026-10-04" in window.detail
+
+
+def test_search_window_toma_la_busqueda_mas_temprana_por_instante_no_por_texto(corrida) -> None:
+    # "2026-10-04T01:00+14:00" (= 2026-10-03T11:00Z) es anterior al instante de la primera
+    # entrada (2026-10-04T08:00Z) aunque, como texto, sea posterior.
+    edit_json(
+        corrida / LOG,
+        lambda log: log["entries"][0].update(started_utc="2026-10-04T08:00:00+00:00"),
+    )
+    _anadir_entrada(
+        corrida,
+        {
+            "database": "Crossref",
+            "db_key": "crossref",
+            "status": "ok",
+            "backend": "search_backends.crossref_search",
+            "started_utc": "2026-10-04T01:00:00+14:00",
+        },
+    )
+    editar_protocolo(corrida, lambda p: p["search_window"].update(executed="2026-10-03"))
+    window = fila(auditar(corrida), "search_window")
+    assert window.status == "PASS", window.detail
+    assert "ejecutada por el motor el 2026-10-03" in window.detail
+
+
+def test_search_window_con_una_marca_fuera_de_rango_en_utc_no_falla_el_auditor(corrida) -> None:
+    # 0001-01-01T00:00+14:00 no tiene instante UTC representable (OverflowError al convertirlo).
+    edit_json(
+        corrida / LOG,
+        lambda log: log["entries"][0].update(started_utc="0001-01-01T00:00:00+14:00"),
+    )
+    informe = auditar(corrida)
+    assert fila(informe, "search_window").status == "WARN"
+    _sin_error_interno(informe)
+
+
 def test_search_window_con_el_log_ilegible_no_da_pass(corrida) -> None:
     (corrida / LOG).write_text("{", encoding="utf-8")
     window = fila(auditar(corrida), "search_window")
@@ -802,6 +994,44 @@ def test_timing_marca_del_log_sin_zona_horaria_falla(corrida) -> None:
     timing = fila(auditar(corrida), "timing")
     assert timing.status == "FAIL"
     assert "sin zona horaria" in timing.detail
+
+
+def _marcas_del_log_en(corrida, formato) -> None:
+    """Reescribe todas las marcas del log (el mismo instante) con ``formato(datetime)``."""
+
+    def _reescribir(log: dict) -> None:
+        for tramo in (log, *log["entries"]):
+            for campo in ("started_utc", "finished_utc"):
+                if tramo.get(campo):
+                    tramo[campo] = formato(datetime.fromisoformat(tramo[campo]))
+
+    edit_json(corrida / LOG, _reescribir)
+
+
+def test_timing_marcas_del_log_en_otra_zona_advierten(corrida) -> None:
+    # El motor escribe siempre `+00:00`: una marca en `-12:00` (el mismo instante) es posible,
+    # pero el log no lo escribió el motor y la fecha de la búsqueda puede salir corrida un día.
+    _marcas_del_log_en(
+        corrida, lambda marca: marca.astimezone(timezone(timedelta(hours=-12))).isoformat()
+    )
+    timing = fila(auditar(corrida), "timing")
+    assert timing.status == "WARN"
+    assert "marca(s) de 01_search/log.json con zona distinta de UTC" in timing.detail
+    assert "(el motor escribe +00:00)" in timing.detail
+
+
+def test_timing_marcas_del_log_con_z_son_utc_y_no_advierten(corrida) -> None:
+    _marcas_del_log_en(corrida, lambda marca: marca.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    assert fila(auditar(corrida), "timing").status == "PASS"
+
+
+def test_timing_una_marca_imposible_manda_sobre_el_aviso_de_la_zona(corrida) -> None:
+    # Con marcas en `-12:00` y una anterior al inicio de la corrida: FAIL, no WARN.
+    _marcas_del_log_en(
+        corrida, lambda marca: marca.astimezone(timezone(timedelta(hours=-12))).isoformat()
+    )
+    edit_json(corrida / LOG, lambda log: log.update(started_utc="2026-01-01T00:00:00+00:00"))
+    assert fila(auditar(corrida), "timing").status == "FAIL"
 
 
 def test_timing_marca_del_log_posterior_al_manifiesto_falla(corrida) -> None:
@@ -895,12 +1125,20 @@ def _correr_real(
     databases: list[str],
     ris: bool,
     parar_en: str | None,
+    nombre_cadena_openalex: str | None = None,
 ) -> Path:
-    """Una corrida real (búsqueda por bases, sin ``search_fn``) hasta ``parar_en``."""
+    """Una corrida real (búsqueda por bases, sin ``search_fn``) hasta ``parar_en``.
+
+    ``nombre_cadena_openalex`` renombra ``search_strings/openalex.txt`` del protocolo (p. ej. a
+    ``OpenAlex.txt``) antes de correr.
+    """
     from revisia.agents import search_backends
 
     protocolo = base / "proto"
     shutil.copytree(DEMO, protocolo)
+    if nombre_cadena_openalex:
+        carpeta = protocolo / "search_strings"
+        (carpeta / "openalex.txt").rename(carpeta / nombre_cadena_openalex)
     crudo = yaml.safe_load((protocolo / "protocol.yml").read_text(encoding="utf-8"))
     crudo["databases"] = databases
     (protocolo / "protocol.yml").write_text(
@@ -961,6 +1199,27 @@ def corrida_con_base_caida(tmp_path_factory: pytest.TempPathFactory) -> Path:
             databases=["OpenAlex", "BVS"],
             ris=False,
             parar_en="screening_ta",
+        )
+
+
+def _sistema_de_ficheros_sin_mayusculas() -> bool:
+    """Si este sistema de ficheros no distingue mayúsculas (Windows, macOS): se comprueba."""
+    with tempfile.TemporaryDirectory() as carpeta:
+        (Path(carpeta) / "aB.txt").write_text("x", encoding="utf-8")
+        return (Path(carpeta) / "AB.TXT").exists()
+
+
+@pytest.fixture(scope="module")
+def corrida_con_cadena_en_mayusculas(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """(C) OpenAlex cuya cadena el investigador guardó como ``search_strings/OpenAlex.txt``."""
+    with pytest.MonkeyPatch.context() as mp:
+        return _correr_real(
+            tmp_path_factory.mktemp("mayusculas"),
+            mp,
+            databases=["OpenAlex"],
+            ris=False,
+            parar_en="screening_ta",
+            nombre_cadena_openalex="OpenAlex.txt",
         )
 
 
@@ -1064,6 +1323,29 @@ def test_real_con_bases_registros_borrados_fallan(real_con_bases) -> None:
     search_log = fila(auditar(real_con_bases), "search_log")
     assert search_log.status == "FAIL"
     assert "Σ n_returned 4 ≠ 3 registros" in search_log.detail
+
+
+@pytest.mark.skipif(
+    not _sistema_de_ficheros_sin_mayusculas(),
+    reason="el sistema de ficheros distingue mayúsculas: el motor no encuentra `OpenAlex.txt`",
+)
+def test_real_con_cadena_en_mayusculas_la_busqueda_no_da_fail(
+    corrida_con_cadena_en_mayusculas: Path, tmp_path: Path
+) -> None:
+    # Donde el sistema de ficheros no distingue mayúsculas, el motor encuentra
+    # `search_strings/OpenAlex.txt` para la base `openalex` y registra `.../openalex.txt`; el
+    # auditor no puede dar FAIL a una corrida legítima por la grafía del fichero.
+    run = _copia(corrida_con_cadena_en_mayusculas, tmp_path)
+    log = SearchLog.model_validate_json((run / LOG).read_text(encoding="utf-8"))
+    entrada = log.entries[0]
+    assert (entrada.query_origin, entrada.query_file) == (
+        "file",
+        "00_protocol/search_strings/openalex.txt",
+    )
+    nombres = [p.name for p in (run / "00_protocol" / "search_strings").iterdir()]
+    assert "OpenAlex.txt" in nombres and "openalex.txt" not in nombres
+    search_log = fila(auditar(run), "search_log")
+    assert search_log.status == "PASS", search_log.detail
 
 
 def test_real_con_base_caida_advierte_sin_fail_falso(real_con_base_caida) -> None:
