@@ -62,8 +62,8 @@ _ACTOR_POR_DEFECTO: str = HumanDecision.model_fields["actor"].default
 _BANDERA = re.compile(r"flag:([0-9]{1,9})", re.ASCII)
 # Caracteres de JSON canónico (cada alias expandido cuenta entero: cadenas, claves y separadores)
 # por carácter del fichero que se admiten como mucho antes de hashear: un fichero del motor
-# nunca se acerca (su JSON es más corto que su YAML) y una bomba de alias lo supera enseguida
-# (ver `_hash_acotado`).
+# no es mayor que ~1,1× su YAML (medido), y una bomba de alias lo supera enseguida (ver
+# `_hash_acotado`).
 _BYTES_POR_CARACTER = 4
 _BYTES_MINIMOS = 1_000
 _ALIAS_DESMESURADOS = "estructura YAML con alias que se expanden más allá del tamaño del fichero"
@@ -630,7 +630,9 @@ def _caracteres_de_escalar(valor: object, memo: dict[int, int]) -> int:
         return valor.bit_length() * 30103 // 100000 + 2  # cifras decimales, sin construirlas
     if isinstance(valor, float):
         return 24
-    return 32  # no es JSON (una fecha, un conjunto…): `canonical_sha256` lo rechazará
+    # Lo que no es JSON (una fecha, un conjunto…) y ningún contenedor: `canonical_sha256` lo
+    # rechazará. Las tuplas de `!!pairs` y `!!omap` son contenedores: se vuelcan como arrays.
+    return 32
 
 
 def _cabe_en_el_fichero(value: object, *, texto: str) -> bool:
@@ -641,10 +643,12 @@ def _cabe_en_el_fichero(value: object, *, texto: str) -> bool:
     cadena anclada de 24 KB referenciada 2 500 veces son 60 MB en un fichero de 30 KB, con
     pocos nodos. Contar nodos no la ve: se cuentan los caracteres de JSON de cada visita
     (cadenas y claves enteras, más separadores), contra un tope proporcional al tamaño del
-    fichero. Un fichero del motor nunca llega: su JSON es más corto que su YAML, y el único
-    alias que escribe (``must_label`` y ``must_resolve`` de FT en A1, la misma lista) solo la
-    duplica. Cada visita cuesta lo que carga, así que el recorrido (iterativo) y la memoria
-    que usa son del orden del tope, no de la expansión.
+    fichero. Las tuplas de ``!!pairs`` y ``!!omap`` se recorren como listas: el JSON canónico
+    las vuelca como arrays. Un fichero del motor no es mayor que ~1,1× su YAML (medido); la
+    única excepción es la lista que FT en A1 comparte por alias entre ``must_label`` y
+    ``must_resolve``, que su JSON duplica (~2×, medido) y que sigue dentro del tope. Cada visita
+    cuesta lo que carga, así que el recorrido (iterativo) y la memoria que usa son del orden del
+    tope, no de la expansión.
     """
     presupuesto = _BYTES_POR_CARACTER * len(texto) + _BYTES_MINIMOS
     memo: dict[int, int] = {}
@@ -657,7 +661,7 @@ def _cabe_en_el_fichero(value: object, *, texto: str) -> bool:
             for clave, valor in actual.items():
                 gastado += _caracteres_de_escalar(clave, memo) + 2  # los dos puntos y la coma
                 pendientes.append(valor)
-        elif isinstance(actual, list):
+        elif isinstance(actual, list | tuple):
             gastado += 2 + len(actual)  # corchetes y comas
             pendientes.extend(actual)
         else:
@@ -753,6 +757,14 @@ def _decision_del_ledger(
     entradas de ``sin_etiquetar`` (``{label: null}`` o ``{verdict: null}``) no dejan rastro en el
     ledger pero sí en el hash: son las de la plantilla que el humano no rellenó. ``None`` si el
     ledger no describe una decisión válida (una ``label`` con un valor que no existe).
+
+    Sin ``decision.yml`` la comprobación da PASS solo si el ledger reproduce la decisión tal cual
+    se hasheó. Hay casos benignos que dan WARN aunque el motor haya hecho bien su trabajo: extras
+    con valor ``null`` (el ``approve`` los omite con ``exclude_none``); entradas ``{label: null,
+    reason: …}`` (el ledger no registra una ``label`` sin valor, así que su ``reason`` se pierde);
+    extras llamados ``n_labels`` o ``forced_human`` (el motor los sobrescribe en el ``detail`` y
+    aquí se descartan); y una plantilla de la que solo se conservan algunas entradas ``null``
+    (la reconstrucción prueba ninguna de ellas o todas).
     """
     entrada = _entrada_efectiva(ctx, stage)
     if entrada is None or gate.request_sha256 is None:
@@ -835,7 +847,8 @@ def _sin_decision_yml(
     return _Hallazgos(
         warns=[
             f"`{stage}`: decision_sha256 no recalculable sin decision.yml (el ledger no "
-            "reproduce la decisión que se hasheó)"
+            "reproduce la decisión que se hasheó; puede ser benigno: ver el docstring; o "
+            "manipulación del ledger)"
         ]
     )
 

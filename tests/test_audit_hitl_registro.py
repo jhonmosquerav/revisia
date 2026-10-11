@@ -544,6 +544,30 @@ def test_request_hash_bomba_anidada_de_cadenas_en_la_decision_no_agota_la_memori
     assert len(filas) == len(CHECKS)
 
 
+@pytest.mark.parametrize("fichero", ["review_request.yml", "decision.yml"])
+def test_request_hash_bomba_de_tuplas_de_pairs_no_agota_la_memoria(corrida, fichero: str) -> None:
+    # `!!pairs` (y `!!omap`) construye listas de tuplas, y el JSON canónico las vuelca como
+    # arrays: cada alias se expande al hashear. Ocho niveles de nueve alias son 9**8 copias de
+    # una cadena de 300 caracteres en un fichero de ~1 KB; el recorrido tiene que cortar antes.
+    path = corrida / "rob" / fichero
+    niveles = [f'zz_0: &b0 "{"a" * 300}"\n']
+    for i in range(1, 9):
+        pares = ", ".join(f"{{k: *b{i - 1}}}" for _ in range(9))
+        niveles.append(f"zz_{i}: &b{i} !!pairs [{pares}]\n")
+    path.write_text(path.read_text(encoding="utf-8") + "".join(niveles), encoding="utf-8")
+    try:
+        pico, filas = _auditar_midiendo(corrida, timeout=10)
+    except subprocess.TimeoutExpired:
+        pytest.fail("el auditor no terminó en 10 s: hashear la bomba de !!pairs la expande")
+    estado, detalle = filas["request_hash"]
+    assert estado == "FAIL"
+    assert "`rob`: " in detalle and "no se puede hashear" in detalle
+    assert _ALIAS_QUE_SE_EXPANDEN in detalle
+    assert pico < _PICO_MAXIMO, pico
+    assert [i for i, (_, d) in filas.items() if "error interno" in d] == []
+    assert len(filas) == len(CHECKS)
+
+
 def test_hash_acotado_rechaza_la_expansion_de_cadenas_sin_construirla() -> None:
     cadena = "x" * (32 * 1024)
     valor = {"zz_l": [cadena] * 5_000}  # 5 000 alias de una misma cadena: 160 MB al volcar
