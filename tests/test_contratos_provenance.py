@@ -14,6 +14,7 @@ from revisia.provenance.ledger import (
     HUMAN_ACTOR_PREFIX,
     LEDGER_ACTIONS,
     DecisionEntry,
+    is_human_actor,
     summarize_gates,
 )
 from revisia.provenance.runmeta import canonical_json, canonical_sha256
@@ -61,6 +62,37 @@ def test_gate_action_y_gate_decision_actions_van_atados() -> None:
     # usa el reductor): si una crece sin la otra, el reductor produciría un resumen
     # que su propio modelo rechaza, o ignoraría una acción válida.
     assert set(get_args(GateAction)) == GATE_DECISION_ACTIONS
+
+
+# ── is_human_actor: la única definición de «humano» ─────────────────────
+
+
+@pytest.mark.parametrize(
+    "actor",
+    ["human:ana", "human:desconocido", "human: ana", "human:a" + chr(0x200B) + "na"],
+)
+def test_is_human_actor_acepta_un_nombre_visible(actor: str) -> None:
+    assert is_human_actor(actor)
+
+
+@pytest.mark.parametrize(
+    "actor",
+    [
+        "",
+        "ana",
+        "agent:extraccion",
+        AUTO_APPROVE_ACTOR,
+        "human:",
+        "human:   ",
+        "human:\t",
+        "human:" + chr(0xA0),
+        "human:" + chr(0x200B),  # espacio de ancho cero (Cf): invisible, no es un nombre
+        "human:" + chr(0xFEFF) + chr(0xAD) + " ",
+        "human:" + chr(0),  # NUL: no imprimible
+    ],
+)
+def test_is_human_actor_rechaza_lo_que_no_es_un_humano_con_nombre(actor: str) -> None:
+    assert not is_human_actor(actor)
 
 
 # ── summarize_gates ──────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ orquestador y los agentes consumen.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import yaml
@@ -47,6 +48,25 @@ DEFAULT_AUTONOMY: dict[str, str] = {
 }
 
 AUTONOMY_LEVELS: tuple[str, ...] = ("A0", "A1", "A2", "A3")
+
+
+def effective_autonomy(autonomy: str, *, forced_human: bool) -> str:
+    """Autonomía con la que se aplica un gate que puede quedar forzado a humano (M5).
+
+    Con ``forced_human`` (citas marcadas), una A2/A3 declarada pasa a A1: el gate
+    pide y registra una decisión humana. Una A0/A1 no cambia, y sin ``forced_human``
+    ninguna cambia. Es la única regla de esa degradación: la usan ``review_gate``
+    (lo que se pide y se registra), el pipeline (la ``autonomy_effective`` del
+    manifiesto y del checklist trAIce) y ``metodologia.md``, para que lo declarado,
+    lo aplicado y lo informado no puedan separarse. Vive junto a los niveles de
+    autonomía, en la capa que orquestador y entregables comparten.
+    """
+    return "A1" if forced_human and autonomy in {"A2", "A3"} else autonomy
+
+
+# Peso máximo del falso negativo en el WMCC. El default es 10; 1000 deja de sobra para
+# «perder evidencia cuesta mucho más que revisar de más» sin acercarse al desbordamiento.
+MAX_WMCC_FN_WEIGHT: float = 1000.0
 # Etapas de juicio (AGENTS.md): nunca superan A1; la decisión final es humana.
 JUDGMENT_STAGES: tuple[str, ...] = ("screening_ta", "screening_ft", "extraccion", "rob")
 
@@ -54,6 +74,14 @@ JUDGMENT_STAGES: tuple[str, ...] = ("screening_ta", "screening_ft", "extraccion"
 # auditor avisa de cualquier otra: una errata como `kapa_min` desactivaba el
 # umbral en silencio (auditoría 2026-09-03, A11; D7).
 KNOWN_THRESHOLDS: frozenset[str] = frozenset({"kappa_min", "recall_target", "wmcc_fn_weight"})
+
+# Rango (cerrado) de los umbrales acotados. κ de Cohen va de -1 a 1; el recall, de 0 a 1.
+# ``wmcc_fn_weight`` es un peso: positivo (el 0 anula el falso negativo) y acotado por
+# ``MAX_WMCC_FN_WEIGHT`` (uno finito pero enorme desborda ``fn_weight * fn`` y el WMCC da nan).
+_THRESHOLD_RANGES: dict[str, tuple[float, float]] = {
+    "recall_target": (0.0, 1.0),
+    "kappa_min": (-1.0, 1.0),
+}
 
 
 class ReviewProtocol(BaseModel):
@@ -68,7 +96,9 @@ class ReviewProtocol(BaseModel):
         prisma_extension: extensión PRISMA aplicable (ej. ``PRISMA-2020``).
         llm: config de proveedor por etapa; la clave ``default`` es el fallback.
         autonomy: nivel de autonomía por etapa (``A0``..``A3``).
-        thresholds: umbrales (ej. ``kappa_min``, ``recall_target``).
+        thresholds: umbrales (ej. ``kappa_min``, ``recall_target``); todos finitos, con
+            ``recall_target`` en [0, 1], ``kappa_min`` en [-1, 1] y ``wmcc_fn_weight`` en
+            (0, 1000].
         registration: registro del protocolo (ej. ``{"prospero": "CRD..."}``).
         ensemble: nombres de etapas que corren en modo ensemble multi-modelo.
         search_window: ventana temporal de la búsqueda (``{from, to, executed}``),
@@ -119,6 +149,36 @@ class ReviewProtocol(BaseModel):
                 )
         return value
 
+    @field_validator("thresholds")
+    @classmethod
+    def _umbrales_validos(cls, value: dict[str, float]) -> dict[str, float]:
+        """Todo umbral es finito y los conocidos están en su rango.
+
+        ``.nan`` e ``.inf`` son YAML válido y ``dict[str, float]`` los acepta: un
+        ``wmcc_fn_weight: .nan`` daba un WMCC nan y ``json.dumps(allow_nan=False)``
+        reventaba en el cribado, otra vez en cada reanudación (rc 3 en bucle). Ahora el
+        protocolo no carga (rc 2 en ``validate`` y ``run``). Una clave desconocida solo
+        debe ser finita: el auditor ya avisa de las erratas (``KNOWN_THRESHOLDS``).
+        """
+        for key, number in value.items():
+            if not math.isfinite(number):
+                raise ValueError(
+                    f"thresholds.{key}: {number} no es un número finito (`.nan` e `.inf` son "
+                    "YAML válido, pero un umbral así rompe las métricas); usa un número."
+                )
+            if key in _THRESHOLD_RANGES:
+                low, high = _THRESHOLD_RANGES[key]
+                if not low <= number <= high:
+                    raise ValueError(f"thresholds.{key}: {number:g} fuera de [{low:g}, {high:g}].")
+        weight = value.get("wmcc_fn_weight")
+        if weight is not None and not 0 < weight <= MAX_WMCC_FN_WEIGHT:
+            raise ValueError(
+                f"thresholds.wmcc_fn_weight: {weight:g} debe ser mayor que 0 y no pasar de "
+                f"{MAX_WMCC_FN_WEIGHT:g} (es el peso del falso negativo en el WMCC; uno mayor "
+                "desborda el cálculo y el WMCC sale nan)."
+            )
+        return value
+
     def autonomy_for(self, stage: str) -> str:
         """Autonomía efectiva de una etapa (config > default)."""
         return self.autonomy.get(stage, DEFAULT_AUTONOMY.get(stage, "A0"))
@@ -133,6 +193,26 @@ class ReviewProtocol(BaseModel):
             f"No hay proveedor LLM para la etapa {stage!r} ni un 'default' en protocol.yml."
         )
 
+    def _ensemble_members(self, stage: str) -> list[ProviderConfig]:
+        """Los modelos del ensemble de una etapa; vacío si no hay ensemble.
+
+        Hay ensemble cuando la etapa está marcada en ``ensemble`` y tiene modelos en
+        ``ensemble_llm``. Es el único sitio que decide eso: ``screeners_for`` y
+        ``n_screeners_for`` parten de aquí.
+        """
+        if stage in self.ensemble:
+            return self.ensemble_llm.get(stage) or []
+        return []
+
+    def n_screeners_for(self, stage: str) -> int:
+        """Cuántos modelos criban una etapa, sin exigir que haya proveedor configurado.
+
+        Es el recuento que ``screeners_for`` devolvería (1 si no hay ensemble), pero no
+        lanza ``KeyError`` cuando falta el proveedor: lo usa ``metodologia.md``, que
+        también se rinde sobre protocolos incompletos (tests, plantillas).
+        """
+        return len(self._ensemble_members(stage)) or 1
+
     def screeners_for(self, stage: str) -> list[ProviderConfig]:
         """Proveedores que cribán una etapa.
 
@@ -140,9 +220,7 @@ class ReviewProtocol(BaseModel):
         ``ensemble_llm``, devuelve todos (voto multi-modelo sesgado a recall);
         en caso contrario, un único proveedor (el de ``provider_for``).
         """
-        if stage in self.ensemble and self.ensemble_llm.get(stage):
-            return self.ensemble_llm[stage]
-        return [self.provider_for(stage)]
+        return self._ensemble_members(stage) or [self.provider_for(stage)]
 
 
 def load_protocol(protocol_dir: str | Path, *, default_slug: str | None = None) -> ReviewProtocol:

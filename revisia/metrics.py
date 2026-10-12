@@ -10,9 +10,12 @@ accuracy" puede perder >60% de la evidencia relevante. Por eso este módulo
 - **MCC**: coeficiente de correlación de Matthews, robusto al desbalance.
 - **WMCC**: MCC con el falso negativo ponderado (coste FN ≫ FP, w=10 por
   defecto). Variante pragmática que penaliza perder evidencia.
-- **Cohen's kappa**: acuerdo humano-IA (umbral ≥0.60 del documento canónico).
+- **Cohen's kappa**: acuerdo de la propuesta de la IA con el gold humano (umbral ≥0.60
+  del documento canónico).
 
-Todas se calculan contra un *gold standard* humano (subconjunto etiquetado).
+Todas se calculan contra un *gold standard* humano (subconjunto etiquetado) y miden la
+propuesta de la IA (``ensemble_label``) frente a él, no la decisión final con las
+correcciones humanas (D6).
 """
 
 from __future__ import annotations
@@ -113,7 +116,9 @@ def compute_screening_metrics(
     """Calcula las métricas del cribado sobre los registros con etiqueta humana.
 
     Args:
-        decisions: decisiones del cribado (se usa ``final_label``/``ensemble_label``).
+        decisions: decisiones del cribado; se mide ``ensemble_label``, la
+            propuesta de la IA (D6): κ y recall evalúan el sistema, no al
+            humano que lo corrige.
         gold: ``{record_id: es_relevante}`` (gold standard humano).
         fn_weight: peso del falso negativo para WMCC.
 
@@ -127,8 +132,8 @@ def compute_screening_metrics(
         decision = by_id.get(record_id)
         if decision is None:
             continue
-        label = decision.final_label or decision.ensemble_label
-        pred.append(label != "exclude")
+        # Nunca `final_label`: con etiquetas humanas mediría humano + IA (D6).
+        pred.append(decision.ensemble_label != "exclude")
         gold_bools.append(bool(is_relevant))
 
     tp, fp, fn, tn = confusion(pred, gold_bools)

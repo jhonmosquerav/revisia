@@ -104,15 +104,16 @@ ensemble:
 #       seed: 42
 
 # ── Autonomía por etapa (A0..A3) ─────────────────────────────────────
-# Regla NO negociable: screening / extraccion / rob nunca superan A1; la
-# decisión final es siempre humana (Cochrane/JBI 2025).
+# Regla NO negociable: screening / extraccion / rob nunca superan A1. Para que la
+# corrida sea publicable, los gates de juicio y la decisión final los firma un
+# humano (Cochrane/JBI 2025); --auto-approve es solo para demostraciones.
 autonomy:
   protocolo: A0      # preregistro: el humano firma
   busqueda: A2       # determinista, reversible, notifica
   dedup: A2
   screening_ta: A1   # IA propone, humano decide
   screening_ft: A0
-  extraccion: A0     # revisión humana campo a campo
+  extraccion: A0     # el humano aprueba la tabla completa (con su hash)
   rob: A0            # juicio del experto humano
   sintesis: A1
   reporte: A1

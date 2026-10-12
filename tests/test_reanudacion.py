@@ -800,12 +800,12 @@ def test_el_hash_del_gate_ft_cambia_al_resolverse_un_transitorio(tmp_path: Path)
 
     protocol, ctx = _pausar_en_ft(tmp_path, fetch)
     primera = leer_solicitud(ctx.run_dir, "screening_ft")
-    assert primera["n_no_recuperados"] == 1
+    assert primera["n_not_retrieved"] == 1
 
     run_pipeline(protocol, EXAMPLE, RunContext.open(ctx.run_dir), fetch_fn=fetch)
 
     segunda = leer_solicitud(ctx.run_dir, "screening_ft")
-    assert segunda["n_no_recuperados"] == 0
+    assert segunda["n_not_retrieved"] == 0
     assert segunda["request_sha256"] != primera["request_sha256"]
 
 

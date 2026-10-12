@@ -52,6 +52,26 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   entre los conservados pasa a `<id>#2`.
 - `decision.template.yml` junto a cada `review_request.yml` y
   `03_screening/gold.json` con el gold efectivo.
+- **Decisión humana por registro** en el cribado (auditoría 2026-09-03, C1;
+  PRISMA 2020, ítem 8; trAIce R1): `decision.yml` gana
+  `records: {"<id>": {label, reason}}`. En título/abstract (A1) se aprueba la
+  propuesta de la IA con excepciones; en texto completo (A0) se etiqueta cada
+  informe recuperado y un `unclear` solo lo resuelve un humano. Un informe no
+  recuperado se puede rescatar con una razón y cuenta como evaluado por
+  humano. `human_label` se escribe solo ante una etiqueta explícita: aprobar en
+  bloque deja la exclusión como "IA avalada".
+- **Citas marcadas adjudicadas** (M5): si el verificador marca citas, el gate
+  final exige humano (aunque se pase `--auto-approve` o `reporte` esté en
+  A2/A3) y aprobar exige adjudicar cada cita como falso positivo con razón
+  (`flags: {"<índice>": {verdict: false_positive, reason}}`); si alguna es
+  real, se rechaza. Cada etiqueta y cada adjudicación queda en el ledger.
+- La solicitud de título/abstract informa del recall y el kappa frente al gold
+  y de qué exclusiones de la IA habría que etiquetar para que un recall bajo
+  umbral no bloquee la publicación. Las de extracción y RoB llevan la tabla
+  completa por estudio y el hash del artefacto aprobado.
+- `decision.template.yml` lista cada registro y cada cita marcada con la
+  propuesta de la IA en comentarios saneados: un título o una razón con saltos
+  de línea Unicode no puede inyectar claves (`approved: true`) en el YAML (D4).
 
 ### Fixed
 - **`claude_code` corre sin herramientas de verdad**: `--tools ""` sustituye a
@@ -85,6 +105,21 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   la consola tapan también las cabeceras `Authorization`/`x-api-key`, el valor
   tras `Bearer` y las claves con forma de proveedor (`sk-…`, `AIza…`, `hf_…`);
   antes solo los parámetros de la URL.
+- Un `unclear` del cribado a texto completo pasaba a extracción, RoB, síntesis
+  y a los incluidos sin que nadie lo resolviera (C1).
+- `checklist_traice.md` y `metodologia.md` afirmaban una validación humana
+  fija ("checkpoints HITL registrados", "revisión humana campo a campo", "la
+  decisión final es siempre humana"); ahora dicen, gate por gate y desde el
+  ledger, quién decidió de verdad y con qué autonomía efectiva (M13).
+- `hallucination_flagged` solo se imprimía; ahora bloquea la aprobación
+  silenciosa del reporte (M5).
+- `metodologia.md` atribuía a la IA trabajo que no hizo: un ensemble también en
+  texto completo (es un solo modelo), una extracción sobre el texto completo (la
+  IA solo ve título y abstract), una cita de origen «anti-alucinación» que nadie
+  verifica y un riesgo de sesgo que «pondera» la síntesis.
+- Un umbral no finito (`.nan`, `.inf`) o fuera de rango en `protocol.yml`
+  rompía la corrida a mitad del cribado; ahora `validate` y `run` lo rechazan
+  con código 2.
 
 ### Changed
 - `MANUAL_ONLY` incluye CINAHL, Cochrane/CENTRAL, ProQuest, EconLit, JSTOR,
@@ -102,6 +137,10 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   completada).
 - `revisia run --max` vale 50 por defecto en una corrida nueva; al reanudar
   manda el de `run.json`.
+- Las métricas de cribado miden siempre la propuesta de la IA
+  (`ensemble_label`) frente al gold, nunca la decisión final humano + IA (D6).
+- `--auto-approve` aprueba con las etiquetas de la IA y no exige etiquetar
+  cada registro en A0, pero pausa si hay un `unclear` en texto completo (D9).
 
 ### Cambios incompatibles
 - `revisia validate` y `revisia run` salen con código 2 ante cualquier error de
@@ -119,6 +158,16 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - Las corridas anteriores a esta versión (sin `run.json`) no se pueden
   reanudar: `revisia run --resume` sale con código 2.
 - `RunContext.record_meta` exige `stage=`.
+- Aprobar el cribado a texto completo en A0 exige etiquetar cada informe
+  recuperado, y ningún `unclear` pasa sin etiqueta humana.
+- Con citas marcadas por el verificador, el reporte final ya no se aprueba sin
+  adjudicar cada cita, ni con `--auto-approve`.
+- `render_traice_checklist` recibe la autonomía efectiva por gate (segundo
+  argumento) y, opcionalmente, `gates` y `forced_human`.
+- `protocol.yml` con un umbral no finito, `recall_target` fuera de [0, 1],
+  `kappa_min` fuera de [-1, 1] o `wmcc_fn_weight` fuera de (0, 1000] ya no carga.
+- Con un gate forzado a humano, `actor` tiene que ser `human:<nombre>` con un
+  nombre visible.
 
 ## [0.7.0] · 2026-09-28
 

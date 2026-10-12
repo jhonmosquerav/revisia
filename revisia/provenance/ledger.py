@@ -9,6 +9,7 @@ toman las mismas decisiones aunque el LLM no sea determinista a nivel token.
 
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -34,6 +35,39 @@ GATE_DECISION_ACTIONS: frozenset[str] = frozenset({"approve", "reject", "auto-pr
 HUMAN_ACTOR_PREFIX = "human:"
 # Actor sintético de `--auto-approve`: no es humano (D8, D9).
 AUTO_APPROVE_ACTOR = "auto-approve (demo)"
+
+
+def plain_text(text: str) -> str:
+    """El texto en una sola línea, sin saltos, controles ni marcas de formato (D4).
+
+    PyYAML y libyaml cierran un comentario con cualquier salto de línea de YAML 1.1
+    (LF, CR, U+0085, U+2028, U+2029): lo que viniera detrás, p. ej. un
+    ``approved: true`` dentro de un ``rationale``, sería una clave de verdad. Todo
+    espacio (esos saltos incluidos) y todo carácter no imprimible (controles C0 y C1,
+    sustitutos sueltos) pasa a un espacio, y los espacios se pliegan. Las marcas de
+    formato (categoría Cf: U+00AD, ZWNJ, ZWJ, U+200B, U+FEFF, las de dirección…) no
+    separan palabras, así que se borran: sustituirlas por un espacio partiría "intervención"
+    en dos.
+    """
+    visible = (
+        "" if unicodedata.category(ch) == "Cf" else ch if ch.isprintable() else " " for ch in text
+    )
+    return " ".join("".join(visible).split())
+
+
+def is_human_actor(actor: str) -> bool:
+    """¿``actor`` es un humano identificado? ``human:<nombre>``, con un nombre visible.
+
+    Es la única definición de «humano» del motor: la usan el gate (que exige una decisión
+    humana al reutilizar o aplicar), el pipeline y los entregables. El prefijo solo no
+    basta: ``human:`` (o ``human:`` y espacios) no dice quién decidió. Tampoco un nombre
+    que no se ve (``human:`` + U+200B, una marca de formato Cf, o un NUL): se juzga el
+    texto que queda con ``plain_text``. El default de la plantilla, ``human:desconocido``,
+    sí cuenta (tiene nombre; el auditor le da WARN).
+    """
+    return actor.startswith(HUMAN_ACTOR_PREFIX) and bool(
+        plain_text(actor.removeprefix(HUMAN_ACTOR_PREFIX))
+    )
 
 
 class DecisionEntry(BaseModel):

@@ -32,6 +32,19 @@ LLM_CALLS_FILE = "llm_calls.jsonl"
 RUN_INFO_FILE = "run.json"
 
 
+def resume_command(run_dir: str | Path) -> str:
+    """El comando que reanuda una corrida, listo para pegar en una terminal.
+
+    La ruta va entre comillas dobles si tiene espacios (``runs/mi revisión-T``): sin ellas
+    el shell la parte en dos argumentos y el comando falla. Lo comparten el mensaje de una
+    pausa (``hitl.review_gate``) y el de una interrupción (``RunInterrupted``).
+    """
+    ruta = str(run_dir)
+    if any(ch.isspace() for ch in ruta):
+        ruta = f'"{ruta}"'
+    return f"revisia run --resume {ruta}"
+
+
 class RunDirExistsError(FileExistsError):
     """La carpeta de una corrida nueva ya existe y tiene contenido.
 
@@ -63,8 +76,7 @@ class RunInterrupted(RuntimeError):
         self.error = error
         donde = f" en '{stage}'" if stage else ""
         super().__init__(
-            f"corrida interrumpida{donde}: {error}. "
-            f"Reanuda con: revisia run --resume {self.run_dir}"
+            f"corrida interrumpida{donde}: {error}. Reanuda con: {resume_command(self.run_dir)}"
         )
 
 

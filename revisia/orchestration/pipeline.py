@@ -37,7 +37,7 @@ from revisia.agents import rob as rob_agent
 from revisia.agents import screening as screening_agent
 from revisia.agents import screening_ft as screening_ft_agent
 from revisia.agents import verificador as verificador_agent
-from revisia.config import ReviewProtocol
+from revisia.config import ReviewProtocol, effective_autonomy
 from revisia.exclusions import ExclusionBreakdown, compute_exclusion_breakdown, compute_ft_excluded
 from revisia.exports import (
     PrismaCounts,
@@ -68,7 +68,25 @@ from revisia.llm.preflight import PreflightError, preflight
 from revisia.llm.registry import ProviderConfig, build_provider
 from revisia.meta_analysis import MetaAnalysisResult, meta_analyze
 from revisia.metrics import ScreeningMetrics, compute_screening_metrics
-from revisia.orchestration.hitl import DecisionFileError, GateResult, review_gate
+from revisia.orchestration.gates import (
+    apply_labels,
+    dump_artifact,
+    extraction_payload,
+    ft_payload,
+    ft_policy,
+    report_payload,
+    report_policy,
+    rob_payload,
+    ta_payload,
+    ta_policy,
+)
+from revisia.orchestration.hitl import (
+    DecisionFileError,
+    FlagPolicy,
+    GateResult,
+    RecordPolicy,
+    review_gate,
+)
 from revisia.orchestration.journal import JournalError, StageJournal, entry_output, journaled
 from revisia.orchestration.run_context import (
     LegacyRunError,
@@ -90,10 +108,12 @@ from revisia.orchestration.snapshot import (
     read_run_info,
     write_run_info,
 )
+from revisia.provenance.ledger import is_human_actor, summarize_gates
 from revisia.provenance.runmeta import RunMeta, canonical_sha256, sha256_text, utc_now_iso
 from revisia.rag.embed import Embedder, HashEmbedder
 from revisia.schemas.artifacts import (
     GATED_STAGES,
+    TRANSIENT_FULLTEXT_REASONS,
     DedupReport,
     ExcludedReport,
     JournalEntry,
@@ -140,6 +160,10 @@ class PipelineResult:
     run_dir: Path | None = None
     # Gate en el que se detuvo la corrida (pausa o rechazo); None si se completó.
     stage: str | None = None
+    # Quién adjudicó las citas marcadas por el verificador cuando la corrida se completó:
+    # el actor humano de la decisión efectiva de `reporte`, si adjudicó cada cita marcada
+    # (``flag_review``). ``None`` si no había citas marcadas o ningún humano las adjudicó.
+    flags_adjudicated_by: str | None = None
 
 
 def _criteria_to_text(ie: dict) -> str:
@@ -282,8 +306,20 @@ class _Run:
                 self.ctx.run_dir, info.model_copy(update={"status": status, "stage": stage})
             )
 
-    def gate(self, stage: str, payload: dict) -> GateResult:
-        """Checkpoint humano de ``stage`` con la autonomía que fija el protocolo."""
+    def gate(
+        self,
+        stage: str,
+        payload: dict,
+        *,
+        records: RecordPolicy | None = None,
+        flags: FlagPolicy | None = None,
+        force_human: bool = False,
+    ) -> GateResult:
+        """Checkpoint humano de ``stage`` con la autonomía que fija el protocolo.
+
+        ``records`` habilita la decisión por registro (cribado), ``flags`` la
+        adjudicación de citas marcadas y ``force_human`` exige humano (M5).
+        """
         self.stage = stage
         return review_gate(
             stage=stage,
@@ -291,6 +327,9 @@ class _Run:
             run_ctx=self.ctx,
             review_payload=payload,
             auto_approve=self.auto_approve,
+            records=records,
+            flags=flags,
+            force_human=force_human,
         )
 
     def stop(self, gate: GateResult, stage: str) -> PipelineResult | None:
@@ -309,7 +348,7 @@ class _FullTextStage:
 
     decisions: list[ScreeningDecision]
     texts: dict[str, str]
-    not_retrieved: int
+    retrieval: dict[str, RetrievalOutcome]
 
 
 def _search(run: _Run, *, max_results: int, search_fn: SearchFn | None) -> list[SearchRecord]:
@@ -414,7 +453,9 @@ def _screen_ta(
             run_ctx=run.ctx,
             role_of=_member_role,
         )
-        decision.final_label = decision.human_label or decision.ensemble_label
+        # Lo que sale del diario es la propuesta de la IA: nunca lleva `human_*`. Las
+        # etiquetas humanas explícitas las aplica `gates.apply_labels` tras el gate (D5).
+        decision.final_label = decision.ensemble_label
         decisions.append(decision)
     run.ctx.write_json("03_screening/decisions.json", [d.model_dump() for d in decisions])
 
@@ -432,15 +473,6 @@ def _screen_ta(
 # Claves de `SearchRecord.extra` que usa la recuperación de texto completo
 # (`agents/fulltext.py`): entran en el `input_sha256` de su diario.
 _RETRIEVAL_EXTRA: tuple[str, ...] = ("fulltext_url", "oa_url", "pmcid", "pmid")
-
-# Motivos de fallo que NO se escriben en el diario de la recuperación: un error de red
-# (`error_http`) o la falta de `httpx` (`sin_httpx`) no es una respuesta definitiva sobre
-# el informe, así que congelarla haría que reanudar nunca lo reintentara y que "informes
-# no recuperados" contara fallos que ya se habrían resuelto (auditoría 2026-09-03, A9:
-# un fallo transitorio se resuelve reanudando). Se usan en esta invocación y en
-# `retrieval.json` y se piden otra vez al reanudar. Los motivos permanentes
-# (`sin_url_oa`, `texto_vacio`, `no_disponible`) y los éxitos sí se escriben.
-_TRANSIENT_FULLTEXT_REASONS: frozenset[str] = frozenset({"error_http", "sin_httpx"})
 
 
 def _write_bytes_durably(path: Path, data: bytes) -> None:
@@ -522,7 +554,7 @@ def _retrieve(
 
     Al reanudar no se vuelve a descargar nada de lo que ya tiene respuesta
     definitiva: el resultado sale del diario y el texto, de la caché. Los fallos
-    transitorios (``_TRANSIENT_FULLTEXT_REASONS``) no se escriben en el diario y se
+    transitorios (``TRANSIENT_FULLTEXT_REASONS``) no se escriben en el diario y se
     reintentan al reanudar; el diario conserva así su invariante (misma clave,
     misma salida). Escribe ``04_fulltext/retrieval.json`` en el orden de
     ``passed_ta``.
@@ -545,12 +577,12 @@ def _retrieve(
             outcome = entry_output(entry, RetrievalOutcome, source=journal.path)
         else:
             # No usa `journaled`, que escribe siempre la salida de `compute`: aquí los
-            # motivos transitorios (`_TRANSIENT_FULLTEXT_REASONS`) no se escriben, para
+            # motivos transitorios (`TRANSIENT_FULLTEXT_REASONS`) no se escriben, para
             # reintentarlos al reanudar, y el texto se cachea antes del `append` (una
             # caída entre medias deja un texto huérfano, inocuo, nunca una entrada sin
             # texto).
             outcome = _fetch_one(run, fetch, record)
-            if outcome.reason not in _TRANSIENT_FULLTEXT_REASONS:
+            if outcome.reason not in TRANSIENT_FULLTEXT_REASONS:
                 journal.append(
                     JournalEntry(
                         stage="fulltext_retrieval",
@@ -599,7 +631,10 @@ def _fulltext(run: _Run, passed_ta: list[SearchRecord], fetch_fn: FetchFn | None
     PRISMA estricto (D2; auditoría 2026-09-03, M11): un informe sin texto
     completo NO se criba con IA (antes se cribaba con el abstract y contaba
     como evaluado). Queda como "no recuperado", con su motivo en
-    04_fulltext/retrieval.json, y no llega a extracción.
+    04_fulltext/retrieval.json, y no llega a extracción salvo que un humano lo rescate
+    en el gate (D2). Las decisiones salen con la propuesta de la IA, sin etiquetas
+    humanas: ``_run_stages`` las aplica tras el gate. El resultado lleva la recuperación
+    de cada registro (``retrieval``) para la solicitud del gate.
     """
     outcomes, fulltexts = _retrieve(run, passed_ta, fetch_fn)
     ft_cfg = run.protocol.provider_for("screening_ft")
@@ -642,11 +677,12 @@ def _fulltext(run: _Run, passed_ta: list[SearchRecord], fetch_fn: FetchFn | None
             ),
             run_ctx=run.ctx,
         )
-        decision.final_label = decision.human_label or decision.ensemble_label
+        # La propuesta de la IA, sin `human_*` (ver `_screen_ta`): el rescate y las
+        # etiquetas del humano las aplica `gates.apply_labels` tras el gate (D2, D5).
+        decision.final_label = decision.ensemble_label
         ft_decisions.append(decision)
     run.ctx.write_json("04_fulltext/decisions.json", [d.model_dump() for d in ft_decisions])
-    not_retrieved = sum(1 for d in ft_decisions if d.fulltext_status == "not_retrieved")
-    return _FullTextStage(ft_decisions, fulltexts, not_retrieved)
+    return _FullTextStage(ft_decisions, fulltexts, outcomes)
 
 
 def _extraction_inputs(
@@ -706,10 +742,8 @@ def _extract(
             compute=partial(_extract_one, run, extract_provider, extract_cfg, record),
             run_ctx=run.ctx,
         )
-    run.ctx.write_json(
-        "05_extraction/extractions.json",
-        {k: v.model_dump() for k, v in extractions.items()},
-    )
+    # El mismo dict que hashea `extraction_payload` en `artifact_sha256` (`dump_artifact`).
+    run.ctx.write_json("05_extraction/extractions.json", dump_artifact(extractions))
 
     extraction_agreement = None
     second_extractors = run.protocol.ensemble_llm.get("extraccion", [])
@@ -795,10 +829,8 @@ def _assess_rob(
             ),
             run_ctx=run.ctx,
         )
-    run.ctx.write_json(
-        "07_rob/assessments.json",
-        {k: v.model_dump() for k, v in assessments.items()},
-    )
+    # El mismo dict que hashea `rob_payload` en `artifact_sha256` (`dump_artifact`).
+    run.ctx.write_json("07_rob/assessments.json", dump_artifact(assessments))
     return assessments
 
 
@@ -863,7 +895,7 @@ def _verify_one(
     """
     metas: list[RunMeta] = []
     verify_kwargs: dict = {"sources": sources}
-    grounding_mode = getattr(run.protocol, "grounding", "embedder")
+    grounding_mode = run.protocol.grounding
     if grounding_mode == "agent":
         from revisia.rag.grounding import make_provider_judge
 
@@ -906,9 +938,7 @@ def _synthesize_and_verify(
         record_id="sintesis",
         inputs={
             "incluidos": [[r.record_id, r.title] for r in included],
-            "extracciones_sha256": canonical_sha256(
-                {k: v.model_dump(mode="json") for k, v in extractions.items()}
-            ),
+            "extracciones_sha256": canonical_sha256(dump_artifact(extractions)),
             "proveedor": [
                 f"{synth_cfg.provider}:{synth_cfg.model}",
                 synth_cfg.temperature,
@@ -927,7 +957,7 @@ def _synthesize_and_verify(
         inputs={
             "narrativa_sha256": sha256_text(narrative),
             "fuentes_sha256": canonical_sha256(sources),
-            "modo": getattr(run.protocol, "grounding", "embedder"),
+            "modo": run.protocol.grounding,
         },
         model=VerificationReport,
         compute=partial(
@@ -942,6 +972,11 @@ def _synthesize_and_verify(
         ),
         run_ctx=run.ctx,
     )
+    # La bandera sale de las citas (`checks`), no del diario: este, editado a mano, podría
+    # dejar `hallucination_flagged: false` con citas marcadas y el gate final, la solicitud, el
+    # manifiesto y el auditor (que lee verification.json) se contradirían (revisión de la
+    # Tarea 26). Es la misma derivación que hace el verificador al crear el informe.
+    verification.recompute_flag()
     run.ctx.write_json("06_synthesis/verification.json", verification.model_dump())
     return narrative, verification
 
@@ -954,13 +989,19 @@ def _build_counts(
     excluded_ta: int,
     ta_breakdown: ExclusionBreakdown,
     passed_ta: list[SearchRecord],
-    ft: _FullTextStage,
+    ft_decisions: list[ScreeningDecision],
     excluded_ft: int,
     excluded_reports: list[ExcludedReport],
     ft_exclusion_reasons: dict[str, int],
     included: list[SearchRecord],
 ) -> PrismaCounts:
-    """Conteos PRISMA 2020 de la corrida (diagrama, tabla, CSV y manifiesto)."""
+    """Conteos PRISMA 2020 de la corrida (diagrama, tabla, CSV y manifiesto).
+
+    Un no recuperado que el humano rescató (D2) cuenta como evaluado; uno sin
+    rescate, como no recuperado (spec §4.4, relación 8).
+    """
+    not_retrieved = [d for d in ft_decisions if d.fulltext_status == "not_retrieved"]
+    unrescued = sum(1 for d in not_retrieved if d.human_label is None)
     identified_by_source: dict[str, int] = {}
     for r in raw_records:
         identified_by_source[r.source_db] = identified_by_source.get(r.source_db, 0) + 1
@@ -973,9 +1014,9 @@ def _build_counts(
         excluded_ta_human=ta_breakdown.excluded_human,
         excluded_ta_ai=ta_breakdown.excluded_ai,
         fulltext_sought=len(passed_ta),
-        fulltext_not_retrieved=ft.not_retrieved,
-        fulltext_rescued=0,  # los rescates humanos llegan con el HITL por registro (PR-D)
-        fulltext_assessed=len(passed_ta) - ft.not_retrieved,
+        fulltext_not_retrieved=unrescued,
+        fulltext_rescued=len(not_retrieved) - unrescued,
+        fulltext_assessed=len(passed_ta) - unrescued,
         excluded_ft=excluded_ft,
         excluded_ft_human=sum(1 for r in excluded_reports if r.reason_source == "human"),
         excluded_ft_ai=sum(1 for r in excluded_reports if r.reason_source == "ai"),
@@ -997,9 +1038,24 @@ def _write_deliverables(
     extraction_agreement: ExtractionAgreement | None,
     meta_result: MetaAnalysisResult | None,
     meta_display: str,
+    forced_human: bool,
 ) -> Path:
-    """Escribe el entregable completo (``deliverable/``) y devuelve su carpeta."""
+    """Escribe el entregable completo (``deliverable/``) y devuelve su carpeta.
+
+    El checklist trAIce y ``metodologia.md`` dicen quién decidió cada gate según
+    el ledger (M13). Se escriben antes del gate final: ``reporte`` figura siempre
+    pendiente, aunque el ledger ya tenga una decisión suya de una vuelta anterior
+    (un rechazo que la corrida reanudada va a sustituir; D14): ni se le atribuye
+    al documento una decisión que no es la que lo cierra, ni su texto cambia al
+    reanudar una corrida ya completada.
+    """
     protocol = run.protocol
+    gates = {
+        stage: summary
+        for stage, summary in summarize_gates(run.ctx.ledger.read_all()).items()
+        if stage != "reporte"
+    }
+    autonomy_effective = _autonomy_effective(protocol, forced_human=forced_human)
     search_log = read_search_log(run.ctx.run_dir)
     deliverable = run.ctx.deliverable_dir()
     (deliverable / "documento.md").write_text(
@@ -1031,6 +1087,9 @@ def _write_deliverables(
             exclusions=exclusion_breakdown,
             extraction_agreement=extraction_agreement,
             search_log=search_log,
+            gates=gates,
+            autonomy_effective=autonomy_effective,
+            forced_human=forced_human,
         ),
         encoding="utf-8",
     )
@@ -1064,7 +1123,9 @@ def _write_deliverables(
     (deliverable / "checklist_traice.md").write_text(
         render_traice_checklist(
             run.ctx.metas,
-            dict(protocol.autonomy),
+            autonomy_effective,
+            gates=gates,
+            forced_human=forced_human,
             metrics=run.metrics,
             exclusions=exclusion_breakdown,
             search_window=protocol.search_window,
@@ -1088,6 +1149,36 @@ def _write_deliverables(
             render_metafor_csv(meta_result), encoding="utf-8"
         )
     return deliverable
+
+
+def _flags_adjudicated_by(marcadas: FlagPolicy | None, gate: GateResult) -> str | None:
+    """El humano que adjudicó cada cita marcada en la decisión efectiva de ``reporte``.
+
+    ``None`` si no había citas marcadas, si el actor no es un humano identificado o si
+    falta alguna por adjudicar (``flag_review`` con veredicto en la decisión efectiva).
+    El CLI lo usa para no mandar a «revisar» unas citas que un humano ya adjudicó.
+    """
+    if marcadas is None or not marcadas.flagged or gate.actor is None:
+        return None
+    if not is_human_actor(gate.actor):
+        return None
+    adjudicadas = {i for i, r in gate.flag_reviews.items() if r.verdict is not None}
+    if {str(c.index) for c in marcadas.flagged} <= adjudicadas:
+        return gate.actor
+    return None
+
+
+def _autonomy_effective(protocol: ReviewProtocol, *, forced_human: bool) -> dict[str, str]:
+    """Autonomía con la que se aplica cada gate (spec §4.3, ``autonomy_effective``).
+
+    Con citas marcadas (M5) el gate final exige humano: una autonomía A2/A3
+    declarada para ``reporte`` pasa a A1. Una A0/A1 declarada no cambia, y sin citas
+    marcadas ninguna cambia: el manifiesto dice lo que de verdad ocurrió, no lo que
+    el protocolo declaraba.
+    """
+    effective = {g: protocol.autonomy_for(g) for g in GATED_STAGES}
+    effective["reporte"] = effective_autonomy(effective["reporte"], forced_human=forced_human)
+    return effective
 
 
 def run_pipeline(
@@ -1190,59 +1281,91 @@ def _run_stages(
     deduped, discarded = _dedup(run, raw_records)
     run.stage = "screening_ta"
     decisions = _screen_ta(run, deduped, _load_gold(run, gold_labels))
+    ta_autonomy = protocol.autonomy_for("screening_ta")
+    ta_gate = run.gate(
+        "screening_ta",
+        ta_payload(
+            decisions=decisions,
+            records=deduped,
+            autonomy=ta_autonomy,
+            metrics=run.metrics,
+            thresholds=protocol.thresholds,
+        ),
+        records=ta_policy(decisions=decisions, records=deduped, autonomy=ta_autonomy),
+    )
+    if (stop := run.stop(ta_gate, "screening_ta")) is not None:
+        return stop
+    # D5: solo las etiquetas explícitas pasan a human_label; decisions.json se
+    # reescribe con ellas (spec §4.2). Una aprobación en bloque o --auto-approve
+    # no trae ninguna: la exclusión sigue siendo "IA avalada" (trAIce R1).
+    decisions = apply_labels(decisions, ta_gate.labels, ta_gate.actor)
+    run.ctx.write_json("03_screening/decisions.json", [d.model_dump() for d in decisions])
     passed = {d.record_id for d in decisions if d.final_label in {"include", "unclear"}}
     excluded_ta = sum(1 for d in decisions if d.final_label == "exclude")
-    ta_payload = {
-        "n_screened": len(deduped),
-        "n_pass": len(passed),
-        "n_excluded": excluded_ta,
-        "pass_ids": sorted(passed),
-    }
-    if (stop := run.stop(run.gate("screening_ta", ta_payload), "screening_ta")) is not None:
-        return stop
 
     passed_ta = [r for r in deduped if r.record_id in passed]
     run.stage = "screening_ft"
     ft = _fulltext(run, passed_ta, fetch_fn)
-    # Hasta PR-D un `unclear` de FT sigue pasando (lo resolverá un humano, D1).
-    included_ids = {d.record_id for d in ft.decisions if d.final_label in {"include", "unclear"}}
-    excluded_ft = sum(1 for d in ft.decisions if d.final_label == "exclude")
-    ft_payload = {
-        "n_buscados": len(passed_ta),
-        "n_no_recuperados": ft.not_retrieved,
-        "n_evaluados": len(passed_ta) - ft.not_retrieved,
-        "n_incluidos": len(included_ids),
-        "n_excluidos": excluded_ft,
-    }
-    if (stop := run.stop(run.gate("screening_ft", ft_payload), "screening_ft")) is not None:
+    ft_autonomy = protocol.autonomy_for("screening_ft")
+    # La decisión (y un rescate, D2) queda atada al `request_sha256` de lo que el humano vio.
+    # Un no recuperado transitorio (`TRANSIENT_FULLTEXT_REASONS`) se reintenta al reanudar: si
+    # entonces llega el texto, el informe pasa a recuperado y con propuesta IA, la solicitud
+    # cambia y el gate vuelve a pausar con la nueva; el rescate viejo no se aplica ni se
+    # registra (el humano decide de nuevo, ya con el texto).
+    ft_gate = run.gate(
+        "screening_ft",
+        ft_payload(
+            decisions=ft.decisions, records=passed_ta, retrieval=ft.retrieval, autonomy=ft_autonomy
+        ),
+        records=ft_policy(
+            decisions=ft.decisions, records=passed_ta, retrieval=ft.retrieval, autonomy=ft_autonomy
+        ),
+    )
+    if (stop := run.stop(ft_gate, "screening_ft")) is not None:
         return stop
+    # Un `unclear` nunca pasa sin etiqueta humana (D1, D9) y un rescate entra como evaluado
+    # por un humano (D2): solo `include` llega a extracción.
+    ft_decisions = apply_labels(ft.decisions, ft_gate.labels, ft_gate.actor)
+    run.ctx.write_json("04_fulltext/decisions.json", [d.model_dump() for d in ft_decisions])
+    included_ids = {d.record_id for d in ft_decisions if d.final_label == "include"}
+    excluded_ft = sum(1 for d in ft_decisions if d.final_label == "exclude")
     included = [r for r in passed_ta if r.record_id in included_ids]
 
     # Desglose de exclusiones humano vs IA (PRISMA-trAIce) sobre ambas fases; el
     # de solo T/A alimenta la nota ** del flow diagram oficial (trAIce R1).
-    exclusion_breakdown = compute_exclusion_breakdown(decisions + ft.decisions)
+    exclusion_breakdown = compute_exclusion_breakdown(decisions + ft_decisions)
     run.ctx.write_json("03_screening/exclusions.json", exclusion_breakdown.model_dump())
     ta_breakdown = compute_exclusion_breakdown(decisions)
     # Informes excluidos en elegibilidad (16b) y sus razones (cajas "Reason 1..n"
     # del flow oficial): una sola lista para el diagrama, la tabla y el auditor.
-    excluded_reports = compute_ft_excluded(ft.decisions, passed_ta)
+    excluded_reports = compute_ft_excluded(ft_decisions, passed_ta)
     run.ctx.write_json("04_fulltext/excluded.json", [r.model_dump() for r in excluded_reports])
     ft_exclusion_reasons = dict(Counter(r.reason for r in excluded_reports))
 
     run.stage = "extraccion"
     extractions, extraction_agreement = _extract(run, included, ft.texts)
-    extraction_gate = run.gate("extraccion", {"n_extraidos": len(extractions)})
+    # Extracción y RoB se aprueban por etapa (D1): la solicitud lleva la tabla
+    # completa por estudio y el hash del artefacto aprobado.
+    extraction_gate = run.gate(
+        "extraccion",
+        extraction_payload(
+            included=included, extractions=extractions, agreement=extraction_agreement
+        ),
+    )
     if (stop := run.stop(extraction_gate, "extraccion")) is not None:
         return stop
     run.stage = "rob"
     assessments = _assess_rob(run, included, extractions, ft.texts)
-    rob_gate = run.gate("rob", {"n_evaluados": len(assessments), "tool": protocol.rob_tool})
+    rob_gate = run.gate(
+        "rob", rob_payload(tool=protocol.rob_tool, included=included, assessments=assessments)
+    )
     if (stop := run.stop(rob_gate, "rob")) is not None:
         return stop
 
     run.stage = "sintesis"
     meta_result, meta_display = _meta_analysis(run)
     narrative, verification = _synthesize_and_verify(run, included, extractions, ft.texts, embedder)
+    forced = verification.hallucination_flagged  # recalculada de las citas al verificar
     run.stage = "reporte"
     counts = _build_counts(
         raw_records=raw_records,
@@ -1251,7 +1374,7 @@ def _run_stages(
         excluded_ta=excluded_ta,
         ta_breakdown=ta_breakdown,
         passed_ta=passed_ta,
-        ft=ft,
+        ft_decisions=ft_decisions,
         excluded_ft=excluded_ft,
         excluded_reports=excluded_reports,
         ft_exclusion_reasons=ft_exclusion_reasons,
@@ -1269,26 +1392,35 @@ def _run_stages(
         extraction_agreement=extraction_agreement,
         meta_result=meta_result,
         meta_display=meta_display,
+        forced_human=forced,
     )
 
     # Checkpoint final del reporte (A1). La solicitud no lleva rutas absolutas (su
     # hash tiene que ser estable entre reanudaciones): el documento va por su hash.
+    # Con citas marcadas el gate exige humano y cada cita se adjudica (M5, D8).
     documento = (deliverable / "documento.md").read_text(encoding="utf-8")
+    marcadas = report_policy(verification)
     final_gate = run.gate(
         "reporte",
-        {
-            "included": len(included),
-            "hallucination_flagged": verification.hallucination_flagged,
-            "documento_sha256": sha256_text(documento),
-        },
+        report_payload(
+            included=included,
+            verification=verification,
+            documento=documento,
+            grounding_mode=protocol.grounding,
+            forced_human=forced,
+        ),
+        flags=marcadas,
+        force_human=forced,
     )
     # Un reporte rechazado ya no se informa como "completed" (auditoría
     # 2026-09-03, C1). El estado va a run.json antes del manifiesto, que lo copia.
     status, message, stage = final_gate.status, final_gate.message, "reporte"
+    adjudicadas_por = None
     if final_gate.status == "approved":
         status = "completed"
         message = f"Revisión completada · {counts.included} estudios incluidos."
         stage = None
+        adjudicadas_por = _flags_adjudicated_by(marcadas, final_gate)
     run.finish(status, stage)
     manifest_extra: dict = {
         "verification": verification.model_dump(),
@@ -1304,8 +1436,8 @@ def _run_stages(
     run.ctx.write_manifest(
         protocol_snapshot=protocol.model_dump(mode="json"),
         counts=counts.model_dump(),
-        autonomy_effective={g: protocol.autonomy_for(g) for g in GATED_STAGES},
-        final_gate={"forced_human": False, "reason": None},
+        autonomy_effective=_autonomy_effective(protocol, forced_human=forced),
+        final_gate={"forced_human": forced, "reason": "hallucination_flagged" if forced else None},
         extra=manifest_extra,
     )
     return PipelineResult(
@@ -1318,4 +1450,5 @@ def _run_stages(
         metrics=run.metrics,
         run_dir=run.ctx.run_dir,
         stage=stage,
+        flags_adjudicated_by=adjudicadas_por,
     )
