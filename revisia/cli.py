@@ -1,8 +1,9 @@
 """Interfaz de línea de comandos de revisia.
 
 Subcomandos:
-  * ``revisia validate <dir>`` — carga y valida un protocol.yml y muestra
-    el pipeline configurado (etapas, autonomía, proveedor por etapa).
+  * ``revisia validate <dir>`` — carga y valida un protocol.yml, corre el
+    preflight sin red (proveedores, SDK, keys, bases, modelos retirados) y
+    muestra el pipeline configurado (etapas, autonomía, proveedor por etapa).
   * ``revisia run <dir>`` — ejecuta el pipeline end-to-end (tracer bullet),
     con checkpoints humanos. Usa ``--auto-approve`` para correrlo sin pausas.
 """
@@ -19,7 +20,7 @@ from pydantic import ValidationError
 
 from revisia import __version__
 from revisia.config import STAGES, load_protocol
-from revisia.llm.deprecations import retirement_for
+from revisia.llm.preflight import PreflightReport, preflight
 from revisia.llm.providers.gemini import DEFAULT_MODEL as GEMINI_DEFAULT_MODEL
 from revisia.metrics import fmt_metric
 
@@ -56,48 +57,45 @@ def _today() -> date:
     return date.today()
 
 
-def _configured_models(protocol) -> list[str]:
-    """Ids de modelo de todas las etapas y miembros de ensemble del protocolo."""
-    models = {cfg.model for cfg in protocol.llm.values()}
-    models |= {cfg.model for members in protocol.ensemble_llm.values() for cfg in members}
-    return sorted(models)
+def _load_dotenv() -> None:
+    """Carga ``.env`` sin sobrescribir el entorno (D10).
 
-
-def _retired_model_problems(protocol, today: date) -> tuple[list[str], list[str]]:
-    """Modelos retirados del protocolo configurado: ``(errores, avisos)``.
-
-    Un modelo ya apagado es un error (bloquea `validate`/`run`); uno con
-    retiro futuro es solo un aviso. Función compartida por `_cmd_validate` y
-    por `run` en `main()` para que el quickstart (que llama a `revisia run`
-    directamente, sin pasar por `validate`) también se ataje aquí, antes del
-    404 a mitad de corrida (auditoría 2026-09-03, C4; revisión final, ítem 3).
+    El README pide poner la API key en ``.env``, pero hasta la Ola 1 ningún
+    módulo lo leía (``python-dotenv`` era dependencia sin uso). Se busca desde
+    el directorio actual hacia arriba; una variable ya definida en el entorno
+    gana siempre (``override=False``).
     """
-    errors: list[str] = []
-    warnings: list[str] = []
-    for model in _configured_models(protocol):
-        retirement = retirement_for(model)
-        if retirement is None:
-            continue
-        fecha = retirement.shutdown.isoformat()
-        if retirement.is_past(today):
-            errors.append(
-                f"el modelo {model!r} fue retirado por su proveedor el {fecha}; "
-                "las llamadas fallarán. Cámbialo en protocol.yml."
-            )
-        else:
-            warnings.append(f"el modelo {model!r} se retira el {fecha}; planifica el cambio.")
-    return errors, warnings
+    from dotenv import find_dotenv, load_dotenv
+
+    path = find_dotenv(usecwd=True)
+    if path:
+        load_dotenv(path, override=False)
+
+
+def _print_preflight(report: PreflightReport) -> None:
+    """Imprime los problemas del preflight agrupados por nivel.
+
+    Los avisos van a stdout y los errores a stderr, como el resto del CLI.
+    """
+    if report.warnings:
+        print("  Avisos del preflight:")
+        for issue in report.warnings:
+            print(f"    aviso [{issue.where}]: {issue.message}")
+    if report.errors:
+        print(f"error: el preflight encontró {len(report.errors)} error(es):", file=sys.stderr)
+        for issue in report.errors:
+            print(f"  error [{issue.where}]: {issue.message}", file=sys.stderr)
 
 
 def _cmd_validate(protocol, protocol_dir: str) -> int:
-    # Modelos retirados (auditoría 2026-09-03, C4): calculados antes para no
-    # imprimir "✓ Protocolo válido" cuando el protocolo carga pero usaría un
-    # modelo que ya no responde (revisión final, ítem 4).
-    errors, avisos_retiro = _retired_model_problems(protocol, _today())
-    if errors:
+    # Preflight sin red (auditoría 2026-09-03, M6; D10): antes devolvía 0 con
+    # "(sin proveedor)" o sin la API key. Se calcula antes de imprimir para no
+    # decir "✓ Protocolo válido" de un protocolo que no podría correr.
+    report = preflight(protocol, protocol_dir, context="validate", today=_today())
+    if report.errors:
         print(
-            f"⚠ Protocolo carga, pero usa modelo(s) retirado(s): "
-            f"{protocol.title}  [{protocol.slug}]"
+            f"✗ El protocolo carga, pero el preflight encontró {len(report.errors)} "
+            f"error(es): {protocol.title}  [{protocol.slug}]"
         )
     else:
         print(f"✓ Protocolo válido: {protocol.title}  [{protocol.slug}]")
@@ -122,11 +120,8 @@ def _cmd_validate(protocol, protocol_dir: str) -> int:
         print("  Advertencias (no bloquean la corrida):")
         for w in warns:
             print(f"    ⚠ {w}")
-    for aviso in avisos_retiro:
-        print(f"  aviso: {aviso}")
-    for error in errors:
-        print(f"error: {error}", file=sys.stderr)
-    return 2 if errors else 0
+    _print_preflight(report)
+    return 2 if report.errors else 0
 
 
 def _cmd_gold_template(args: argparse.Namespace) -> int:
@@ -483,6 +478,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _load_dotenv()
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "gold-template":
@@ -516,17 +512,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "run":
         from revisia.orchestration.hitl import DecisionFileError
 
-        # Modelos retirados (auditoría 2026-09-03, C4): el quickstart del README
-        # va directo a `run` sin pasar por `validate`, así que el 404 a mitad de
-        # corrida seguía ocurriendo. Se ataja aquí, antes de crear ninguna
-        # carpeta de corrida (revisión final, ítem 3).
-        errors, avisos_retiro = _retired_model_problems(protocol, _today())
-        if errors:
-            for error in errors:
-                print(f"error: {error}", file=sys.stderr)
+        # Preflight sin red ANTES de crear ninguna carpeta (auditoría 2026-09-03,
+        # M6 y C4): el quickstart va directo a `run` sin pasar por `validate`, y
+        # una key ausente para FT se descubría tras gastar el cribado T/A.
+        report = preflight(
+            protocol, protocol_dir, context="run", mailto=args.mailto, today=_today()
+        )
+        _print_preflight(report)
+        if report.errors:
             return 2
-        for aviso in avisos_retiro:
-            print(f"aviso: {aviso}")
 
         try:
             return _cmd_run(args)

@@ -19,6 +19,15 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   (`summarize_gates`) y `KNOWN_THRESHOLDS`. `ScreeningDecision` y `PrismaCounts`
   ganan campos opcionales, sin cambio de comportamiento. Diseño en
   `docs/superpowers/specs/2026-10-04-ola-1-remediacion-design.md`.
+- **Preflight sin red** (`revisia/llm/preflight.py`; auditoría 2026-09-03, M6):
+  antes de empezar, `revisia validate` y `revisia run` comprueban proveedor
+  conocido, SDK instalado (con el `uv sync --extra …` que falta), API key en el
+  entorno, binario `claude`, `effort` solo en `claude_code`, etapas sin
+  proveedor, bases desconocidas, cadenas de búsqueda ausentes, modelos
+  retirados y `httpx`. `run` lo hace antes de crear la carpeta de la corrida.
+- `revisia` carga `.env` (desde el directorio actual hacia arriba) sin
+  sobrescribir las variables ya definidas: el README pedía la API key ahí y
+  ningún módulo lo leía.
 
 ### Fixed
 - **`claude_code` corre sin herramientas de verdad**: `--tools ""` sustituye a
@@ -36,6 +45,16 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   autenticación por suscripción (OAuth) sigue funcionando. No se usa `--bare`
   porque exige `ANTHROPIC_API_KEY`.
 - El `effort` de `claude_code` se valida al construir el proveedor.
+
+### Changed
+- `MANUAL_ONLY` incluye CINAHL, Cochrane/CENTRAL, ProQuest, EconLit, JSTOR,
+  IEEE Xplore, ACM, ScienceDirect, EBSCO y Ovid: se incorporan por importación
+  RIS/BibTeX y el preflight no las da por desconocidas.
+
+### Cambios incompatibles
+- `revisia validate` y `revisia run` salen con código 2 ante cualquier error de
+  preflight. Antes `validate` devolvía 0 con "(sin proveedor)" o sin la API key,
+  y el fallo aparecía a mitad de corrida.
 
 ## [0.7.0] · 2026-09-28
 
