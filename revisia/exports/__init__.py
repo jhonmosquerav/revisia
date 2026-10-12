@@ -25,6 +25,7 @@ from revisia.exports.interop import (
 from revisia.exports.methods import render_methods
 from revisia.exports.prisma_flow import (
     PrismaCounts,
+    render_excluded_reports,
     render_flow_diagram,
     render_flow_markdown,
     render_flow_updated,
@@ -35,6 +36,7 @@ __all__ = [
     "assemble_html",
     "export_run",
     "render_bibtex",
+    "render_excluded_reports",
     "render_extraction_table",
     "render_flow_diagram",
     "render_flow_markdown",

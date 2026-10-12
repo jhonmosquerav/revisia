@@ -8,7 +8,9 @@ PRISMA 2020 (CC BY 4.0; Page MJ, et al. BMJ 2021;372:n71):
   eliminados antes del cribado (duplicados / automatización / otros), cribados,
   excluidos (con separación humano vs IA — nota ** de la plantilla oficial y
   requisito PRISMA-trAIce R1), informes buscados / no recuperados / evaluados,
-  excluidos con **razones**, e incluidos.
+  excluidos con **razones** (también humano vs IA), e incluidos. Un informe sin
+  texto completo no se evalúa: cuenta como "no recuperado" (PRISMA estricto, D2
+  de la Ola 1; auditoría 2026-09-03, M11).
 - **v3 · revisiones actualizadas** — :func:`render_flow_updated` añade la
   columna "estudios de la versión previa" y los totales nuevos/acumulados;
   se alimenta de la memoria del investigador (living review).
@@ -19,7 +21,12 @@ renderiza como Mermaid (portable, versionable) + tabla Markdown.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import TYPE_CHECKING
+
+from pydantic import BaseModel, Field, model_validator
+
+if TYPE_CHECKING:
+    from revisia.schemas.artifacts import ExcludedReport
 
 _FOOTER = (
     "\n> Estructura de cajas según la plantilla oficial PRISMA 2020 (CC BY 4.0). "
@@ -48,9 +55,8 @@ class PrismaCounts(BaseModel):
             nadie rescató (caja "informes no recuperados").
         fulltext_rescued: no recuperados que el revisor consiguió por otra vía
             y evaluó (D2); cuentan como evaluados.
-        fulltext_assessed: informes evaluados para elegibilidad.
-        fulltext_abstract_only: de los evaluados, cuántos sin texto completo
-            recuperable (se evaluaron con título/abstract; limitación declarada).
+        fulltext_assessed: informes evaluados para elegibilidad
+            (``fulltext_sought − fulltext_not_retrieved``).
         excluded_ft: excluidos en la evaluación de elegibilidad.
         excluded_ft_human: de los excluidos en elegibilidad, cuántos por
             decisión humana (PRISMA-trAIce R1).
@@ -73,12 +79,35 @@ class PrismaCounts(BaseModel):
     fulltext_not_retrieved: int = 0
     fulltext_rescued: int = 0
     fulltext_assessed: int = 0
-    fulltext_abstract_only: int = 0
     excluded_ft: int = 0
     excluded_ft_human: int = 0
     excluded_ft_ai: int = 0
     ft_exclusion_reasons: dict[str, int] = Field(default_factory=dict)
     included: int = 0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _manifiesto_anterior_a_la_ola_1(cls, data: object) -> object:
+        """Lee los conteos de un manifiesto v0.7 sin inventar nada (D13).
+
+        Antes de la Ola 1 no existía ``fulltext_sought``: todo registro que
+        pasaba T/A se "evaluaba" (con el abstract si no había texto completo) y
+        ningún humano etiquetaba registros. Lo que de verdad pasó: buscados =
+        evaluados, no recuperados = 0 y todas las exclusiones en elegibilidad
+        son de la IA. ``fulltext_abstract_only`` se retira (contaba evaluaciones
+        con el abstract, que ya no existen, D2).
+        """
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        data.pop("fulltext_abstract_only", None)
+        if "fulltext_sought" not in data:
+            data["fulltext_sought"] = data.get("fulltext_assessed", 0)
+            data.setdefault("fulltext_not_retrieved", 0)
+            if "excluded_ft_human" not in data and "excluded_ft_ai" not in data:
+                data["excluded_ft_human"] = 0
+                data["excluded_ft_ai"] = data.get("excluded_ft", 0)
+        return data
 
 
 def _by_source_lines(counts: PrismaCounts) -> str:
@@ -96,6 +125,12 @@ def _ta_split(counts: PrismaCounts) -> str:
     return f"<br/>por humano (n = {human}) · por IA (n = {ai})**"
 
 
+def _ft_split(counts: PrismaCounts) -> str:
+    return (
+        f"<br/>por humano (n = {counts.excluded_ft_human}) · por IA (n = {counts.excluded_ft_ai})**"
+    )
+
+
 def _reason_lines(counts: PrismaCounts) -> str:
     if not counts.ft_exclusion_reasons:
         return ""
@@ -105,6 +140,11 @@ def _reason_lines(counts: PrismaCounts) -> str:
 
 def render_flow_diagram(counts: PrismaCounts) -> str:
     """Renderiza el flow diagram PRISMA 2020 (plantilla v1 oficial) en Mermaid."""
+    rescued = (
+        f"<br/>(rescatados por el revisor: n = {counts.fulltext_rescued})***"
+        if counts.fulltext_rescued
+        else ""
+    )
     lines = [
         "```mermaid",
         "flowchart TB",
@@ -120,16 +160,16 @@ def render_flow_diagram(counts: PrismaCounts) -> str:
         '    subgraph FASE_SCR["Cribado"]',
         f'        C["Registros cribados (n = {counts.screened})"]',
         f'        D["Registros excluidos (n = {counts.excluded_ta}){_ta_split(counts)}"]',
+        f'        S["Informes buscados para recuperación (n = {counts.fulltext_sought})"]',
+        f'        N["Informes no recuperados (n = {counts.fulltext_not_retrieved})"]',
         f'        E["Informes evaluados para elegibilidad (n = {counts.fulltext_assessed})'
-        + (
-            f"<br/>(sin texto completo recuperable: n = {counts.fulltext_abstract_only})***"
-            if counts.fulltext_abstract_only
-            else ""
-        )
-        + '"]',
-        f'        F["Informes excluidos (n = {counts.excluded_ft}){_reason_lines(counts)}"]',
+        f'{rescued}"]',
+        f'        F["Informes excluidos (n = {counts.excluded_ft}){_ft_split(counts)}'
+        f'{_reason_lines(counts)}"]',
         "        C --> D",
-        "        C --> E",
+        "        C --> S",
+        "        S --> N",
+        "        S --> E",
         "        E --> F",
         "    end",
         '    subgraph FASE_INC["Incluidos"]',
@@ -144,11 +184,10 @@ def render_flow_diagram(counts: PrismaCounts) -> str:
         "\\** Separación de exclusiones humano vs automatización: nota ** de la "
         "plantilla oficial y requisito PRISMA-trAIce (ítem R1).",
     ]
-    if counts.fulltext_abstract_only:
+    if counts.fulltext_rescued:
         lines.append(
-            "\\*** El motor evalúa la elegibilidad de todos los informes; los que no "
-            "tienen texto completo en abierto se evalúan con título/abstract "
-            "(limitación declarada, cuenta como 'no recuperado' a efectos de lectura)."
+            "\\*** Informes que el motor no pudo recuperar en abierto y que el revisor "
+            "consiguió por otra vía: los evaluó el humano, no la IA."
         )
     lines.append(_FOOTER)
     return "\n".join(lines)
@@ -223,14 +262,56 @@ def render_flow_markdown(counts: PrismaCounts) -> str:
             ("— excluidos por IA", counts.excluded_ta_ai or 0),
         ]
     rows += [
+        ("Informes buscados para recuperación", counts.fulltext_sought),
+        ("Informes no recuperados", counts.fulltext_not_retrieved),
         ("Informes evaluados para elegibilidad", counts.fulltext_assessed),
     ]
-    if counts.fulltext_abstract_only:
-        rows.append(("— evaluados sin texto completo (solo T/A)", counts.fulltext_abstract_only))
-    rows.append(("Excluidos en elegibilidad", counts.excluded_ft))
+    if counts.fulltext_rescued:
+        rows.append(("— rescatados por el revisor", counts.fulltext_rescued))
+    rows += [
+        ("Excluidos en elegibilidad", counts.excluded_ft),
+        ("— excluidos por humano (elegibilidad)", counts.excluded_ft_human),
+        ("— excluidos por IA (elegibilidad)", counts.excluded_ft_ai),
+    ]
     for reason, n in sorted(counts.ft_exclusion_reasons.items(), key=lambda kv: (-kv[1], kv[0])):
         rows.append((f"— razón: {reason}", n))
     rows.append(("Incluidos", counts.included))
     lines = ["| Etapa | n |", "|---|---|"]
     lines += [f"| {label} | {value} |" for label, value in rows]
     return "\n".join(lines)
+
+
+_ORIGEN = {"human": "humano", "ai": "IA"}
+
+
+def _md_cell(value: object) -> str:
+    """Celda de tabla Markdown: una sola línea y con ``|`` escapado."""
+    return " ".join(str(value).split()).replace("|", "\\|")
+
+
+def render_excluded_reports(reports: list[ExcludedReport]) -> str:
+    """Informes excluidos en elegibilidad con su razón (PRISMA 2020, ítem 16b).
+
+    Va a ``deliverable/excluidos_texto_completo.md``. Cada fila dice si la razón
+    la dio un humano o la IA (PRISMA-trAIce R1): una exclusión de la IA que
+    nadie revisó no se presenta como juicio humano.
+    """
+    lines = [
+        "# Informes excluidos tras evaluar el texto completo",
+        "",
+        "PRISMA 2020, ítem 16b: informes evaluados para elegibilidad y excluidos, "
+        "con su razón y quién la dio (PRISMA-trAIce R1).",
+        "",
+    ]
+    if not reports:
+        lines.append("_(ningún informe excluido en la evaluación de elegibilidad)_")
+        return "\n".join(lines) + "\n"
+    lines += ["| Informe | Año | DOI | Razón | Origen |", "|---|---|---|---|---|"]
+    for rep in reports:
+        year = "—" if rep.year is None else str(rep.year)
+        doi = _md_cell(rep.doi) if rep.doi else "—"
+        lines.append(
+            f"| {_md_cell(rep.title)} (`{_md_cell(rep.record_id)}`) | {year} | {doi} "
+            f"| {_md_cell(rep.reason)} | {_ORIGEN[rep.reason_source]} |"
+        )
+    return "\n".join(lines) + "\n"

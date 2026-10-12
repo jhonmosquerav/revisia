@@ -28,6 +28,12 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - `revisia` carga `.env` (desde el directorio actual hacia arriba) sin
   sobrescribir las variables ya definidas: el README pedía la API key ahí y
   ningún módulo lo leía.
+- `deliverable/excluidos_texto_completo.md` y `04_fulltext/excluded.json`:
+  informes excluidos al evaluar el texto completo, con su razón y su origen
+  humano/IA (PRISMA 2020, ítem 16b; PRISMA-trAIce R1).
+- `04_fulltext/retrieval.json`: por cada informe buscado, si se recuperó y, si
+  no, por qué (`sin_url_oa`, `sin_httpx`, `error_http`, `texto_vacio`,
+  `no_disponible`).
 
 ### Fixed
 - **`claude_code` corre sin herramientas de verdad**: `--tools ""` sustituye a
@@ -45,16 +51,32 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   autenticación por suscripción (OAuth) sigue funcionando. No se usa `--bare`
   porque exige `ANTHROPIC_API_KEY`.
 - El `effort` de `claude_code` se valida al construir el proveedor.
+- CSV del paquete PRISMA2020: `dbr_notretrieved_reports` era un 0 literal y
+  `dbr_sought_reports` copiaba los evaluados; ahora llevan los conteos reales
+  (auditoría 2026-09-03, M11).
 
 ### Changed
 - `MANUAL_ONLY` incluye CINAHL, Cochrane/CENTRAL, ProQuest, EconLit, JSTOR,
   IEEE Xplore, ACM, ScienceDirect, EBSCO y Ovid: se incorporan por importación
   RIS/BibTeX y el preflight no las da por desconocidas.
+- **Texto completo con PRISMA estricto** (auditoría 2026-09-03, M11): un
+  registro sin texto completo recuperable ya no se criba con IA ni cuenta como
+  evaluado; va a la caja "informes no recuperados". El diagrama, su tabla y
+  `metodologia.md` informan de buscados, no recuperados y evaluados, y las
+  exclusiones en elegibilidad se desglosan por humano/IA.
+- `runs/` se ignora entero (M23): una corrida pertenece a su revisión, no al
+  motor; se deposita en OSF/Zenodo o junto al protocolo. Las negaciones
+  anteriores (`!runs/*/manifest.yml`) nunca funcionaron.
 
 ### Cambios incompatibles
 - `revisia validate` y `revisia run` salen con código 2 ante cualquier error de
   preflight. Antes `validate` devolvía 0 con "(sin proveedor)" o sin la API key,
   y el fallo aparecía a mitad de corrida.
+- Desaparece `PrismaCounts.fulltext_abstract_only`. Los manifiestos anteriores
+  se siguen leyendo (buscados = evaluados, no recuperados = 0), así que
+  `revisia export` funciona con corridas viejas.
+- Los registros sin texto completo ya no llegan a extracción. Con el demo sin
+  el extra `search` ni `--mailto` puede no quedar ningún estudio incluido.
 
 ## [0.7.0] · 2026-09-28
 

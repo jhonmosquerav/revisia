@@ -107,8 +107,10 @@ def render_prisma2020_flow_csv(counts: PrismaCounts, *, meta_k: int | None = Non
         "excluded_other": counts.removed_other,
         "records_screened": counts.screened,
         "records_excluded": counts.excluded_ta,
-        "dbr_sought_reports": counts.fulltext_assessed,
-        "dbr_notretrieved_reports": 0,
+        # Cajas de texto completo con los conteos reales (auditoría 2026-09-03,
+        # M11: `dbr_notretrieved_reports` era un 0 literal).
+        "dbr_sought_reports": counts.fulltext_sought,
+        "dbr_notretrieved_reports": counts.fulltext_not_retrieved,
         "dbr_assessed": counts.fulltext_assessed,
         "dbr_excluded": (
             _semi_list(counts.ft_exclusion_reasons) if counts.ft_exclusion_reasons else 0

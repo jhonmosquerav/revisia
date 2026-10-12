@@ -8,6 +8,11 @@ manual de PDFs llegará después).
 
 Dependencias opcionales: ``httpx`` (extra ``search``) para descargar y
 ``pypdf`` para extraer PDFs. Sin ellas, cae al abstract sin romper.
+
+Cada fallo deja su motivo en ``FullText.reason`` (y un ``detail`` redactado):
+hasta la Ola 1 un registro sin texto se cribaba con el abstract y el motivo se
+perdía (auditoría 2026-09-03, M11). El pipeline ya no criba esos registros
+(D2): van a la caja "informes no recuperados" del diagrama PRISMA.
 """
 
 from __future__ import annotations
@@ -15,7 +20,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from revisia.agents import ncbi
+from revisia.agents import _http, ncbi
+from revisia.schemas.artifacts import FulltextReason
 from revisia.schemas.records import SearchRecord
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -25,11 +31,18 @@ _WS_RE = re.compile(r"\s+")
 
 @dataclass(slots=True)
 class FullText:
-    """Resultado de la adquisición de texto completo."""
+    """Resultado de la adquisición de texto completo.
+
+    ``reason`` es ``None`` si y solo si ``available``. Si no se recuperó,
+    ``text`` sigue llevando el abstract por compatibilidad, pero el pipeline lo
+    ignora (D2). ``detail`` va redactado (``_http.redact_secrets``).
+    """
 
     text: str
     available: bool
     source_url: str | None = None
+    reason: FulltextReason | None = None
+    detail: str | None = None
 
 
 def strip_html(html: str) -> str:
@@ -107,7 +120,14 @@ def fetch_fulltext(
     Prioridad: BioC-PMC (texto estructurado, sin parsear PDF) si hay PMCID
     resoluble > raspado OA (``extra.fulltext_url``/``oa_url``) > Unpaywall.
     """
-    fallback = FullText(text=record.abstract or "", available=False)
+
+    def fallback(reason: FulltextReason, detail: str) -> FullText:
+        return FullText(
+            text=record.abstract or "",
+            available=False,
+            reason=reason,
+            detail=_http.redact_secrets(detail),
+        )
 
     # 1) BioC-PMC: texto completo estructurado si el registro está en el subconjunto OA.
     pmcid = _resolve_pmcid(record, mailto=mailto)
@@ -123,19 +143,23 @@ def fetch_fulltext(
     # 2) Fallback: raspado OA / Unpaywall (comportamiento previo, intacto).
     url = resolve_oa_url(record, mailto=mailto)
     if not url:
-        return fallback
+        return fallback(
+            "sin_url_oa",
+            "sin URL de acceso abierto (ni PMCID con texto en BioC, ni oa_url, ni "
+            "Unpaywall)" + ("" if mailto else "; sin --mailto no se consulta Unpaywall"),
+        )
     try:
         import httpx
-    except ImportError:  # pragma: no cover
-        return fallback
+    except ImportError:
+        return fallback("sin_httpx", "httpx no está instalado (extra `search`)")
     try:
         with httpx.Client(timeout=60.0, follow_redirects=True) as client:
             resp = client.get(url)
             resp.raise_for_status()
             content_type = resp.headers.get("content-type", "")
             raw = resp.content
-    except Exception:
-        return fallback
+    except Exception as exc:  # red, 4xx/5xx, TLS…: no recuperado, con su motivo
+        return fallback("error_http", f"{type(exc).__name__}: {exc}")
 
     if "pdf" in content_type.lower() or url.lower().endswith(".pdf"):
         text = _extract_pdf(raw)
@@ -143,5 +167,5 @@ def fetch_fulltext(
         text = strip_html(raw.decode("utf-8", errors="ignore"))
 
     if not text:
-        return fallback
+        return fallback("texto_vacio", f"{url} no devolvió texto extraíble")
     return FullText(text=text[:max_chars], available=True, source_url=url)

@@ -12,8 +12,10 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from revisia.cli import main
+from revisia.exports import PrismaCounts
 from revisia.exports.document import assemble_html, export_run
 
 # PNG real de 1×1 px: verifica el embebido base64 sin depender de matplotlib.
@@ -108,6 +110,21 @@ def run_dir(tmp_path: Path) -> Path:
     (assets / "forest.png").write_bytes(_PNG_1PX)
     (assets / "funnel.png").write_bytes(_PNG_1PX)
     return run
+
+
+def test_counts_manifiesto_antiguo_se_lee_sin_mentir(run_dir: Path) -> None:
+    # Manifiesto v0.7 (D13): sin fulltext_sought y con el campo retirado
+    # fulltext_abstract_only. Lo que de verdad pasó: los 28 se "evaluaron" (10
+    # con el abstract), nada quedó como no recuperado y nadie etiquetó.
+    counts = PrismaCounts.model_validate(yaml.safe_load(_MANIFEST)["counts"])
+    assert counts.fulltext_sought == counts.fulltext_assessed == 28
+    assert counts.fulltext_not_retrieved == 0
+    assert (counts.excluded_ft_human, counts.excluded_ft_ai) == (0, 3)
+    assert "fulltext_abstract_only" not in counts.model_dump()
+    # Sigue siendo exportable: la tabla del flujo sale del manifiesto antiguo.
+    html = assemble_html(run_dir)
+    assert "Informes buscados para recuperación" in html
+    assert "Informes no recuperados" in html
 
 
 def test_html_autocontenido_sin_recursos_externos(run_dir: Path) -> None:

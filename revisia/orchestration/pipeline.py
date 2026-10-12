@@ -9,6 +9,7 @@ poder testearla offline con el proveedor ``fake``.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,10 +26,11 @@ from revisia.agents import screening as screening_agent
 from revisia.agents import screening_ft as screening_ft_agent
 from revisia.agents import verificador as verificador_agent
 from revisia.config import ReviewProtocol
-from revisia.exclusions import compute_exclusion_breakdown
+from revisia.exclusions import compute_exclusion_breakdown, compute_ft_excluded
 from revisia.exports import (
     PrismaCounts,
     render_bibtex,
+    render_excluded_reports,
     render_extraction_table,
     render_flow_diagram,
     render_flow_markdown,
@@ -54,11 +56,14 @@ from revisia.meta_analysis import meta_analyze
 from revisia.metrics import ScreeningMetrics, compute_screening_metrics
 from revisia.orchestration.hitl import review_gate
 from revisia.orchestration.run_context import RunContext
+from revisia.provenance.runmeta import sha256_text
 from revisia.rag.embed import Embedder, HashEmbedder
+from revisia.schemas.artifacts import RetrievalOutcome
 from revisia.schemas.effects import EffectInput
 from revisia.schemas.extraction import ExtractionRecord
 from revisia.schemas.records import SearchRecord
 from revisia.schemas.rob import RoBAssessment
+from revisia.schemas.screening import ScreeningDecision
 
 SearchFn = Callable[[str, int], list[SearchRecord]]
 FetchFn = Callable[[SearchRecord], fulltext_agent.FullText]
@@ -260,18 +265,46 @@ def run_pipeline(
     passed_ta = [r for r in deduped if r.record_id in passed]
 
     # ── 5. Texto completo + cribado a full-text (A0) ────────────────────
+    # PRISMA estricto (D2; auditoría 2026-09-03, M11): un informe sin texto
+    # completo NO se criba con IA (antes se cribaba con el abstract y contaba
+    # como evaluado). Queda como "no recuperado", con su motivo en
+    # 04_fulltext/retrieval.json, y no llega a extracción.
     fetch = fetch_fn or (lambda rec: fulltext_agent.fetch_fulltext(rec, mailto=mailto))
     ft_cfg = protocol.provider_for("screening_ft")
     ft_provider = build_provider(ft_cfg)
     ft_model = f"{ft_cfg.provider}:{ft_cfg.model}"
     fulltexts: dict[str, str] = {}
-    ft_decisions = []
-    ft_abstract_only = 0
+    ft_decisions: list[ScreeningDecision] = []
+    retrieval: list[dict] = []
     for record in passed_ta:
         ft = fetch(record)
         if not ft.available:
-            ft_abstract_only += 1
-        fulltexts[record.record_id] = ft.text or (record.abstract or "")
+            # Un fetch_fn inyectado puede no dar motivo: el genérico es no_disponible.
+            outcome = RetrievalOutcome(
+                available=False,
+                source_url=ft.source_url,
+                reason=ft.reason or "no_disponible",
+                detail=ft.detail,
+            )
+            retrieval.append({"record_id": record.record_id, **outcome.model_dump()})
+            ft_decisions.append(
+                ScreeningDecision(
+                    record_id=record.record_id,
+                    phase="fulltext",
+                    fulltext_status="not_retrieved",
+                    votes=[],
+                    ensemble_label=None,
+                )
+            )
+            continue
+        outcome = RetrievalOutcome(
+            available=True,
+            source_url=ft.source_url,
+            n_chars=len(ft.text),
+            text_sha256=sha256_text(ft.text),
+        )
+        retrieval.append({"record_id": record.record_id, **outcome.model_dump()})
+        fulltexts[record.record_id] = ft.text
         decision, meta = screening_ft_agent.screen_fulltext(
             ft_provider,
             ft_model,
@@ -282,11 +315,15 @@ def run_pipeline(
             temperature=ft_cfg.temperature,
             seed=ft_cfg.seed,
         )
+        decision.fulltext_status = "retrieved"
         decision.final_label = decision.human_label or decision.ensemble_label
         ft_decisions.append(decision)
         run_ctx.record_meta(meta)
+    run_ctx.write_json("04_fulltext/retrieval.json", retrieval)
     run_ctx.write_json("04_fulltext/decisions.json", [d.model_dump() for d in ft_decisions])
 
+    not_retrieved = sum(1 for d in ft_decisions if d.fulltext_status == "not_retrieved")
+    # Hasta PR-D un `unclear` de FT sigue pasando (lo resolverá un humano, D1).
     included_ids = {d.record_id for d in ft_decisions if d.final_label in {"include", "unclear"}}
     excluded_ft = sum(1 for d in ft_decisions if d.final_label == "exclude")
 
@@ -295,7 +332,9 @@ def run_pipeline(
         autonomy=protocol.autonomy_for("screening_ft"),
         run_ctx=run_ctx,
         review_payload={
-            "n_evaluados": len(passed_ta),
+            "n_buscados": len(passed_ta),
+            "n_no_recuperados": not_retrieved,
+            "n_evaluados": len(passed_ta) - not_retrieved,
             "n_incluidos": len(included_ids),
             "n_excluidos": excluded_ft,
         },
@@ -314,13 +353,11 @@ def run_pipeline(
     # Solo fase T/A: alimenta la nota ** del flow diagram oficial (trAIce R1).
     ta_breakdown = compute_exclusion_breakdown(decisions)
 
-    # Razones de exclusión en elegibilidad (cajas "Reason 1..n" del flow oficial).
-    ft_exclusion_reasons: dict[str, int] = {}
-    for d in ft_decisions:
-        if d.final_label == "exclude":
-            violated = [c for v in d.votes for c in v.criteria_violated]
-            reason = violated[0] if violated else "criterio no especificado"
-            ft_exclusion_reasons[reason] = ft_exclusion_reasons.get(reason, 0) + 1
+    # Informes excluidos en elegibilidad (16b) y sus razones (cajas "Reason 1..n"
+    # del flow oficial): una sola lista para el diagrama, la tabla y el auditor.
+    excluded_reports = compute_ft_excluded(ft_decisions, passed_ta)
+    run_ctx.write_json("04_fulltext/excluded.json", [r.model_dump() for r in excluded_reports])
+    ft_exclusion_reasons = dict(Counter(r.reason for r in excluded_reports))
 
     # ── 6. Extracción de datos (A0) ─────────────────────────────────────
     extract_cfg = protocol.provider_for("extraccion")
@@ -471,9 +508,13 @@ def run_pipeline(
         excluded_ta=excluded_ta,
         excluded_ta_human=ta_breakdown.excluded_human,
         excluded_ta_ai=ta_breakdown.excluded_ai,
-        fulltext_assessed=len(passed_ta),
-        fulltext_abstract_only=ft_abstract_only,
+        fulltext_sought=len(passed_ta),
+        fulltext_not_retrieved=not_retrieved,
+        fulltext_rescued=0,  # los rescates humanos llegan con el HITL por registro (PR-D)
+        fulltext_assessed=len(passed_ta) - not_retrieved,
         excluded_ft=excluded_ft,
+        excluded_ft_human=sum(1 for r in excluded_reports if r.reason_source == "human"),
+        excluded_ft_ai=sum(1 for r in excluded_reports if r.reason_source == "ai"),
         ft_exclusion_reasons=ft_exclusion_reasons,
         included=len(included),
     )
@@ -485,6 +526,9 @@ def run_pipeline(
     (deliverable / "prisma_flow.md").write_text(
         render_flow_diagram(counts) + "\n\n" + render_flow_markdown(counts) + "\n",
         encoding="utf-8",
+    )
+    (deliverable / "excluidos_texto_completo.md").write_text(
+        render_excluded_reports(excluded_reports), encoding="utf-8"
     )
     (deliverable / "risk_of_bias.md").write_text(
         _rob_table_md(protocol.rob_tool, assessments), encoding="utf-8"

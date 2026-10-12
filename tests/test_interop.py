@@ -88,6 +88,30 @@ def test_prisma2020_flow_csv_formato_nativo_paquete_r() -> None:
     assert len(lines) == 35
 
 
+def test_prisma_csv_dbr_notretrieved_real() -> None:
+    # Auditoría 2026-09-03, M11: dbr_notretrieved_reports era un 0 literal y
+    # dbr_sought_reports copiaba los evaluados.
+    counts = PrismaCounts(
+        screened=80,
+        excluded_ta=50,
+        fulltext_sought=30,
+        fulltext_not_retrieved=8,
+        fulltext_assessed=22,
+        excluded_ft=5,
+        included=17,
+    )
+    rows = render_prisma2020_flow_csv(counts).strip().splitlines()
+
+    def n_de(data: str) -> str:
+        return next(r for r in rows if r.startswith(f"{data},")).rsplit(",", 1)[1]
+
+    assert n_de("dbr_sought_reports") == "30"
+    assert n_de("dbr_notretrieved_reports") == "8"
+    assert n_de("dbr_assessed") == "22"
+    assert n_de("records_excluded") == "50"
+    assert n_de("new_studies") == "17"
+
+
 def test_checklist_abstracts_prerellena_evidencia() -> None:
     counts = PrismaCounts(included=7)
     markdown = render_prisma_abstracts_checklist(

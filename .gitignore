@@ -11,14 +11,14 @@ build/
 # Secretos
 .env
 
-# Outputs de ejecuciones: se ignoran salvo el manifest y los entregables,
-# que son los artefactos reproducibles que SÍ se versionan/comparten.
-# OJO: estas negaciones son inoperantes porque `runs/*/` excluye el directorio
-# padre (git no re-incluye hijos de un directorio ignorado). Hoy ninguna corrida
-# se versiona. Decidir qué se versiona de una corrida es trabajo de la Ola 1.
-runs/*/
-!runs/*/manifest.yml
-!runs/*/deliverable/
+# Corridas (`runs/<slug>-<fecha>/`): NO se versionan en el repo del motor (D11
+# de la Ola 1; auditoría 2026-09-03, M23). Una corrida pertenece a su revisión,
+# no al motor: deposítala completa (manifest.yml, decisions_ledger.jsonl,
+# deliverable/…) en OSF/Zenodo o junto al protocolo. Las antiguas negaciones
+# `!runs/*/manifest.yml` y `!runs/*/deliverable/` nunca funcionaron (git no
+# re-incluye hijos de un directorio ignorado): esto no deja fuera nada que antes
+# se versionara.
+runs/
 
 # Datos crudos descargados (paywalls, PDFs) nunca al repo
 **/fulltext_cache/

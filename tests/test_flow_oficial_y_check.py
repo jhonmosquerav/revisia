@@ -19,11 +19,14 @@ _COUNTS = PrismaCounts(
     excluded_ta=70,
     excluded_ta_human=10,
     excluded_ta_ai=60,
-    fulltext_assessed=30,
-    fulltext_abstract_only=8,
+    fulltext_sought=30,
+    fulltext_not_retrieved=8,
+    fulltext_assessed=22,
     excluded_ft=5,
+    excluded_ft_human=2,
+    excluded_ft_ai=3,
     ft_exclusion_reasons={"población incorrecta": 3, "sin datos de desenlace": 2},
-    included=25,
+    included=17,
 )
 
 
@@ -37,13 +40,41 @@ def test_flow_diagram_plantilla_oficial_v1() -> None:
     assert "Registros cribados (n = 100)" in mermaid
     # Nota ** de la plantilla oficial: separación humano vs IA (trAIce R1)
     assert "por humano (n = 10) · por IA (n = 60)**" in mermaid
-    assert "Informes evaluados para elegibilidad (n = 30)" in mermaid
-    assert "sin texto completo recuperable: n = 8" in mermaid
+    assert "Informes evaluados para elegibilidad (n = 22)" in mermaid
     # Razones de exclusión (cajas Reason 1..n)
     assert "población incorrecta (n = 3)" in mermaid
     assert "sin datos de desenlace (n = 2)" in mermaid
-    assert "Estudios incluidos en la revisión (n = 25)" in mermaid
+    assert "Estudios incluidos en la revisión (n = 17)" in mermaid
     assert "BMJ 2021;372:n71" in mermaid  # atribución CC BY 4.0
+
+
+def test_flow_diagram_buscados_no_recuperados_evaluados() -> None:
+    # PRISMA estricto (D2; auditoría 2026-09-03, M11): los no recuperados tienen
+    # su caja y no cuentan como evaluados.
+    mermaid = render_flow_diagram(_COUNTS)
+    assert 'S["Informes buscados para recuperación (n = 30)"]' in mermaid
+    assert 'N["Informes no recuperados (n = 8)"]' in mermaid
+    assert 'E["Informes evaluados para elegibilidad (n = 22)"]' in mermaid
+    for arista in ("C --> S", "S --> N", "S --> E", "E --> F"):
+        assert arista in mermaid
+    assert "Informes excluidos (n = 5)<br/>por humano (n = 2) · por IA (n = 3)**" in mermaid
+    assert "rescatados por el revisor" not in mermaid
+    assert "sin texto completo recuperable" not in mermaid  # caja retirada
+
+    con_rescate = _COUNTS.model_copy(
+        update={"fulltext_not_retrieved": 6, "fulltext_rescued": 2, "fulltext_assessed": 24}
+    )
+    mermaid = render_flow_diagram(con_rescate)
+    assert "(rescatados por el revisor: n = 2)***" in mermaid
+    assert "\\*** Informes que el motor no pudo recuperar" in mermaid
+
+    table = render_flow_markdown(_COUNTS)
+    assert "| Informes buscados para recuperación | 30 |" in table
+    assert "| Informes no recuperados | 8 |" in table
+    assert "| Informes evaluados para elegibilidad | 22 |" in table
+    assert "| — excluidos por humano (elegibilidad) | 2 |" in table
+    assert "| — excluidos por IA (elegibilidad) | 3 |" in table
+    assert "| — rescatados por el revisor | 2 |" in render_flow_markdown(con_rescate)
 
 
 def test_flow_markdown_desglosa_todo() -> None:
