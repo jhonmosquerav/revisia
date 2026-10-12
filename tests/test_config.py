@@ -89,3 +89,14 @@ def test_load_protocol_con_a3_en_juicio_falla(tmp_path: Path) -> None:
     (proto / "protocol.yml").write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
     with pytest.raises(ValidationError):
         load_protocol(proto)
+
+
+@pytest.mark.parametrize("contenido", ["- a\n", "hola\n", "42\n", "", "# solo un comentario\n"])
+def test_load_protocol_que_no_es_un_mapa_lanza_validation_error(
+    tmp_path: Path, contenido: str
+) -> None:
+    # Una lista o un escalar hacían `raw.setdefault(...)` y lanzaban AttributeError; un
+    # fichero vacío o solo con comentarios sigue siendo `{}` y falla por la pregunta.
+    (tmp_path / "protocol.yml").write_text(contenido, encoding="utf-8")
+    with pytest.raises(ValidationError, match="ReviewProtocol"):
+        load_protocol(tmp_path)

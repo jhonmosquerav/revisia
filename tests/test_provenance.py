@@ -58,6 +58,29 @@ def test_ledger_vacio_devuelve_lista_vacia(tmp_path) -> None:
     assert DecisionLedger(tmp_path / "noexiste.jsonl").read_all() == []
 
 
+def test_ledger_sobrevive_a_separadores_unicode_en_una_cadena(tmp_path) -> None:
+    # `model_dump_json` escribe U+2028/U+2029/U+0085 crudos dentro de las cadenas y
+    # `splitlines()` parte por ellos: la entrada se leía como dos líneas inválidas.
+    ledger = DecisionLedger(tmp_path / "decisions.jsonl")
+    razon = "a\u2028b\u2029c\u0085d"
+    ledger.append(
+        DecisionEntry(
+            stage="screening_ft",
+            actor="human:jhon",
+            autonomy="A0",
+            action="reject",
+            detail={"reason": razon},
+        )
+    )
+    ledger.append(
+        DecisionEntry(stage="screening_ft", actor="human:jhon", autonomy="A0", action="approve")
+    )
+    assert "\u2028" in (tmp_path / "decisions.jsonl").read_text(encoding="utf-8")  # va crudo
+    entries = ledger.read_all()
+    assert [e.action for e in entries] == ["reject", "approve"]
+    assert entries[0].detail["reason"] == razon
+
+
 def test_write_manifest_declara_procedencia_no_sobrescribible(tmp_path) -> None:
     ctx = RunContext("demo", tmp_path, "T")
     path = ctx.write_manifest(

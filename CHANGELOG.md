@@ -34,6 +34,24 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - `04_fulltext/retrieval.json`: por cada informe buscado, si se recuperó y, si
   no, por qué (`sin_url_oa`, `sin_httpx`, `error_http`, `texto_vacio`,
   `no_disponible`).
+- **Corridas reanudables** (`revisia run --resume <run_dir>`; auditoría
+  2026-09-03, A9): `run.json` (identidad, huellas del protocolo y de los
+  prompts, historia y estado), instantánea del protocolo en `00_protocol/`,
+  búsqueda y dedup congelados en `01_search/` y `02_dedup/`, un diario por cada
+  etapa con LLM o red y `llm_calls.jsonl` escrito en cada llamada. Reanudar no
+  repite la búsqueda ni ninguna llamada ya hecha. Un error a mitad de corrida
+  (un 429, la red) queda en `run.json` y la corrida sale con código 3 y la
+  orden de reanudar. Los fallos transitorios al recuperar el texto completo
+  (`error_http`, `sin_httpx`) no se congelan: se reintentan al reanudar.
+- `01_search/log.json` (auditoría 2026-09-03, M12): una entrada por base
+  declarada, por fichero de `imported/` o por búsqueda inyectada, con la cadena
+  efectiva (y si salió de `search_strings/` o de la pregunta), su hash, los
+  parámetros, las horas, los resultados y el error redactado. PRISMA-S (ítems 8
+  y 13), el checklist de resúmenes y `metodologia.md` salen de ahí.
+- `02_dedup/dedup.json` con duplicados y renombrados: un `record_id` repetido
+  entre los conservados pasa a `<id>#2`.
+- `decision.template.yml` junto a cada `review_request.yml` y
+  `03_screening/gold.json` con el gold efectivo.
 
 ### Fixed
 - **`claude_code` corre sin herramientas de verdad**: `--tools ""` sustituye a
@@ -54,6 +72,19 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - CSV del paquete PRISMA2020: `dbr_notretrieved_reports` era un 0 literal y
   `dbr_sought_reports` copiaba los evaluados; ahora llevan los conteos reales
   (auditoría 2026-09-03, M11).
+- Un fichero ilegible en `imported/` (p. ej. un RIS exportado en UTF-16) ya no
+  aborta la corrida: queda como `failed` en el log de búsqueda (M7, en parte).
+- Las llamadas del juez de grounding (`grounding: agent`) no quedaban
+  registradas en ningún sitio; ahora llegan a `llm_calls.jsonl`.
+- La solicitud del gate final llevaba la ruta absoluta del entregable.
+- Un `protocol.yml` que no es un mapa YAML (una lista, un escalar) daba un
+  traceback; ahora `validate`, `run` y `run --resume` salen con código 2.
+- El ledger de decisiones y el cerebro (`--brain`) partían en dos una entrada
+  con U+2028, U+2029 o U+0085 dentro de un texto (p. ej. una razón pegada).
+- Seguridad: los errores que llegan a `run.json`, `01_search/failures.json` y
+  la consola tapan también las cabeceras `Authorization`/`x-api-key`, el valor
+  tras `Bearer` y las claves con forma de proveedor (`sk-…`, `AIza…`, `hf_…`);
+  antes solo los parámetros de la URL.
 
 ### Changed
 - `MANUAL_ONLY` incluye CINAHL, Cochrane/CENTRAL, ProQuest, EconLit, JSTOR,
@@ -67,6 +98,10 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - `runs/` se ignora entero (M23): una corrida pertenece a su revisión, no al
   motor; se deposita en OSF/Zenodo o junto al protocolo. Las negaciones
   anteriores (`!runs/*/manifest.yml`) nunca funcionaron.
+- `--brain` no sedimenta dos veces la misma corrida (al reanudar una ya
+  completada).
+- `revisia run --max` vale 50 por defecto en una corrida nueva; al reanudar
+  manda el de `run.json`.
 
 ### Cambios incompatibles
 - `revisia validate` y `revisia run` salen con código 2 ante cualquier error de
@@ -77,6 +112,13 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   `revisia export` funciona con corridas viejas.
 - Los registros sin texto completo ya no llegan a extracción. Con el demo sin
   el extra `search` ni `--mailto` puede no quedar ningún estudio incluido.
+- `decision.yml` exige `request_sha256` (viene en `decision.template.yml`): una
+  decisión sin hash da error y una que responde a otra solicitud no se aplica.
+- Una corrida nueva sobre una carpeta que ya tiene contenido da error (dos
+  `revisia run` en el mismo segundo ya no comparten carpeta).
+- Las corridas anteriores a esta versión (sin `run.json`) no se pueden
+  reanudar: `revisia run --resume` sale con código 2.
+- `RunContext.record_meta` exige `stage=`.
 
 ## [0.7.0] · 2026-09-28
 

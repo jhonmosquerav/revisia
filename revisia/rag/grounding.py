@@ -19,6 +19,7 @@ from collections.abc import Callable
 from pydantic import BaseModel, Field
 
 from revisia.llm.base import LLMProvider, LLMRequest
+from revisia.provenance.runmeta import RunMeta
 
 _SYSTEM = (
     "Eres un verificador anti-alucinación para revisiones sistemáticas. Juzgas si "
@@ -43,7 +44,11 @@ GroundingJudge = Callable[[str, str], GroundingVerdict]
 
 
 def make_provider_judge(
-    provider: LLMProvider, model_name: str = "", *, temperature: float = 0.0
+    provider: LLMProvider,
+    model_name: str = "",
+    *,
+    temperature: float = 0.0,
+    on_meta: Callable[[RunMeta], None] | None = None,
 ) -> GroundingJudge:
     """Construye un juez de grounding respaldado por un proveedor LLM.
 
@@ -51,6 +56,9 @@ def make_provider_judge(
         provider: cualquier ``LLMProvider`` (``agent`` para costo cero en sesión).
         model_name: etiqueta del modelo (informativa).
         temperature: temperatura del juicio (0.0 = determinista en lo posible).
+        on_meta: recibe el ``RunMeta`` de cada llamada del juez. El pipeline lo
+            usa para que lleguen a ``llm_calls.jsonl``; antes se descartaban y
+            el juez hacía llamadas reales sin rastro (Ola 1, spec §7).
 
     Returns:
         Un ``GroundingJudge`` que devuelve un :class:`GroundingVerdict` por llamada.
@@ -66,7 +74,9 @@ def make_provider_judge(
             "support_quote (cita textual de la fuente, o null) y reason (breve)."
         )
         req = LLMRequest(prompt=prompt, system=_SYSTEM, temperature=temperature)
-        verdict, _meta = provider.structured(req, GroundingVerdict)
+        verdict, meta = provider.structured(req, GroundingVerdict)
+        if on_meta is not None:
+            on_meta(meta)
         return verdict
 
     return judge

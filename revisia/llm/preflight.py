@@ -282,8 +282,9 @@ def check_provider(
 def _read_search_string(base: Path, key: str, where: str) -> tuple[str, PreflightIssue | None]:
     """Lee ``search_strings/<key>.txt``: (texto, error). Ausente cuenta como ``""``.
 
-    El pipeline lee este mismo fichero (orchestration/pipeline.py) y se caería con uno
-    ilegible: es un error, no un aviso, y el preflight lo reporta en vez de romperse con
+    La búsqueda lee este mismo fichero (``search_stage._query_for``) y la instantánea del
+    protocolo también (``snapshot.protocol_fingerprint``): ambas se caerían con uno
+    ilegible. Es un error, no un aviso, y el preflight lo reporta en vez de romperse con
     un traceback (auditoría 2026-09-03, M6; D10).
     """
     string_file = base / "search_strings" / f"{key}.txt"
@@ -319,9 +320,12 @@ def check_databases(
     for db in databases:
         key = search_backends.db_key(db)
         where = f"databases.{db}"
-        # El pipeline lee `search_strings/<base>.txt` de TODA base declarada antes de mirar
-        # si tiene backend (`_multi_database_search`): una cadena ilegible tumba la corrida
-        # aunque la base sea manual, así que la legibilidad se comprueba para todas.
+        # La legibilidad de `search_strings/<base>.txt` se comprueba para TODA base declarada,
+        # aunque la manual no use la cadena para buscar: `search_stage._query_for` la lee
+        # para las bases con backend y también para las `manual_only` (PRISMA-S 8 pide la
+        # cadena declarada de cada base; solo una base desconocida no la lee), y
+        # `snapshot.protocol_fingerprint` lee TODOS los `search_strings/*.txt` al congelar
+        # el protocolo. Un fichero ilegible tumba la corrida en cualquiera de los dos.
         text, unreadable = _read_search_string(base, key, where)
         if unreadable is not None:
             issues.append(unreadable)

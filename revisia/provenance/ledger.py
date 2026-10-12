@@ -75,7 +75,10 @@ class DecisionLedger:
         if not self.path.exists():
             return []
         entries: list[DecisionEntry] = []
-        for line in self.path.read_text(encoding="utf-8").splitlines():
+        # Se parte por el salto de línea y no con `splitlines()`: `model_dump_json` escribe
+        # U+2028/U+2029/U+0085 crudos dentro de las cadenas y `splitlines()` partiría la
+        # entrada por la mitad. `read_text` ya pliega el CRLF; `strip()` quita el resto.
+        for line in self.path.read_text(encoding="utf-8").split("\n"):
             stripped = line.strip()
             if stripped:
                 entries.append(DecisionEntry.model_validate_json(stripped))

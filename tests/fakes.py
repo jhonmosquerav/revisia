@@ -61,6 +61,9 @@ class ScriptedProvider:
         calls: llamadas recibidas (``complete`` + ``structured``), incluida la
             que falla.
         prompts: prompt de cada llamada, en orden (para afirmar qué se cribó).
+        sintesis: texto que devuelve ``complete`` (la síntesis narrativa); por
+            defecto, uno sin citas. Con citas ``[id]`` el verificador tiene algo
+            que comprobar (y con un id que no está en el corpus, marca).
     """
 
     name = "fake"
@@ -72,12 +75,14 @@ class ScriptedProvider:
         fail_at: int | None = None,
         palabras: Mapping[str, ScreeningLabel] | None = None,
         criterio_exclusion: str = "fuera de alcance",
+        sintesis: str | None = None,
     ) -> None:
         # Las llamadas se cuentan desde 1: con `fail_at=0` (o negativo) el 429 nunca
         # se dispararía y el test pasaría sin haber probado la reanudación.
         if fail_at is not None and fail_at < 1:
             raise ValueError(f"fail_at cuenta llamadas desde 1; recibido {fail_at}")
         self.model = model
+        self.sintesis = sintesis
         self.fail_at = fail_at
         self.palabras: dict[str, ScreeningLabel] = dict(
             PALABRAS_POR_DEFECTO if palabras is None else palabras
@@ -114,8 +119,8 @@ class ScriptedProvider:
 
     def complete(self, req: LLMRequest) -> LLMResponse:
         self._llamar(req)
-        # Sin tokens "[...]": el verificador no debe confundirlos con citas.
-        text = "Síntesis de prueba (proveedor con guion · sin contenido real)."
+        # Por defecto sin tokens "[...]": el verificador no debe confundirlos con citas.
+        text = self.sintesis or "Síntesis de prueba (proveedor con guion · sin contenido real)."
         return LLMResponse(text=text, meta=self._meta(req, text))
 
     def structured(self, req: LLMRequest, schema: type[SchemaT]) -> tuple[SchemaT, RunMeta]:

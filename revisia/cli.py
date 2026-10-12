@@ -6,12 +6,18 @@ Subcomandos:
     muestra el pipeline configurado (etapas, autonomía, proveedor por etapa).
   * ``revisia run <dir>`` — ejecuta el pipeline end-to-end (tracer bullet),
     con checkpoints humanos. Usa ``--auto-approve`` para correrlo sin pausas.
+  * ``revisia run --resume <run_dir>`` — reanuda una corrida tras una pausa o
+    una interrupción, sin repetir búsqueda ni llamadas ya hechas (Ola 1, D3).
+
+Códigos de salida de ``run``: 0 completada o en pausa, 1 rechazada, 2 error de
+configuración o de decisión, 3 interrumpida (se reanuda), 130 Ctrl+C.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -155,33 +161,212 @@ def _cmd_gold_template(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_run(args: argparse.Namespace) -> int:
-    from revisia.orchestration.flow import run_review
+# `--max` por defecto en una corrida nueva (al reanudar manda run.json).
+DEFAULT_MAX_RESULTS = 50
+# `--runs-root` por defecto (al reanudar la corrida vive donde ya está).
+DEFAULT_RUNS_ROOT = "runs"
+# Recorte del error real que cita el aviso de un fichero dañado.
+_MAX_DETAIL_CHARS = 300
+# Fichero de la corrida que valida cada modelo de pydantic que puede fallar al leerla.
+_MODEL_FILES = {"RunInfo": "run.json", "ReviewProtocol": "00_protocol/protocol.yml"}
 
+
+def _describe_damage(
+    exc: ValidationError | yaml.YAMLError | UnicodeDecodeError,
+) -> tuple[str, str | None]:
+    """Qué fichero, campo o línea falló, y cuál es ese fichero si se sabe.
+
+    Devuelve ``(detalle, fichero)``. Con solo la primera línea de ``str(exc)`` un
+    ``RunInfo`` con ``{}`` decía «7 validation errors for RunInfo» sin el campo, y un
+    YAML roto, «while parsing a flow sequence» sin línea ni columna (revisión de la
+    pista C). ``fichero`` es ``None`` cuando no se puede saber: ``problem_mark.name`` es
+    ``<unicode string>`` si el YAML se cargó desde un ``str``, y un ``ValidationError``
+    solo trae el nombre del modelo.
+    """
+    if isinstance(exc, ValidationError):
+        fichero = _MODEL_FILES.get(exc.title)
+        errores = exc.errors()
+        primero = errores[0] if errores else {}
+        campo = ".".join(str(parte) for parte in primero.get("loc", ()))
+        motivo = primero.get("msg", "")
+        if campo:
+            motivo = f"{campo}: {motivo}"
+        mas = f" (+{len(errores) - 1} más)" if len(errores) > 1 else ""
+        sujeto = f"{fichero} no es válido" if fichero else "un fichero no es válido"
+        return f"{sujeto} ({exc.title}): {motivo}{mas}", fichero
+    if isinstance(exc, yaml.YAMLError):
+        problema = getattr(exc, "problem", None)
+        if not problema:
+            lineas = str(exc).splitlines()
+            problema = lineas[0] if lineas else type(exc).__name__
+        marca = getattr(exc, "problem_mark", None)
+        fichero = None
+        donde = ""
+        if marca is not None:
+            donde = f" (línea {marca.line + 1}, columna {marca.column + 1})"
+            nombre = getattr(marca, "name", None)
+            if nombre and not nombre.startswith("<"):
+                fichero = nombre
+        sujeto = f"{fichero}: YAML no válido" if fichero else "YAML no válido"
+        return f"{sujeto}: {problema}{donde}", fichero
+    return f"algún fichero de la corrida no es UTF-8 válido: {exc}", None
+
+
+def _damage_advice(exc: BaseException, fichero: str | None) -> str:
+    """Consejo según el fichero: uno de estado se puede arreglar a mano o rehacer."""
+    if fichero is None:
+        return (
+            "Si el fichero es run.json o está en 00_protocol/, la corrida no es reanudable: "
+            "empieza una nueva con `revisia run <protocolo>`."
+        )
+    ruta = Path(fichero)
+    if ruta.name == "run.json" or "00_protocol" in ruta.parts:
+        # Un `run.json` editado a mano con un campo mal se puede arreglar: no se afirma
+        # «no reanudable» de forma tajante. Elige la palabra según el tipo de error y, en
+        # ValidationError, si hay un campo identificado.
+        if isinstance(exc, ValidationError):
+            errores = exc.errors()
+            primero = errores[0] if errores else {}
+            tiene_loc = bool(primero.get("loc"))
+            indicado = "el campo indicado" if tiene_loc else "el error indicado"
+        else:
+            indicado = "la línea indicada"
+        return (
+            f"Corrige {indicado} si sabes lo que haces o empieza una corrida nueva "
+            "con `revisia run <protocolo>`."
+        )
+    return "Revisa ese fichero."
+
+
+def _run_guarded(command: Callable[[], int]) -> int:
+    """Traduce las excepciones de una corrida en códigos de salida (Ola 1, D14).
+
+    ``RunInterrupted`` → 3, con la orden de reanudar; errores de configuración o
+    de decisión humana → 2; Ctrl+C → 130. Un error esperable nunca llega como
+    traceback.
+    """
+    from revisia.llm.preflight import PreflightError
+    from revisia.orchestration.hitl import DecisionFileError
+    from revisia.orchestration.journal import JournalError
+    from revisia.orchestration.run_context import (
+        LegacyRunError,
+        RunDirExistsError,
+        RunInterrupted,
+    )
+    from revisia.orchestration.snapshot import ProtocolMismatchError
+
+    try:
+        return command()
+    except RunInterrupted as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    except PreflightError as exc:
+        _print_preflight(exc.report)
+        return 2
+    except (
+        DecisionFileError,
+        ProtocolMismatchError,
+        JournalError,
+        LegacyRunError,
+        RunDirExistsError,
+        FileNotFoundError,
+    ) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except (ValidationError, yaml.YAMLError, UnicodeDecodeError) as exc:
+        # Un `run.json` o un protocolo de `00_protocol/` truncado, vacío o editado a
+        # mano llega aquí como el error crudo de pydantic/YAML, antes de que el
+        # pipeline pueda convertirlo en `RunInterrupted`: es un error de uso, no un bug.
+        # Pero también puede venir de otro fichero (p. ej. `manifest.yml` al sedimentar en
+        # el cerebro tras completar la corrida): se dice qué fichero, qué campo o qué línea
+        # cuando se sabe, y el consejo depende de si es un fichero de estado.
+        from revisia.agents import _http
+
+        detalle, fichero = _describe_damage(exc)
+        # Redactar antes de recortar: un secreto cortado a medias ya no casaría con el patrón.
+        detalle = _http.redact_secrets(detalle)
+        if len(detalle) > _MAX_DETAIL_CHARS:
+            detalle = detalle[: _MAX_DETAIL_CHARS - 1] + "…"
+        print(f"error: {detalle}\n{_damage_advice(exc, fichero)}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        print(
+            "\ninterrumpido (Ctrl+C): queda registrado en run.json. "
+            "Reanuda con: revisia run --resume <carpeta de la corrida>",
+            file=sys.stderr,
+        )
+        return 130
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    from revisia.orchestration.flow import resume_review, run_review
+    from revisia.orchestration.snapshot import read_run_info
+
+    info = None
+    if args.resume is not None:
+        info = read_run_info(args.resume)
+        slug = info.slug if info is not None else None
+        if args.runs_root != DEFAULT_RUNS_ROOT:
+            print(f"⚠ --runs-root no aplica al reanudar: la corrida vive en {args.resume}.")
+        if info is not None and args.max is not None and args.max != info.max_results:
+            print(
+                f"⚠ --max {args.max} se ignora al reanudar: la corrida usa "
+                f"max_results={info.max_results} (run.json)."
+            )
+        if info is not None and info.mailto_set and not args.mailto:
+            # `mailto_set` entra en la huella de cada recuperación de texto completo:
+            # sin él, las ya registradas se repetirían sin Unpaywall ni ID Converter.
+            print(
+                "⚠ la corrida empezó con --mailto y esta reanudación no lo trae: pásalo de "
+                "nuevo o los textos completos se buscarán otra vez sin Unpaywall ni el ID "
+                "Converter de PMC."
+            )
+    else:
+        slug = load_protocol(args.protocol_dir).slug
     prior = None
-    if args.brain:
+    # Una sola vez y antes de correr: reanudar una corrida ya sedimentada no la registra de
+    # nuevo, y los dos mensajes (el de la memoria previa y el del cierre) tienen que coincidir.
+    ya_sedimentada = False
+    if args.brain and slug:
         from revisia.memory import ResearchBrain
 
-        prior = ResearchBrain(args.brain).recall(load_protocol(args.protocol_dir).slug)
+        brain = ResearchBrain(args.brain)
+        prior = brain.recall(slug)
+        if info is not None:
+            ya_sedimentada = brain.has_run(info.slug, info.timestamp)
         if prior:
+            destino = (
+                "Esta corrida ya estaba sedimentada: no se registrará de nuevo."
+                if ya_sedimentada
+                else "Esta corrida se registrará como actualización (living review)."
+            )
             print(
                 f"🧠 Memoria previa: {prior.n_runs} corrida(s), última {prior.last_timestamp}, "
-                f"{len(prior.last_included_ids)} incluidos. Esta corrida se registrará como "
-                "actualización (living review)."
+                f"{len(prior.last_included_ids)} incluidos. {destino}"
             )
-    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    result = run_review(
-        args.protocol_dir,
-        timestamp=timestamp,
-        runs_root=args.runs_root,
-        max_results=args.max,
-        auto_approve=args.auto_approve,
-        mailto=args.mailto,
-    )
+    if args.resume is not None:
+        result = resume_review(
+            args.resume,
+            protocol_dir=args.protocol_dir,
+            auto_approve=args.auto_approve,
+            mailto=args.mailto,
+        )
+    else:
+        timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        result = run_review(
+            args.protocol_dir,
+            timestamp=timestamp,
+            runs_root=args.runs_root,
+            max_results=DEFAULT_MAX_RESULTS if args.max is None else args.max,
+            auto_approve=args.auto_approve,
+            mailto=args.mailto,
+        )
     icon = {"completed": "✓", "paused": "⏸", "rejected": "✗"}.get(result.status, "•")
     print(f"\n{icon} {result.status.upper()} · {result.message}")
     if result.run_dir:
         print(f"  Corrida: {result.run_dir}")
+        if result.status == "paused":
+            print(f"  Reanuda con: revisia run --resume {result.run_dir}")
     if result.status == "completed":
         c = result.counts
         print(
@@ -194,9 +379,17 @@ def _cmd_run(args: argparse.Namespace) -> int:
         if args.brain and result.run_dir:
             from revisia.memory import ResearchBrain
 
-            ResearchBrain(args.brain).record_from_run(result.run_dir)
-            print(f"  Cerebro: revisión sedimentada en {args.brain}/")
-            if prior is not None and result.counts is not None:
+            brain = ResearchBrain(args.brain)
+            if ya_sedimentada:
+                # Reanudar una corrida ya completada no la sedimenta dos veces.
+                print(f"  Cerebro: esta corrida ya estaba sedimentada en {args.brain}/")
+            else:
+                brain.record_from_run(result.run_dir)
+                print(f"  Cerebro: revisión sedimentada en {args.brain}/")
+            # Sin delta que escribir si ya estaba sedimentada: `prior` ya la incluye y el
+            # flow actualizado de su primera finalización quedaría pisado por uno "contra sí
+            # misma".
+            if prior is not None and result.counts is not None and not ya_sedimentada:
                 from revisia.exports import render_flow_updated
 
                 current_ids = {r.record_id for r in result.included}
@@ -388,11 +581,32 @@ def build_parser() -> argparse.ArgumentParser:
     p_validate.add_argument("protocol_dir", help="Carpeta del protocolo (contiene protocol.yml).")
 
     p_run = sub.add_parser("run", help="Ejecuta el pipeline end-to-end (tracer bullet).")
-    p_run.add_argument("protocol_dir", help="Carpeta del protocolo (contiene protocol.yml).")
     p_run.add_argument(
-        "--max", type=int, default=50, help="Máx. de registros a recuperar por base."
+        "protocol_dir",
+        nargs="?",
+        default=None,
+        help="Carpeta del protocolo (contiene protocol.yml). Opcional con --resume: si se "
+        "pasa, se comprueba que no cambió desde que empezó la corrida.",
     )
-    p_run.add_argument("--runs-root", default="runs", help="Raíz de salidas (default: runs/).")
+    p_run.add_argument(
+        "--resume",
+        metavar="RUN_DIR",
+        default=None,
+        help="Reanuda una corrida existente (runs/<slug>-<fecha>) sin repetir la búsqueda "
+        "ni las llamadas ya hechas.",
+    )
+    p_run.add_argument(
+        "--max",
+        type=int,
+        default=None,
+        help=f"Máx. de registros a recuperar por base (default: {DEFAULT_MAX_RESULTS}; al "
+        "reanudar manda el de run.json).",
+    )
+    p_run.add_argument(
+        "--runs-root",
+        default=DEFAULT_RUNS_ROOT,
+        help=f"Raíz de salidas (default: {DEFAULT_RUNS_ROOT}/; al reanudar se ignora).",
+    )
     p_run.add_argument("--mailto", default=None, help="Email para el polite pool de OpenAlex.")
     p_run.add_argument(
         "--auto-approve",
@@ -493,7 +707,19 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_export(args)
     if args.command == "brain":
         return _cmd_brain(args)
+    if args.command == "run" and args.resume is not None:
+        # Reanudar: el protocolo sale de la instantánea de la corrida (00_protocol/).
+        if args.protocol_dir is not None and not Path(args.protocol_dir).exists():
+            print(f"error: la carpeta {args.protocol_dir!r} no existe.", file=sys.stderr)
+            return 2
+        return _run_guarded(lambda: _cmd_run(args))
     protocol_dir = args.protocol_dir
+    if protocol_dir is None:
+        print(
+            "error: falta la carpeta del protocolo (o --resume <run_dir> para reanudar).",
+            file=sys.stderr,
+        )
+        return 2
     if not Path(protocol_dir).exists():
         print(f"error: la carpeta {protocol_dir!r} no existe.", file=sys.stderr)
         return 2
@@ -510,8 +736,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "validate":
         return _cmd_validate(protocol, protocol_dir)
     if args.command == "run":
-        from revisia.orchestration.hitl import DecisionFileError
-
         # Preflight sin red ANTES de crear ninguna carpeta (auditoría 2026-09-03,
         # M6 y C4): el quickstart va directo a `run` sin pasar por `validate`, y
         # una key ausente para FT se descubría tras gastar el cribado T/A.
@@ -521,12 +745,7 @@ def main(argv: list[str] | None = None) -> int:
         _print_preflight(report)
         if report.errors:
             return 2
-
-        try:
-            return _cmd_run(args)
-        except DecisionFileError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 2
+        return _run_guarded(lambda: _cmd_run(args))
     parser.print_help()
     return 1
 
