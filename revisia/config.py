@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+from typing import TextIO
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
@@ -18,6 +19,10 @@ from pydantic import BaseModel, Field, field_validator
 from revisia.llm.registry import ProviderConfig
 from revisia.schemas.question import ResearchQuestion
 from revisia.schemas.rob import RoBTool
+
+# Etiqueta YAML que resuelve una clave de fusión (`<<`). `load_protocol` las rechaza y el
+# auditor (`audit/artifacts.py`) también, al leer cualquier YAML de una corrida.
+YAML_MERGE_TAG = "tag:yaml.org,2002:merge"
 
 # Orden canónico de etapas del pipeline (espeja el documento metodológico).
 STAGES: tuple[str, ...] = (
@@ -223,6 +228,52 @@ class ReviewProtocol(BaseModel):
         return self._ensemble_members(stage) or [self.provider_for(stage)]
 
 
+def rechazar_claves_de_fusion(stream: str | TextIO, nombre: str = "protocol.yml") -> None:
+    """Rechaza un fichero del protocolo con claves de fusión YAML (``<<``), antes de cargarlo.
+
+    ``00_protocol/`` es una copia literal de la carpeta del protocolo y el auditor la lee: sus
+    guardas rechazan ``<<`` (cada alias fusionado se copia sin memoizar y una cadena de ellos
+    multiplica los pares por nivel). Aceptarlas aquí haría que una corrida válida acabara en
+    FAIL en la auditoría, con un motivo que la persona que revisa no podría relacionar con su
+    protocolo; rechazarlas al principio da el error donde se puede arreglar (Tarea 12 de
+    PR-E). Vale para ``protocol.yml`` y para los ficheros auxiliares (``gold.yml``,
+    ``effects.yml``, criterios y formulario; ``protocol_files``): si el motor aceptara ``<<``
+    en ellos y el auditor no, un ``effects.yml`` con una fusión dejaría sus relaciones sin
+    verificar. Se recorren los eventos del parser, sin construir nada: el mismo criterio que el
+    auditor (la etiqueta de fusión, o un ``<<`` plano). Un YAML mal formado no es de este
+    chequeo: ``safe_load`` lo informa justo después, con su línea.
+
+    Lee de un fichero abierto (no de un ``str``) para que la posición del error lleve el
+    nombre del fichero, como los demás errores de YAML del protocolo. Deja el cursor donde
+    estaba: quien llama debe volver a leer desde el principio. ``nombre`` es el del fichero que
+    sale en el mensaje.
+
+    Raises:
+        yaml.YAMLError: con la posición de la primera clave de fusión (rc 2 en el CLI).
+    """
+    fusion: yaml.Mark | None = None
+    try:
+        for event in yaml.parse(stream, Loader=yaml.SafeLoader):
+            con_etiqueta = isinstance(event, yaml.ScalarEvent | yaml.CollectionStartEvent) and (
+                event.tag == YAML_MERGE_TAG
+            )
+            plana = isinstance(event, yaml.ScalarEvent) and event.value == "<<" and not event.style
+            if con_etiqueta or plana:
+                fusion = event.start_mark
+                break
+    except yaml.YAMLError:
+        return  # YAML mal formado: lo informa `safe_load` con su posición
+    if fusion is not None:
+        raise yaml.constructor.ConstructorError(
+            None,
+            None,
+            f"claves de fusión YAML (<<) no admitidas en {nombre}: expándelas (copia los "
+            "pares del ancla donde la uses); el auditor las rechaza porque una cadena de "
+            "fusiones multiplica los pares en memoria",
+            fusion,
+        )
+
+
 def load_protocol(protocol_dir: str | Path, *, default_slug: str | None = None) -> ReviewProtocol:
     """Carga y valida ``protocol.yml`` desde una carpeta de protocolo.
 
@@ -234,12 +285,15 @@ def load_protocol(protocol_dir: str | Path, *, default_slug: str | None = None) 
 
     Raises:
         FileNotFoundError: si no existe ``protocol.yml``.
+        yaml.YAMLError: YAML mal formado o con claves de fusión (``<<``).
     """
     base = Path(protocol_dir)
     protocol_file = base / "protocol.yml"
     if not protocol_file.exists():
         raise FileNotFoundError(f"No se encontró {protocol_file}.")
     with protocol_file.open(encoding="utf-8") as fh:
+        rechazar_claves_de_fusion(fh)
+        fh.seek(0)
         raw = yaml.safe_load(fh) or {}
     if isinstance(raw, dict):
         raw.setdefault("slug", default_slug or base.name)

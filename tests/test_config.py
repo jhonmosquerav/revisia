@@ -225,3 +225,54 @@ def test_n_screeners_for_no_exige_proveedor_pero_screeners_for_si() -> None:
     assert protocol.n_screeners_for("screening_ta") == 1
     with pytest.raises(KeyError):
         protocol.screeners_for("screening_ta")
+
+
+# ── Claves de fusión YAML (<<): el auditor las rechaza, así que el motor también (Tarea 12) ──
+
+# Un protocolo que `yaml.safe_load` acepta tal cual: la fusión copia `from` y `to` en la ventana.
+_FUSION_PLANA = """\
+title: "Con fusión"
+question: {text: "¿Sirve?", framework: PICO}
+search_window:
+  <<: {from: "2015-01-01", to: "2026-12-31"}
+  executed: ""
+"""
+_FUSION_CON_ETIQUETA = _FUSION_PLANA.replace("<<:", "!!merge <<:")
+
+
+@pytest.mark.parametrize(
+    "texto", [_FUSION_PLANA, _FUSION_CON_ETIQUETA], ids=["plana", "con-etiqueta-!!merge"]
+)
+def test_load_protocol_rechaza_las_claves_de_fusion(tmp_path: Path, texto: str) -> None:
+    carpeta = tmp_path / "con-fusion"
+    carpeta.mkdir()
+    (carpeta / "protocol.yml").write_text(texto, encoding="utf-8")
+    if "!!merge" not in texto:
+        # Sin la guarda, PyYAML lo cargaría (y el auditor lo rechazaría después, sin remedio).
+        assert yaml.safe_load(texto)["search_window"]["from"] == "2015-01-01"
+    with pytest.raises(yaml.YAMLError) as info:
+        load_protocol(carpeta)
+    mensaje = str(info.value)
+    assert "claves de fusión YAML (<<) no admitidas en protocol.yml: expándelas" in mensaje
+    assert "line 4, column 3" in mensaje  # dónde está la clave, con la ruta del fichero
+    assert "protocol.yml" in mensaje
+
+
+def test_load_protocol_sigue_aceptando_los_alias_normales(tmp_path: Path) -> None:
+    carpeta = tmp_path / "con-alias"
+    carpeta.mkdir()
+    texto = _FUSION_PLANA.replace(
+        '<<: {from: "2015-01-01", to: "2026-12-31"}', 'from: &d "2015-01-01"\n  to: *d'
+    )
+    (carpeta / "protocol.yml").write_text(texto, encoding="utf-8")
+    assert load_protocol(carpeta).search_window["to"] == "2015-01-01"
+
+
+def test_load_protocol_yaml_mal_formado_conserva_su_error_de_siempre(tmp_path: Path) -> None:
+    # La guarda no se traga ni disfraza un YAML roto: lo informa `safe_load`, con su posición.
+    carpeta = tmp_path / "roto"
+    carpeta.mkdir()
+    (carpeta / "protocol.yml").write_text("title: [sin cerrar\n", encoding="utf-8")
+    with pytest.raises(yaml.YAMLError) as info:
+        load_protocol(carpeta)
+    assert "claves de fusión" not in str(info.value)

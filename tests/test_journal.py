@@ -41,6 +41,38 @@ def test_journal_recupera_ultima_linea_truncada(tmp_path: Path) -> None:
     assert [JournalEntry.model_validate_json(x).record_id for x in lineas] == ["a", "b", "c"]
 
 
+def test_journal_ultima_linea_completa_pero_invalida_es_error_y_no_se_recorta(
+    tmp_path: Path,
+) -> None:
+    # Con `\n` final y JSON válido que ya no valida como entrada: edición a mano o un modelo
+    # cambiado, no una caída a mitad de escritura (que deja la línea sin su salto o cortada).
+    ctx = RunContext("demo", tmp_path, "T")
+    diario = StageJournal(ctx, "screening_ta")
+    diario.append(_entrada("a"))
+    with diario.path.open("ab") as fh:
+        fh.write(b'{"schema_version": 1, "stage": "screening_ta"}\n')
+    escrito = diario.path.read_bytes()
+
+    with pytest.raises(JournalError, match="línea 2.*completa"):
+        StageJournal(ctx, "screening_ta")
+
+    assert diario.path.read_bytes() == escrito
+
+
+def test_journal_ultima_linea_sin_salto_que_no_valida_se_recorta(tmp_path: Path) -> None:
+    ctx = RunContext("demo", tmp_path, "T")
+    diario = StageJournal(ctx, "screening_ta")
+    diario.append(_entrada("a"))
+    original = diario.path.read_bytes()
+    with diario.path.open("ab") as fh:  # JSON bien formado pero sin su `\n`: escritura a medias
+        fh.write(b'{"schema_version": 1, "stage": "screening_ta"}')
+
+    recargado = StageJournal(ctx, "screening_ta")
+
+    assert recargado.lookup("a", "in-1") is not None
+    assert diario.path.read_bytes() == original
+
+
 def test_journal_linea_corrupta_intermedia_es_error(tmp_path: Path) -> None:
     ctx = RunContext("demo", tmp_path, "T")
     diario = StageJournal(ctx, "screening_ta")

@@ -2469,7 +2469,12 @@ def test_methods_sin_texto_fijo_de_validacion_humana(tmp_path: Path, proveedor) 
         "(autonomía A1)" in metodos
     )
     assert "⚠ gates de juicio sin decisión humana" in metodos
-    assert "Reporte final: pendiente de la decisión final (autonomía A1)." in metodos
+    # Con --auto-approve el reporte no queda pendiente de nadie: lo aprobará la demo (D3).
+    assert (
+        "Reporte final: aprobación de demostración prevista (--auto-approve): NO es una "
+        "validación humana (autonomía A1)." in metodos
+    )
+    assert "pendiente de la decisión final" not in metodos
 
 
 def _gate(
@@ -2611,7 +2616,7 @@ def test_render_traice_checklist_sin_gates_no_afirma_ninguna_validacion_humana()
     assert "- Validación humana: ningún gate de juicio tiene todavía una decisión" in md
     assert "- rob (A0): pendiente (sin decisión registrada)" in md
     # Una A2 sin citas marcadas no espera ninguna decisión humana: seguirá sola.
-    assert "- reporte (A2): auto-proceed previsto (A2): sin revisión humana" in md
+    assert "- reporte (A2): auto-proceed previsto: sin revisión humana" in md
     assert "pendiente de la decisión final" not in md
     assert "exige decisión humana" not in md
     # Solo lista los gates de los que se informa la autonomía.
@@ -2837,7 +2842,8 @@ def test_reporte_a2_a3_sin_citas_marcadas_figura_como_auto_proceed_previsto(
     traice = render_traice_checklist([], efectiva)
     metodos = render_methods(protocol=protocol, counts=PrismaCounts(), autonomy_effective=efectiva)
 
-    assert f"- reporte ({declarada}): {previsto}" in traice
+    # El checklist pone la autonomía delante y la frase no la repite (D5).
+    assert f"- reporte ({declarada}): auto-proceed previsto: sin revisión humana" in traice
     assert f"Reporte final: {previsto}." in metodos
     assert "pendiente de la decisión final" not in traice + metodos
     # En A0/A1 sí espera a un humano.
@@ -2900,7 +2906,7 @@ def test_describe_gate_con_autonomia_la_mete_en_el_mismo_parentesis() -> None:
         "aprobado por humano (human:ana)"
     )
     assert describe_gate("reporte", None, autonomy="A2") == (
-        "auto-proceed previsto (A2): sin revisión humana"
+        "auto-proceed previsto: sin revisión humana"
     )
 
 
@@ -2918,7 +2924,7 @@ def test_corrida_con_reporte_a2_sin_citas_marcadas_dice_auto_proceed_previsto(
     assert result.status == "completed"
     traice = _entregable(ctx, "checklist_traice.md")
     metodos = _entregable(ctx, "metodologia.md")
-    assert "- reporte (A2): auto-proceed previsto (A2): sin revisión humana" in traice
+    assert "- reporte (A2): auto-proceed previsto: sin revisión humana" in traice
     assert "Reporte final: auto-proceed previsto (A2): sin revisión humana." in metodos
     assert "pendiente de la decisión final" not in traice + metodos
 

@@ -91,6 +91,23 @@ def wmcc(tp: int, fp: int, fn: int, tn: int, *, fn_weight: float = 10.0) -> floa
     return ((tp * tn) - (fp * fnw)) / denom if denom else None
 
 
+def kappa_from_matrix(tp: int, fp: int, fn: int, tn: int) -> float | None:
+    """Cohen's kappa a partir de la matriz de confusión.
+
+    Pública para que el auditor recalcule κ desde la matriz de
+    ``metrics.json`` sin rehacer las listas de etiquetas (spec 2026-10-04
+    §9.1; auditoría 2026-09-03, C3: κ=0.75 con MCC=0.71 y FN=0 es imposible).
+    ``None`` si ``n=0`` o si ``pe=1`` (ambas clasificaciones constantes en la
+    misma clase).
+    """
+    n = tp + fp + fn + tn
+    if n == 0:
+        return None
+    po = (tp + tn) / n
+    pe = ((tp + fp) * (tp + fn) + (fn + tn) * (fp + tn)) / (n * n)
+    return (po - pe) / (1 - pe) if (1 - pe) else None
+
+
 def cohen_kappa(pred: list[bool], gold: list[bool]) -> float | None:
     """Cohen's kappa entre dos clasificaciones binarias.
 
@@ -98,13 +115,25 @@ def cohen_kappa(pred: list[bool], gold: list[bool]) -> float | None:
     misma clase (acuerdo perfecto por azar, ``pe=1``); no basta con que una
     sola de las dos sea de una sola clase.
     """
-    tp, fp, fn, tn = confusion(pred, gold)
-    n = tp + fp + fn + tn
-    if n == 0:
+    return kappa_from_matrix(*confusion(pred, gold))
+
+
+def wilson_interval(k: int, n: int, z: float = 1.96) -> tuple[float, float] | None:
+    """Intervalo de Wilson para una proporción ``k/n`` (95 % con ``z=1.96``).
+
+    El auditor lo informa junto al recall (D7): con pocos positivos en el gold
+    un recall de 1.0 es compatible con valores muy por debajo del umbral, y el
+    intervalo lo hace visible. A diferencia del intervalo de Wald, no colapsa a
+    un punto cuando ``k`` es 0 o ``n``. ``None`` si ``n <= 0``.
+    """
+    if n <= 0:
         return None
-    po = (tp + tn) / n
-    pe = ((tp + fp) * (tp + fn) + (fn + tn) * (fp + tn)) / (n * n)
-    return (po - pe) / (1 - pe) if (1 - pe) else None
+    p = k / n
+    z2 = z * z
+    denom = 1 + z2 / n
+    centro = (p + z2 / (2 * n)) / denom
+    radio = z * math.sqrt(p * (1 - p) / n + z2 / (4 * n * n)) / denom
+    return max(0.0, centro - radio), min(1.0, centro + radio)
 
 
 def compute_screening_metrics(

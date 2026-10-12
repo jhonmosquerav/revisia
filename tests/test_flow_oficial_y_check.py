@@ -225,7 +225,8 @@ def test_prisma_s_desde_el_log_de_busqueda() -> None:
     resumenes = render_prisma_abstracts_checklist(
         databases=["OpenAlex"], search_window=ventana, search_log=log
     )
-    assert "última búsqueda: 2026-10-04 (registrada por el motor)" in resumenes
+    assert "fecha de la búsqueda (registrada por el motor): 2026-10-04" in resumenes
+    assert "última búsqueda:" not in resumenes
     protocolo = ReviewProtocol.model_validate(
         {"slug": "d", "title": "D", "question": {"text": "¿X?", "framework": "PEO"}}
     )
@@ -380,7 +381,7 @@ def test_resumenes_item_4_con_el_log_aunque_no_haya_bases_declaradas() -> None:
     markdown = render_prisma_abstracts_checklist(search_log=log)
     item_4 = next(x for x in markdown.splitlines() if x.startswith("- [ ] 4."))
     assert "Bases: OpenAlex" in item_4
-    assert "última búsqueda: 2026-10-04 (registrada por el motor)" in item_4
+    assert "fecha de la búsqueda (registrada por el motor): 2026-10-04" in item_4
     assert "(completar)" not in item_4
     # Sin log ni bases no hay evidencia, como antes.
     sin_nada = render_prisma_abstracts_checklist()
@@ -463,7 +464,10 @@ def test_resumenes_item_4_marca_las_bases_cuya_busqueda_fallo() -> None:
         databases=["OpenAlex", "PubMed"], search_log=_log_con_pubmed_fallida()
     )
     item_4 = next(x for x in markdown.splitlines() if x.startswith("- [ ] 4."))
-    assert f"Bases: OpenAlex, PubMed{_FALLO} · última búsqueda: 2026-10-04" in item_4
+    assert (
+        f"Bases: OpenAlex, PubMed{_FALLO} · fecha de la búsqueda (registrada por el motor): "
+        "2026-10-04" in item_4
+    )
     # Sin log, como siempre.
     sin_log = render_prisma_abstracts_checklist(databases=["OpenAlex", "PubMed"])
     assert "Bases: OpenAlex, PubMed ·" in sin_log
@@ -497,7 +501,10 @@ def test_resumenes_item_4_sin_bases_declaradas_nombra_la_busqueda_inyectada() ->
         for x in render_prisma_abstracts_checklist(search_log=log).splitlines()
         if x.startswith("- [ ] 4.")
     )
-    assert "Bases: búsqueda inyectada (search_fn) · última búsqueda: 2026-10-04" in item_4
+    assert (
+        "Bases: búsqueda inyectada (search_fn) · fecha de la búsqueda (registrada por el "
+        "motor): 2026-10-04" in item_4
+    )
 
 
 def test_resumenes_item_4_sin_bases_ni_busqueda_del_motor_dice_ninguna_registrada() -> None:
@@ -512,4 +519,6 @@ def test_resumenes_item_4_sin_bases_ni_busqueda_del_motor_dice_ninguna_registrad
         for x in render_prisma_abstracts_checklist(search_log=log).splitlines()
         if x.startswith("- [ ] 4.")
     )
-    assert "Bases: (ninguna registrada) · última búsqueda:" in item_4
+    assert "Bases: (ninguna registrada) · fecha de la búsqueda (registrada por el motor):" in (
+        item_4
+    )

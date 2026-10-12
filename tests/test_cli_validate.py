@@ -11,6 +11,7 @@ import pytest
 import yaml
 
 from revisia import cli
+from revisia.config import load_protocol
 from revisia.llm import preflight as preflight_mod
 
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "protocols" / "_TEMPLATE"
@@ -188,6 +189,7 @@ def test_cli_run_preflight_falla_sin_crear_runs_root(
     assert not runs_root.exists()
 
 
+@pytest.mark.dotenv_real
 def test_cli_carga_dotenv_sin_sobrescribir_el_entorno(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -205,3 +207,46 @@ def test_cli_carga_dotenv_sin_sobrescribir_el_entorno(
 
     assert os.environ["REVISIA_PRUEBA_DOTENV"] == "desde-dotenv"
     assert os.environ["GEMINI_API_KEY"] == "del-entorno"  # override=False
+
+
+# ── Claves de fusión YAML (<<) en protocol.yml: rc 2 con un mensaje que dice cómo arreglarlo ──
+
+
+def _protocolo_con_fusion(tmp_path: Path) -> Path:
+    """La plantilla con la ventana de búsqueda escrita con una clave de fusión."""
+    proto = tmp_path / "p"
+    shutil.copytree(TEMPLATE_DIR, proto)
+    texto = (proto / "protocol.yml").read_text(encoding="utf-8")
+    original = 'search_window:\n  from: "2015-01-01"\n  to: "2026-12-31"\n  executed: ""\n'
+    assert original in texto  # si la plantilla cambia, este test debe cambiar con ella
+    fusion = 'search_window:\n  <<: {from: "2015-01-01", to: "2026-12-31"}\n  executed: ""\n'
+    (proto / "protocol.yml").write_text(texto.replace(original, fusion), encoding="utf-8")
+    return proto
+
+
+@pytest.mark.parametrize("comando", ["validate", "run"])
+def test_cli_rechaza_un_protocolo_con_claves_de_fusion_con_rc_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture, comando: str
+) -> None:
+    # `00_protocol/protocol.yml` es una copia literal de este fichero y el auditor rechaza `<<`:
+    # aceptarlo aquí daría una corrida que acaba en FAIL con un motivo que nadie relaciona con
+    # su protocolo.
+    runs_root = tmp_path / "runs"
+    args = [comando, str(_protocolo_con_fusion(tmp_path))]
+    rc = cli.main(args + (["--runs-root", str(runs_root)] if comando == "run" else []))
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "claves de fusión YAML (<<) no admitidas en protocol.yml: expándelas" in err
+    assert "Traceback" not in err
+    assert not runs_root.exists()  # ni se creó la carpeta de la corrida
+
+
+def test_describe_damage_de_una_clave_de_fusion_dice_el_fichero_y_la_linea(tmp_path: Path) -> None:
+    # Al reanudar, el protocolo viene de `00_protocol/` y el error llega a `_run_guarded`.
+    proto = _protocolo_con_fusion(tmp_path)
+    with pytest.raises(yaml.YAMLError) as info:
+        load_protocol(proto)
+    detalle, fichero = cli._describe_damage(info.value)
+    assert fichero is not None and fichero.endswith("protocol.yml")
+    assert "claves de fusión YAML (<<) no admitidas" in detalle
+    assert "línea " in detalle

@@ -195,21 +195,46 @@ def esummary_pmc(pmcids: list[str], *, mailto: str | None = None) -> list[Search
     return records
 
 
-def bioc_fulltext(pmcid: str, *, mailto: str | None = None) -> str | None:
-    """Texto completo OA vía BioC-PMC (JSON). ``None`` si no está en el subconjunto OA.
+def _get(url: str, *, params: dict[str, str] | None = None, what: str) -> Any | None:
+    """GET a una API de NCBI: la respuesta, ``None`` si el recurso no existe (404/410).
 
-    Concatena el ``text`` de todos los *passages* de todos los documentos. Cualquier
-    fallo (red, 404, artículo no-OA que devuelve texto de error en vez de JSON) se
-    degrada a ``None`` para no romper la corrida.
+    Distingue «no hay» de «no se pudo saber» (revisión final de la Ola 1, A5): un fallo de
+    transporte, un 5xx o un 429 es ``TransientHTTPError`` y la recuperación lo reintenta al
+    reanudar; sin ``httpx``, ``HttpxMissingError``. Antes todo era «sin texto en abierto».
     """
-    pmc = pmcid if pmcid.upper().startswith("PMC") else f"PMC{pmcid}"
     _throttle()
     try:
         with _client() as client:
-            resp = client.get(BIOC_URL.format(pmcid=pmc))
+            resp = client.get(url, params=params) if params is not None else client.get(url)
             resp.raise_for_status()
-            data = resp.json()
-    except Exception:  # red caída, 404, cuerpo no-JSON (no-OA) → sin texto
+    except _http.HttpxMissingError:
+        raise
+    except Exception as exc:
+        if _http.http_status(exc) in _http.NOT_FOUND_STATUSES:
+            return None
+        raise _http.TransientHTTPError(
+            _http.redact_secrets(f"{what}: {type(exc).__name__}: {exc}")
+        ) from exc
+    return resp
+
+
+def bioc_fulltext(pmcid: str, *, mailto: str | None = None) -> str | None:
+    """Texto completo OA vía BioC-PMC (JSON). ``None`` si no está en el subconjunto OA.
+
+    Concatena el ``text`` de todos los *passages* de todos los documentos. Un 404 o un
+    artículo no-OA (la API responde texto de error en vez de JSON) es ``None``.
+
+    Raises:
+        TransientHTTPError: fallo de red, 5xx o 429 (no dice nada del artículo).
+        HttpxMissingError: sin ``httpx``.
+    """
+    pmc = pmcid if pmcid.upper().startswith("PMC") else f"PMC{pmcid}"
+    resp = _get(BIOC_URL.format(pmcid=pmc), what="BioC-PMC")
+    if resp is None:
+        return None
+    try:
+        data = resp.json()
+    except Exception:  # cuerpo no-JSON: el artículo no está en el subconjunto OA
         return None
     docs: list[dict] = []
     if isinstance(data, list):
@@ -231,19 +256,24 @@ def idconv(ids: list[str], *, mailto: str | None = None) -> dict[str, str]:
     """Mapea DOI/PMID → PMCID vía ID Converter (para registros de otras bases).
 
     Devuelve un dict con claves en minúsculas (el DOI/PMID/PMCID de entrada) → PMCID.
-    Cualquier fallo se degrada a ``{}``.
+    Un 404, o una respuesta sin PMCID, es ``{}`` (sin texto en PMC).
+
+    Raises:
+        TransientHTTPError: fallo de red, 5xx o 429 (no dice nada de los ids).
+        HttpxMissingError: sin ``httpx``.
     """
     if not ids:
         return {}
     params = _common_params(mailto)
     params.update({"ids": ",".join(ids), "format": "json"})
-    _throttle()
+    resp = _get(IDCONV_URL, params=params, what="ID Converter")
+    if resp is None:
+        return {}
     try:
-        with _client() as client:
-            resp = client.get(IDCONV_URL, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-    except Exception:
+        data = resp.json()
+    except Exception:  # cuerpo no-JSON: nada que mapear
+        return {}
+    if not isinstance(data, dict):
         return {}
     out: dict[str, str] = {}
     for rec in data.get("records") or []:

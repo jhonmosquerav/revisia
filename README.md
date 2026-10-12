@@ -89,9 +89,24 @@ Y al terminar, **audita la corrida** antes de usarla:
 
 ```bash
 uv run revisia audit runs/mi-revision-<fecha>
-# ✅/⚠️/❌ por verificación (manifest, prompts, HITL, gold, grounding, registro…)
-# → escribe runs/.../audit.md con el veredicto de publicabilidad
+# ✅/⚠️/❌/➖ por verificación: esquemas, instantánea del protocolo, marcas de tiempo,
+#   ledger y HITL por registro, aritmética del flujo PRISMA, umbrales, grounding, búsqueda…
+# → escribe runs/.../audit.md con el estado de la corrida y el veredicto de publicabilidad
 ```
+
+El auditor comprueba que la corrida es **coherente**, no solo que sus ficheros
+existan: cada artefacto valida su modelo, el protocolo usado es el de
+`00_protocol/`, los conteos del diagrama salen de los registros, cada decisión
+humana responde a la solicitud que se revisó y los umbrales del protocolo
+(`recall_target`, `kappa_min`) se cumplen o se declaran. Una corrida con
+`--auto-approve`, sin decisión humana en una etapa de juicio, con citas
+marcadas sin adjudicar o anterior a la Ola 1 (sin `run.json`) **no es
+publicable**.
+
+Límite inherente: los hashes no son firmas. Una reescritura completa y
+coherente del ledger, las decisiones y los conteos no la detecta ningún check,
+y `request_sha256` es estable entre corridas con las mismas entradas (copiar
+decisiones entre dos corridas idénticas solo lo delata `timing`).
 
 ## Principios de diseño
 
@@ -199,20 +214,47 @@ con ids que no están en la solicitud o incompleto para aprobar detiene la
 corrida con un mensaje que nombra qué falta (código 2): no se toma como
 rechazo ni como aprobación. Con `approved: false` en el reporte final la
 corrida termina como `rejected` (código 1) y no se sedimenta en `--brain`.
-Reanudar no repite la búsqueda ni ninguna llamada ya hecha; una corrida
-interrumpida (un 429, la red) sale con código 3 y se reanuda igual. No
-reanudes la misma corrida en dos procesos a la vez, y si empezaste con
-`--mailto`, pásalo también al reanudar.
 
 `--auto-approve` sirve para demostraciones: aprueba con las etiquetas de la IA
 (actor `auto-approve (demo)`, que el checklist trAIce y `metodologia.md`
 declaran como no humano) y pausa si hay un `unclear` en texto completo o citas
-marcadas.
+marcadas. `revisia audit` declara esa corrida **no publicable** (FAIL en
+`hitl` y en `final_gate`).
 
-> **Limitación actual (Ola 1 del plan de remediación).** `revisia audit` todavía
-> marca `--auto-approve` solo con WARN en `hitl` y en `final_gate`, sin
-> declararlo no publicable; el auditor estricto llega con la última PR de la
-> Ola 1.
+### Reanudar una corrida
+
+`revisia run --resume runs/<slug>-<fecha>` sigue donde se quedó: la búsqueda y
+el dedup están congelados y cada etapa con IA o red lleva un diario, así que no
+repite ningún registro terminado. Las llamadas del registro en curso cuando algo
+falla (p. ej. el 2.º modelo del ensemble de título/abstract, o el juez de
+grounding a mitad) se repiten al reanudar y no quedan en `llm_calls.jsonl`, que
+recibe las de cada registro al terminarlo. Una corrida interrumpida (un 429, la
+red) sale con código 3 y se reanuda igual; un error de configuración o de un
+fichero dañado (un `decision.yml` que no es UTF-8, un `gold.yml` o un
+`effects.yml` con otra forma, un artefacto editado a mano) sale con código 2 y
+un mensaje que dice qué corregir.
+
+- Un fallo transitorio al recuperar un texto completo (`error_http`,
+  `sin_httpx`) se reintenta en cada reanudación: si entonces aparece el texto,
+  la solicitud de texto completo cambia y una corrida `completed` vuelve a
+  `paused` en ese gate.
+- Si un gate se aprobó con `--auto-approve` y reanudas sin él, esa aprobación de
+  demostración sigue valiendo para la misma solicitud (está en el ledger) y la
+  corrida no vuelve a pausar. Para sustituirla por una decisión humana, copia
+  `<etapa>/decision.template.yml` como `<etapa>/decision.yml`, rellénalo con tu
+  `actor: human:<nombre>` y reanuda: la decisión del fichero pasa a ser la
+  efectiva y las dos quedan en el ledger. Hazlo en cada gate que aprobó la demo.
+- Sin `pypdf` instalado, un texto completo en abierto que es un PDF queda como
+  no recuperado (`texto_vacio`), y como ese motivo es definitivo no se reintenta
+  al reanudar. `pypdf` no está en ningún extra: instálalo antes de correr con
+  `uv pip install pypdf` (el preflight avisa si falta).
+- Limitación conocida (Ola 2, M15): un fallo determinista de un registro (un
+  400 por contexto excedido, un bloqueo de seguridad del proveedor, una
+  respuesta que no se puede interpretar una y otra vez) sale con código 3 en
+  cada reanudación; la única salida hoy es una corrida nueva (p. ej. con otro
+  modelo).
+- No reanudes la misma corrida en dos procesos a la vez, y si empezaste con
+  `--mailto`, pásalo también al reanudar.
 
 ## Exportar el artículo (HTML / PDF)
 
@@ -264,16 +306,22 @@ Licencia Apache-2.0, `CITATION.cff` y `.zenodo.json` listos para depósito en Ze
 > reproducción de cada hallazgo están en
 > [`docs/auditoria/2026-09-03-auditoria-completa.md`](docs/auditoria/2026-09-03-auditoria-completa.md):
 > la base de ingeniería es sólida (estadística contrastada con `metafor`, suite
-> determinista, capa de proveedores), pero **tres promesas de este README aún no
-> se cumplen en el código**: la decisión humana registro a registro, el
+> determinista, capa de proveedores), pero **tres promesas de este README no se
+> cumplían en el código**: la decisión humana registro a registro, el
 > verificador anti-alucinación en su modo por defecto, y la reproducibilidad de
 > la corrida de referencia. El plan de remediación en tres olas está en el
 > informe. **La Ola 0 se cerró el 2026-09-25** (PRs #8–#10): seguridad del motor
 > y del exportador, un reporte rechazado ya no figura como completado, el
 > auditor exige procedencia y decisión humana final, modelo por defecto vigente
-> y métricas indefinidas marcadas como tales (estado en §11 del informe). Hasta
-> cerrar la Ola 1, trata las salidas como borradores que requieren revisión
-> humana completa, no como evidencia publicable.
+> y métricas indefinidas marcadas como tales. **La Ola 1** cumple la primera
+> promesa y endurece el auditor: decisión humana por registro atada a la
+> solicitud revisada, corridas reanudables, preflight sin red, flujo PRISMA
+> estricto y un `revisia audit` que comprueba la coherencia de la corrida y
+> declara no publicable lo que no tiene un humano detrás (estado en §11 del
+> informe). Sigue abierta la Ola 2: hasta que el verificador compruebe de
+> verdad (C2), una síntesis sin citas marcadas no prueba que esté
+> fundamentada, y las cifras del benchmark fundacional siguen siendo
+> ilustrativas.
 
 ## Equipo de agentes, autonomías y auditorías
 
@@ -427,6 +475,7 @@ una RS no repita las limitaciones clásicas de una revisión rápida:
 | Sesgo de idioma | cadenas de ejemplo **EN/ES/PT** + `grounding: agent` (verificación cross-lingual) |
 | Sesgo de modelo IA | `grounding: agent` (juicio cross-lingual) + ensemble multi-modelo + verificador |
 | Sin metaanálisis | `effects.yml` → efectos fijos/aleatorios, I²/τ², Egger (cuando hay efectos poolables) |
+| Umbrales de calidad decorativos | `revisia audit` lee `recall_target` y `kappa_min` del protocolo: un recall bajo el umbral con exclusiones de la IA sin revisar hace la corrida **no publicable**; un κ bajo es una desviación a declarar (PRISMA 24c); el recall se informa con su intervalo de Wilson y avisa si el gold no tiene positivos suficientes |
 
 Scopus/Web of Science **no** se automatizan (su licencia lo prohíbe): se incorporan
 por export→import RIS/BibTeX desde la biblioteca de tu institución.
@@ -455,7 +504,7 @@ revisia/          # EL MOTOR (paquete instalable · provider-agnostic)
   provenance/         # RunMeta + ledger append-only de decisiones
   orchestration/      # flujo Prefect + checkpoints HITL
   memory/             # cerebro de investigador (markdown + JSONL, living review)
-  audit.py            # auditor post-corrida (PRISMA 2020 / -S / trAIce)
+  audit/              # auditor post-corrida (PRISMA 2020 / -S / trAIce), un módulo por familia de checks
   prompts/            # prompts versionados y hash-eados
 protocols/_TEMPLATE/  # LA CONFIG (una carpeta por revisión · default: gemini)
   protocolo-prisma-p.md  #   plantilla de preregistro (17 ítems PRISMA-P)

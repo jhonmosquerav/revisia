@@ -17,6 +17,7 @@ perdía (auditoría 2026-09-03, M11). El pipeline ya no criba esos registros
 
 from __future__ import annotations
 
+import importlib.util
 import re
 from dataclasses import dataclass
 
@@ -57,6 +58,10 @@ def resolve_oa_url(record: SearchRecord, *, mailto: str | None = None) -> str | 
 
     Prioridad: ``extra.fulltext_url`` > ``extra.oa_url`` > consulta a Unpaywall
     por DOI (requiere ``httpx`` y un email).
+
+    Raises:
+        TransientHTTPError: Unpaywall falló por la red, un 5xx o un 429.
+        HttpxMissingError: hay que consultar Unpaywall y ``httpx`` no está instalado.
     """
     for key in ("fulltext_url", "oa_url"):
         url = record.extra.get(key)
@@ -68,18 +73,31 @@ def resolve_oa_url(record: SearchRecord, *, mailto: str | None = None) -> str | 
 
 
 def _unpaywall_url(doi: str, mailto: str) -> str | None:
+    """URL OA de Unpaywall para ``doi``; ``None`` si no la tiene (404, o 200 sin URL).
+
+    Un fallo de red, un 5xx o un 429 no dice nada del artículo: es ``TransientHTTPError`` y la
+    recuperación queda como ``error_http`` (se reintenta al reanudar). Antes se degradaba a
+    «sin OA» y ``sin_url_oa`` (permanente) quedaba congelado en el diario (revisión final, A5).
+    """
     try:
         import httpx
-    except ImportError:  # pragma: no cover
-        return None
+    except ImportError as exc:
+        raise _http.HttpxMissingError("httpx no está instalado (extra `search`)") from exc
     try:
         with httpx.Client(timeout=30.0, follow_redirects=True) as client:
             resp = client.get(f"https://api.unpaywall.org/v2/{doi}", params={"email": mailto})
             resp.raise_for_status()
-            data = resp.json()
-    except Exception:  # red caída, 404, etc. → sin OA
+    except Exception as exc:
+        if _http.http_status(exc) in _http.NOT_FOUND_STATUSES:
+            return None
+        raise _http.TransientHTTPError(
+            _http.redact_secrets(f"Unpaywall: {type(exc).__name__}: {exc}")
+        ) from exc
+    try:
+        data = resp.json()
+    except Exception:  # cuerpo no-JSON con un 200: nada que usar
         return None
-    loc = data.get("best_oa_location") or {}
+    loc = (data.get("best_oa_location") if isinstance(data, dict) else None) or {}
     return loc.get("url_for_pdf") or loc.get("url")
 
 
@@ -119,29 +137,71 @@ def fetch_fulltext(
 
     Prioridad: BioC-PMC (texto estructurado, sin parsear PDF) si hay PMCID
     resoluble > raspado OA (``extra.fulltext_url``/``oa_url``) > Unpaywall.
+
+    Un motivo permanente (``sin_url_oa``, ``texto_vacio``) solo sale de una respuesta que lo
+    dice. Si una consulta (ID Converter, BioC, Unpaywall) falla por la red, un 5xx o un 429,
+    el motivo es ``error_http``; si hacía falta la red y no hay ``httpx``, ``sin_httpx``. Los
+    dos son transitorios y se reintentan al reanudar (revisión final de la Ola 1, A5).
+
+    Un fallo transitorio de NCBI (ID Converter o BioC) no corta las otras vías: se sigue con
+    ``oa_url``/``fulltext_url``/Unpaywall y, si alguna da texto, ese texto se devuelve. Si ninguna
+    lo da, el motivo es ``error_http`` con el detalle de NCBI (BioC pudo tenerlo), no uno
+    permanente ni ``sin_httpx``.
     """
+    try:
+        return _fetch_fulltext(record, mailto=mailto, max_chars=max_chars)
+    except _http.HttpxMissingError:
+        return _not_retrieved(record, "sin_httpx", "httpx no está instalado (extra `search`)")
+    except _http.TransientHTTPError as exc:
+        return _not_retrieved(record, "error_http", str(exc))
+
+
+def _not_retrieved(record: SearchRecord, reason: FulltextReason, detail: str) -> FullText:
+    """Un no recuperado con su motivo y el detalle redactado (el abstract sigue en ``text``)."""
+    return FullText(
+        text=record.abstract or "",
+        available=False,
+        reason=reason,
+        detail=_http.redact_secrets(detail),
+    )
+
+
+def _fetch_fulltext(record: SearchRecord, *, mailto: str | None, max_chars: int) -> FullText:
+    """Cuerpo de :func:`fetch_fulltext`; las consultas pueden lanzar los errores transitorios."""
+
+    # Fallo transitorio de la vía 1 (ID Converter o BioC): no corta las otras vías de acceso
+    # abierto (revisión final de la Ola 1: una URL abierta declarada se recupera aunque NCBI
+    # esté caído), pero si la vía 2 tampoco da texto, el motivo es el fallo, no uno permanente.
+    transitorio: _http.TransientHTTPError | None = None
 
     def fallback(reason: FulltextReason, detail: str) -> FullText:
-        return FullText(
-            text=record.abstract or "",
-            available=False,
-            reason=reason,
-            detail=_http.redact_secrets(detail),
-        )
+        if transitorio is not None and reason != "error_http":
+            # BioC pudo tener el texto: ni «sin URL», ni «sin texto», ni «sin httpx» se congelan.
+            return _not_retrieved(record, "error_http", str(transitorio))
+        return _not_retrieved(record, reason, detail)
 
     # 1) BioC-PMC: texto completo estructurado si el registro está en el subconjunto OA.
-    pmcid = _resolve_pmcid(record, mailto=mailto)
-    if pmcid:
-        bioc = ncbi.bioc_fulltext(pmcid, mailto=mailto)
-        if bioc:
-            return FullText(
-                text=bioc[:max_chars],
-                available=True,
-                source_url=f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/",
-            )
+    try:
+        pmcid = _resolve_pmcid(record, mailto=mailto)
+        if pmcid:
+            bioc = ncbi.bioc_fulltext(pmcid, mailto=mailto)
+            if bioc:
+                return FullText(
+                    text=bioc[:max_chars],
+                    available=True,
+                    source_url=f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/",
+                )
+    except _http.TransientHTTPError as exc:
+        transitorio = exc
 
     # 2) Fallback: raspado OA / Unpaywall (comportamiento previo, intacto).
-    url = resolve_oa_url(record, mailto=mailto)
+    try:
+        url = resolve_oa_url(record, mailto=mailto)
+    except (_http.TransientHTTPError, _http.HttpxMissingError):
+        if transitorio is None:
+            raise
+        # El fallo previo de NCBI manda sobre el de Unpaywall (o su falta de httpx).
+        return _not_retrieved(record, "error_http", str(transitorio))
     if not url:
         return fallback(
             "sin_url_oa",
@@ -162,6 +222,13 @@ def fetch_fulltext(
         return fallback("error_http", f"{type(exc).__name__}: {exc}")
 
     if "pdf" in content_type.lower() or url.lower().endswith(".pdf"):
+        if importlib.util.find_spec("pypdf") is None:
+            # pypdf no está en ningún extra (decisión pendiente del arquitecto): el preflight
+            # lo avisa y el README lo dice; aquí el detalle no lo esconde tras «sin texto».
+            return fallback(
+                "texto_vacio",
+                f"{url} es un PDF y pypdf no está instalado (`uv pip install pypdf`)",
+            )
         text = _extract_pdf(raw)
     else:
         text = strip_html(raw.decode("utf-8", errors="ignore"))
