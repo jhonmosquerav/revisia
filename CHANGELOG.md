@@ -6,6 +6,8 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.8.0] · 2026-10-18
+
 ### Added
 - **`effort` por etapa** en el bloque `llm` de `protocol.yml` (`low`, `medium`,
   `high`, `xhigh`, `max`): en los modelos 5.5 sustituye a `temperature` como
@@ -229,7 +231,8 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   - `pypdf` viene en los extras `search` y `demo`. Antes no lo instalaba ningún
     extra y los PDF en abierto quedaban «no recuperados».
   - `pytest-xdist` en el extra `dev`: `uv run pytest -n auto` reparte la suite
-    entre núcleos (el CI ya la corre así).
+    entre núcleos (el CI ya la corre así). Los tests con cota de tiempo de pared
+    llevan la marca `cronometrado` y se corren aparte, en serie.
   - Al reanudar **sin** `--auto-approve`, una aprobación de demostración del
     ledger ya no vale: el gate pausa y pide un `decision.yml` humano para la
     misma solicitud. Reanudar con `--auto-approve` la sigue reutilizando.
@@ -733,7 +736,8 @@ borradores de revisiones sistemáticas bajo PRISMA 2020 + PRISMA-S + PRISMA-trAI
 - El driver de referencia de Claude Code (subagentes `.md`) llega en una versión
   posterior; el núcleo no lo requiere.
 
-[Unreleased]: https://github.com/jhonmosquerav/revisia/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/jhonmosquerav/revisia/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/jhonmosquerav/revisia/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/jhonmosquerav/revisia/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/jhonmosquerav/revisia/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/jhonmosquerav/revisia/compare/v0.4.0...v0.5.0

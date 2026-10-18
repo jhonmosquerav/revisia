@@ -7,12 +7,13 @@ publicada recibe correcciones de seguridad.
 
 | Versión | Soportada |
 |---------|-----------|
-| 0.7.x   | ✅        |
-| < 0.7   | ❌        |
+| 0.8.x   | ✅        |
+| < 0.8   | ❌        |
 
-La 0.7.0 incluye las correcciones de seguridad de la Ola 0 de remediación
+La 0.8.0 incluye las correcciones de seguridad de las Olas 0 y 1 de remediación
 (inyección de comandos en Windows, lectura arbitraria de ficheros y HTML sin
-sanear en `revisia export`); ver `CHANGELOG.md`, sección *Security*. Si usas
+sanear en `revisia export`; en la Ola 1, secretos en URLs firmadas y entradas
+YAML manipuladas que tumbaban el auditor); ver `CHANGELOG.md`, sección *Security*. Si usas
 una versión anterior, actualiza.
 
 ## Reportar una vulnerabilidad
