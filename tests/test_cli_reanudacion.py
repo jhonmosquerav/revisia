@@ -518,8 +518,13 @@ def _excepciones_de_la_corrida(tmp_path: Path) -> list:
     from revisia.llm.preflight import PreflightError, PreflightIssue, PreflightReport
     from revisia.orchestration.hitl import DecisionFileError
     from revisia.orchestration.journal import JournalError
-    from revisia.orchestration.run_context import LegacyRunError, RunDirExistsError
+    from revisia.orchestration.run_context import (
+        LegacyRunError,
+        RunCancelled,
+        RunDirExistsError,
+    )
     from revisia.orchestration.snapshot import ProtocolMismatchError
+    from revisia.protocol_files import ProtocolFilesError
 
     informe = PreflightReport(issues=(PreflightIssue("error", "llm.default", "sin API key"),))
     return [
@@ -535,7 +540,18 @@ def _excepciones_de_la_corrida(tmp_path: Path) -> list:
             3,
             "corrida interrumpida en 'screening_ta': RuntimeError: 429",
         ),
-        (KeyboardInterrupt(), 130, "Reanuda con: revisia run --resume"),
+        # Fuera del pipeline nada quedó registrado y la carpeta no se conoce (A9).
+        (KeyboardInterrupt(), 130, "antes de que la corrida quedara registrada"),
+        (
+            RunCancelled(tmp_path, registered=True),
+            130,
+            f"queda registrado en {tmp_path / 'run.json'}. Reanuda con: revisia run --resume",
+        ),
+        (
+            ProtocolFilesError(["gold.yml: `gold` es list, no un mapa"]),
+            2,
+            "gold.yml: `gold` es list, no un mapa",
+        ),
     ]
 
 
@@ -549,6 +565,8 @@ _GUARDADAS = [
     "FileNotFoundError",
     "RunInterrupted",
     "KeyboardInterrupt",
+    "RunCancelled",
+    "ProtocolFilesError",
 ]
 
 

@@ -40,14 +40,26 @@ class JournalError(ValueError):
     """Un diario (o ``llm_calls.jsonl``) inconsistente: no se puede reanudar con él."""
 
 
-def read_jsonl(path: Path, model: type[ModelT]) -> list[ModelT]:  # noqa: UP047
+def read_jsonl(  # noqa: UP047
+    path: Path,
+    model: type[ModelT],
+    *,
+    on_truncate: Callable[[int, str], None] | None = None,
+) -> list[ModelT]:
     """Lee un JSONL append-only y valida cada línea con ``model``.
 
-    Una última línea que no valida es la huella de una caída a mitad de
-    escritura: se recorta del fichero (para que la siguiente no se pegue a ella)
-    y se ignora. Una línea inválida antes de la última es corrupción y lanza
-    ``JournalError`` con su número de línea. Si la última línea es válida pero
-    le falta el salto final, se añade.
+    Una última línea cortada es la huella de una caída a mitad de escritura (``append_jsonl``
+    escribe la línea y su ``\\n`` de una vez): le falta el salto final o no es JSON. Se
+    recorta del fichero (para que la siguiente no se pegue a ella) y se ignora;
+    ``on_truncate(número de línea, motivo)`` lo avisa si se pasa. Una línea inválida antes de
+    la última es corrupción y lanza ``JournalError`` con su número de línea; también la
+    última si está completa (termina en ``\\n`` y es JSON) pero no valida: no es una caída a
+    mitad de escritura sino una edición a mano o un modelo que cambió, y recortarla borraría
+    evidencia en silencio. Si la última línea es válida pero le falta el salto final, se
+    añade.
+
+    La regla es la misma para los diarios, ``llm_calls.jsonl`` y el ledger de decisiones:
+    todos los escribe ``append_jsonl``, así que la huella de una caída es la misma.
     """
     if not path.exists():
         return []
@@ -64,11 +76,22 @@ def read_jsonl(path: Path, model: type[ModelT]) -> list[ModelT]:  # noqa: UP047
         try:
             items.append(model.model_validate_json(line))
         except ValidationError as exc:
+            error = exc.errors()[0]
+            motivo = error["msg"]
             if number != last:
-                motivo = exc.errors()[0]["msg"]
                 raise JournalError(f"{path}: línea {number + 1} corrupta ({motivo}).") from exc
+            terminada = number < len(lines) - 1  # hay un salto de línea tras ella
+            if terminada and error["type"] != "json_invalid":
+                raise JournalError(
+                    f"{path}: línea {number + 1} (la última) está completa (termina en salto de "
+                    f"línea y es JSON) pero no valida ({motivo}): no es una caída a mitad de "
+                    "escritura, el fichero se editó a mano o el modelo cambió. No se recorta; "
+                    "corrígela o empieza una corrida nueva."
+                ) from exc
             with path.open("r+b") as fh:
                 fh.truncate(start)
+            if on_truncate is not None:
+                on_truncate(number + 1, motivo)
             return items
     if data and not data.endswith(b"\n"):
         with path.open("ab") as fh:

@@ -45,9 +45,17 @@ class VerificationReport(BaseModel):
     hallucination_flagged: bool = False
     notes: str | None = None
 
+    def flagged_indices(self) -> list[int]:
+        """Posiciones en ``checks`` de las citas marcadas (inexistentes o sin respaldo).
+
+        Es la única regla de «cita marcada»: la usan ``recompute_flag``, la solicitud del gate
+        final (``must_adjudicate``) y el auditor (``request_hash``, ``final_gate`` y ``grounding``).
+        """
+        return [
+            i for i, c in enumerate(self.checks) if (not c.exists_in_corpus) or (not c.grounded)
+        ]
+
     def recompute_flag(self) -> bool:
         """Recalcula ``hallucination_flagged`` a partir de los checks."""
-        self.hallucination_flagged = any(
-            (not c.exists_in_corpus) or (not c.grounded) for c in self.checks
-        )
+        self.hallucination_flagged = bool(self.flagged_indices())
         return self.hallucination_flagged

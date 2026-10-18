@@ -52,3 +52,20 @@ def test_verification_recompute_flag() -> None:
         checks=[CitationCheck(claim="A", cited_id="rec-1", exists_in_corpus=True, grounded=True)],
     )
     assert clean.recompute_flag() is False
+
+
+def test_verification_flagged_indices_es_la_regla_unica_de_cita_marcada() -> None:
+    # Marcada = inexistente en el corpus o sin respaldo; `recompute_flag` y la solicitud del gate
+    # final (`must_adjudicate`) usan esta misma regla.
+    report = VerificationReport(
+        stage="sintesis",
+        checks=[
+            CitationCheck(claim="A", cited_id="rec-1", exists_in_corpus=True, grounded=True),
+            CitationCheck(claim="B", cited_id="rec-99", exists_in_corpus=False, grounded=True),
+            CitationCheck(claim="C", cited_id="rec-2", exists_in_corpus=True, grounded=False),
+            CitationCheck(claim="D", cited_id=None),
+        ],
+    )
+    assert report.flagged_indices() == [1, 2, 3]
+    assert report.recompute_flag() is True
+    assert VerificationReport(stage="sintesis").flagged_indices() == []

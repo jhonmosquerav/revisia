@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field, model_validator
 
+from revisia.provenance.ledger import plain_text
+
 if TYPE_CHECKING:
     from revisia.schemas.artifacts import ExcludedReport
 
@@ -110,10 +112,23 @@ class PrismaCounts(BaseModel):
         return data
 
 
+def _mermaid_text(value: object) -> str:
+    """Texto libre dentro de una etiqueta Mermaid entre comillas (``A["…"]``).
+
+    Una sola línea (``plain_text``: un salto partía el nodo) y las comillas como la entidad
+    ``#quot;``: unas comillas dentro de una razón de exclusión (``no cumple "población
+    adulta"`` es español normal) cerraban la etiqueta e inyectaban nodos (revisión final de
+    la Ola 1, C1). Las razones son texto humano libre o el primer criterio que cita la IA.
+    """
+    return plain_text(str(value)).replace('"', "#quot;")
+
+
 def _by_source_lines(counts: PrismaCounts) -> str:
     if not counts.identified_by_source:
         return ""
-    parts = [f"{db} (n = {n})" for db, n in sorted(counts.identified_by_source.items())]
+    parts = [
+        f"{_mermaid_text(db)} (n = {n})" for db, n in sorted(counts.identified_by_source.items())
+    ]
     return "<br/>" + " · ".join(parts)
 
 
@@ -135,7 +150,7 @@ def _reason_lines(counts: PrismaCounts) -> str:
     if not counts.ft_exclusion_reasons:
         return ""
     ordered = sorted(counts.ft_exclusion_reasons.items(), key=lambda kv: (-kv[1], kv[0]))
-    return "".join(f"<br/>{reason} (n = {n})" for reason, n in ordered)
+    return "".join(f"<br/>{_mermaid_text(reason)} (n = {n})" for reason, n in ordered)
 
 
 def render_flow_diagram(counts: PrismaCounts) -> str:
@@ -248,7 +263,7 @@ def render_flow_markdown(counts: PrismaCounts) -> str:
         ("Identificados", counts.identified),
     ]
     for db, n in sorted(counts.identified_by_source.items()):
-        rows.append((f"— identificados en {db}", n))
+        rows.append((f"— identificados en {_md_cell(db)}", n))
     rows += [
         ("Duplicados eliminados", counts.duplicates_removed),
         ("Marcados inelegibles por automatización (pre-cribado)", counts.removed_automation),
@@ -274,7 +289,9 @@ def render_flow_markdown(counts: PrismaCounts) -> str:
         ("— excluidos por IA (elegibilidad)", counts.excluded_ft_ai),
     ]
     for reason, n in sorted(counts.ft_exclusion_reasons.items(), key=lambda kv: (-kv[1], kv[0])):
-        rows.append((f"— razón: {reason}", n))
+        # Texto libre: un `|` partía la fila (también en el HTML exportado) y un salto de
+        # línea, la tabla entera (revisión final de la Ola 1, C1).
+        rows.append((f"— razón: {_md_cell(reason)}", n))
     rows.append(("Incluidos", counts.included))
     lines = ["| Etapa | n |", "|---|---|"]
     lines += [f"| {label} | {value} |" for label, value in rows]
@@ -285,8 +302,8 @@ _ORIGEN = {"human": "humano", "ai": "IA"}
 
 
 def _md_cell(value: object) -> str:
-    """Celda de tabla Markdown: una sola línea y con ``|`` escapado."""
-    return " ".join(str(value).split()).replace("|", "\\|")
+    """Celda de tabla Markdown: una sola línea (``plain_text``) y con ``|`` escapado."""
+    return plain_text(str(value)).replace("|", "\\|")
 
 
 def render_excluded_reports(reports: list[ExcludedReport]) -> str:

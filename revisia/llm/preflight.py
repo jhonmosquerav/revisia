@@ -13,7 +13,9 @@ SDK instalado, key en el entorno, binario ``claude``, ``effort`` solo en
 que tenga instalado el venv. ``context`` decide tres cosas: el callback de
 ``agent`` solo existe en tiempo de corrida (``run``/``resume``: error si falta;
 ``validate``: aviso); el aviso de ``mailto`` solo tiene sentido en ``run``; en
-``resume`` la búsqueda está congelada y se saltan bases y búsqueda.
+``resume`` la búsqueda está congelada y se saltan bases y búsqueda. Los ficheros
+auxiliares del protocolo (gold, efectos, criterios, formulario) se validan en los
+tres contextos (``revisia.protocol_files``).
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ from revisia.agents import search_backends
 from revisia.llm.deprecations import retirement_for
 from revisia.llm.providers.agent import get_agent_callback
 from revisia.llm.registry import _EFFORT_PROVIDERS, available_providers
+from revisia.protocol_files import ProtocolFilesError, load_protocol_files
 
 if TYPE_CHECKING:
     from revisia.config import ReviewProtocol
@@ -372,6 +375,16 @@ def check_databases(
                     "imported/: exporta sus resultados ahí o no aportará registros.",
                 )
             )
+    if not _importable("pypdf", find_spec):
+        # pypdf no está en ningún extra de pyproject.toml (decisión del arquitecto): sin él un
+        # texto completo en abierto que es PDF no se extrae (revisión final de la Ola 1, A5).
+        issues.append(
+            _warning(
+                "texto_completo",
+                "falta pypdf: los PDF en abierto quedarán como no recuperados "
+                "(`uv pip install pypdf`).",
+            )
+        )
     if not _importable("httpx", find_spec):
         if with_backend:
             issues.append(
@@ -392,6 +405,25 @@ def check_databases(
                 )
             )
     return issues
+
+
+def check_protocol_files(protocol_dir: str | Path) -> list[PreflightIssue]:
+    """``gold.yml``, ``effects.yml``, criterios y formulario con la forma esperada (A3).
+
+    Revisión final de la Ola 1: un fichero auxiliar con otra forma (un gold en lista, un
+    ``"false"`` entre comillas, un ``effects.yml`` de un estudio, unos criterios en texto, una
+    fecha sin comillas en el formulario) fallaba a mitad de corrida, a veces después de gastar
+    el LLM, y salía como rc 3 «reanuda» en bucle. Aquí es un error antes de crear la carpeta
+    (D10), uno por fichero; el pipeline repite la validación sobre la instantánea.
+    """
+    try:
+        load_protocol_files(protocol_dir)
+    except ProtocolFilesError as exc:
+        return [
+            _error(problem.split(":", 1)[0], problem.split(":", 1)[1].strip())
+            for problem in exc.problems
+        ]
+    return []
 
 
 def _configured_models(protocol: ReviewProtocol) -> list[str]:
@@ -476,6 +508,7 @@ def preflight(
             cfg, where=where, context=context, env=env, find_spec=find_spec, which=which
         )
     issues += check_retired(protocol, today)
+    issues += check_protocol_files(protocol_dir)
     if context != "resume":
         issues += check_databases(protocol, protocol_dir, find_spec=find_spec)
         if context == "run" and not mailto:

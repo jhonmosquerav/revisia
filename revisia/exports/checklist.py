@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING
 
+from revisia.agents import search_backends
 from revisia.config import JUDGMENT_STAGES
 from revisia.metrics import fmt_metric
 from revisia.provenance.ledger import AUTO_APPROVE_ACTOR, is_human_actor
@@ -57,7 +58,8 @@ _PRISMA_2020_ITEMS: list[tuple[str, int, str]] = [
 
 # Evidencia que el pipeline aporta automáticamente para ciertos ítems.
 _AUTO_EVIDENCE: dict[int, str] = {
-    7: "Cadenas en protocols/<slug>/search_strings/ (PRISMA-S).",
+    # La corrida usa la copia congelada del protocolo (D3), no `protocols/<slug>/`.
+    7: "Cadenas en 00_protocol/search_strings/ de la corrida (copia congelada; PRISMA-S).",
     8: "Decisiones de screening en runs/.../decisions_ledger.jsonl.",
     16: (
         "Diagrama de flujo PRISMA en deliverable/prisma_flow.md (16a); informes "
@@ -110,12 +112,12 @@ _PRISMA_S_ITEMS: list[tuple[int, str, str]] = [
 ]
 
 
-def _ran_in_engine(entry: SearchLogEntry) -> bool:
+def ran_in_engine(entry: SearchLogEntry) -> bool:
     """Si el motor ejecutó esa búsqueda (base con backend o búsqueda inyectada).
 
     Una importación (``manual_import``) lleva la hora de lectura del fichero, no la de
     la búsqueda externa que lo originó; una base ``manual_only`` o desconocida no se
-    ejecutó.
+    ejecutó. Pública: el auditor (``audit/checks_search.py``) lee la fecha con la misma regla.
     """
     return entry.kind == "injected" or (entry.kind == "database" and entry.backend is not None)
 
@@ -128,7 +130,7 @@ def engine_search_date(search_log: SearchLog) -> str:
     del log. Es la fecha que se reporta, no la tecleada en ``search_window.executed``
     (PRISMA-S 13).
     """
-    starts = [e.started_utc for e in search_log.entries if _ran_in_engine(e) and e.started_utc]
+    starts = [e.started_utc for e in search_log.entries if ran_in_engine(e) and e.started_utc]
     return min(starts or [search_log.started_utc])[:10]
 
 
@@ -239,6 +241,31 @@ def _dates_evidence(search_log: SearchLog, search_window: dict[str, str] | None)
     return text + "."
 
 
+def _sources_evidence(databases: list[str], search_log: SearchLog | None) -> str:
+    """PRISMA-S 1: qué bases consultó el motor por API y cuáles entraron importadas.
+
+    Una base ``manual_only`` (CINAHL, Scopus…) no tiene API en el motor: sus resultados se
+    exportan a mano y entran por ``imported/``. Llamarlas «APIs abiertas» decía algo falso
+    (revisión final de la Ola 1, D5).
+    """
+    etiquetas = list(zip(databases, label_databases(databases, search_log), strict=True))
+    por_api = [etiqueta for db, etiqueta in etiquetas if _has_backend(db)]
+    importadas = [etiqueta for db, etiqueta in etiquetas if not _has_backend(db)]
+    partes = []
+    if por_api:
+        partes.append(f"{', '.join(por_api)} (APIs abiertas; ver docs/integraciones.md)")
+    if importadas:
+        partes.append(
+            f"importadas manualmente vía imported/ (sin API en el motor): {', '.join(importadas)}"
+        )
+    return f"Bases: {'; '.join(partes)}."
+
+
+def _has_backend(database: str) -> bool:
+    """Si el motor busca en esa base por su API (``search_backends.BACKENDS``)."""
+    return search_backends.db_key(database) in search_backends.BACKENDS
+
+
 def render_prisma_s_checklist(
     *,
     databases: list[str] | None = None,
@@ -257,11 +284,13 @@ def render_prisma_s_checklist(
     """
     auto: dict[int, str] = {}
     if databases:
-        listed = ", ".join(label_databases(databases, search_log))
-        auto[1] = f"Bases: {listed} (APIs abiertas; ver docs/integraciones.md)."
+        auto[1] = _sources_evidence(databases, search_log)
         auto[2] = "Cada base se consulta por separado con su propia cadena."
         auto[7] = "Import RIS/BibTeX en protocols/<slug>/imported/ (Scopus/WoS/gestores)."
-        auto[8] = "Cadenas completas versionadas en protocols/<slug>/search_strings/<base>.txt."
+        auto[8] = (
+            "Cadenas completas en 00_protocol/search_strings/<base>.txt (copia congelada del "
+            "protocolo)."
+        )
     if search_window:
         limits = " · ".join(f"{k}: {v}" for k, v in search_window.items() if v)
         if limits:
@@ -333,16 +362,25 @@ def render_prisma_abstracts_checklist(
     """
     auto: dict[int, str] = {}
     if databases or search_log is not None:
-        executed = (search_window or {}).get("executed") or "(sin fecha ejecutada)"
+        # «Última búsqueda» era falso: la fecha del motor es la más temprana de sus búsquedas
+        # (`engine_search_date`), y sin log es la que se tecleó (revisión final, D5).
+        declarada = (search_window or {}).get("executed")
+        fecha = (
+            f"fecha de la búsqueda (declarada en el protocolo): {declarada}"
+            if declarada
+            else "fecha de la búsqueda: (sin fecha ejecutada)"
+        )
         sources = list(databases or [])
         if search_log is not None:
-            executed = f"{engine_search_date(search_log)} (registrada por el motor)"
+            fecha = (
+                f"fecha de la búsqueda (registrada por el motor): {engine_search_date(search_log)}"
+            )
             if sources:
                 sources = label_databases(sources, search_log)
             else:
-                sources = [_engine_source(e) for e in search_log.entries if _ran_in_engine(e)]
+                sources = [_engine_source(e) for e in search_log.entries if ran_in_engine(e)]
         listed = ", ".join(sources) or "(ninguna registrada)"
-        auto[4] = f"Bases: {listed} · última búsqueda: {executed}."
+        auto[4] = f"Bases: {listed} · {fecha}."
     if counts is not None:
         auto[7] = f"{counts.included} estudios incluidos (ver prisma_flow.md)."
     if registration and any(registration.values()):
@@ -355,12 +393,40 @@ def render_prisma_abstracts_checklist(
     return "\n".join(lines)
 
 
+def search_window_text(
+    window: Mapping[str, object] | None,
+    search_log: SearchLog | None,
+    *,
+    engine_date: bool = False,
+) -> str:
+    """La ventana de búsqueda declarada, en una línea (``from: … · to: …``).
+
+    ``executed`` es la fecha que se tecleó en ``protocol.yml``. Con ``search_log`` la fecha
+    que se reporta es la que registró el motor (PRISMA-S 13): la tecleada se rotula «declarada
+    en el protocolo» y, con ``engine_date``, la del motor va al lado como la registrada. Antes
+    el entregable imprimía ``executed: <fecha>`` junto a la del motor como si fueran la misma
+    cosa (revisión final de la Ola 1, D2).
+    """
+    partes = []
+    for clave, valor in (window or {}).items():
+        if not valor:
+            continue
+        if clave == "executed" and search_log is not None:
+            partes.append(f"ejecución declarada en el protocolo: {valor}")
+        else:
+            partes.append(f"{clave}: {valor}")
+    if engine_date and search_log is not None:
+        partes.append(f"fecha registrada por el motor: {engine_search_date(search_log)}")
+    return " · ".join(partes) or "(no declarada)"
+
+
 def describe_gate(
     stage: str,
     summary: GateSummary | None,
     *,
     autonomy: str | None = None,
     inline_autonomy: bool = False,
+    auto_approve: bool = False,
 ) -> str:
     """Quién decidió de verdad un gate, en una frase (M13).
 
@@ -377,7 +443,11 @@ def describe_gate(
         inline_autonomy: para la prosa de ``metodologia.md``, que se pega en un
             manuscrito: mete la autonomía en la frase, en el mismo paréntesis que el
             actor («human:ana; autonomía A1»), en vez de dejar que el llamador añada
-            un segundo paréntesis detrás. El checklist ya la pone delante de la frase.
+            un segundo paréntesis detrás. El checklist ya la pone delante de la frase
+            (y la frase no la repite: «reporte (A2): auto-proceed previsto», D5).
+        auto_approve: la corrida va con ``--auto-approve`` y el gate final no está forzado a
+            humano: un ``reporte`` pendiente en A0/A1 lo aprobará la demo, no un humano, y la
+            frase lo dice en vez de «pendiente de la decisión final» (revisión final, D3).
     """
     nivel = f"autonomía {autonomy}" if inline_autonomy and autonomy else None
 
@@ -390,7 +460,14 @@ def describe_gate(
     if summary is None:
         if stage == "reporte":
             if autonomy in {"A2", "A3"}:
-                return f"auto-proceed previsto ({autonomy}): sin revisión humana"
+                if nivel:
+                    return f"auto-proceed previsto ({autonomy}): sin revisión humana"
+                return "auto-proceed previsto: sin revisión humana"
+            if auto_approve:
+                return con_sufijo(
+                    "aprobación de demostración prevista (--auto-approve): NO es una validación "
+                    "humana"
+                )
             return con_sufijo("pendiente de la decisión final")
         return f"pendiente {entre_parentesis('sin decisión registrada')}"
     if summary.action == "auto-proceed":
@@ -436,6 +513,8 @@ def render_traice_checklist(
     metrics: ScreeningMetrics | None = None,
     exclusions: ExclusionBreakdown | None = None,
     search_window: dict[str, str] | None = None,
+    search_log: SearchLog | None = None,
+    auto_approve: bool = False,
 ) -> str:
     """Renderiza el checklist PRISMA-trAIce a partir de la procedencia real.
 
@@ -451,6 +530,9 @@ def render_traice_checklist(
         metrics: métricas de cribado frente al gold standard, si se calcularon.
         exclusions: desglose de exclusiones humano vs IA, si se calculó.
         search_window: ventana temporal de la búsqueda declarada en el protocolo.
+        search_log: ``01_search/log.json``; con él, ``executed`` se rotula como declarada en el
+            protocolo y la fecha registrada es la del motor (D2).
+        auto_approve: la corrida va con ``--auto-approve`` (ver :func:`describe_gate`, D3).
     """
     gates = gates or {}
     metas = list(run_metas)
@@ -475,7 +557,13 @@ def render_traice_checklist(
         # Con citas marcadas el gate final exige humano: no seguirá solo, sea cual sea la
         # autonomía que le pasen (`reporte` forzado ya llega aquí en A1).
         prevista = None if stage == "reporte" and forced_human else nivel
-        line = f"- {stage} ({nivel}): {describe_gate(stage, gates.get(stage), autonomy=prevista)}"
+        frase = describe_gate(
+            stage,
+            gates.get(stage),
+            autonomy=prevista,
+            auto_approve=auto_approve and not forced_human,
+        )
+        line = f"- {stage} ({nivel}): {frase}"
         if stage == "reporte" and forced_human and stage not in gates:
             line += " · exige decisión humana: el verificador marcó citas"
         lines.append(line)
@@ -497,15 +585,17 @@ def render_traice_checklist(
             "- _accuracy se omite a propósito (engañosa con datos desbalanceados)._",
         ]
     if search_window:
-        win = " · ".join(f"{k}: {v}" for k, v in search_window.items() if v)
-        lines += ["", "## Ventana temporal de la búsqueda", f"- {win or '(no declarada)'}"]
+        win = search_window_text(search_window, search_log, engine_date=True)
+        lines += ["", "## Ventana temporal de la búsqueda", f"- {win}"]
 
     lines += ["", "## Exclusiones separadas humano vs IA"]
     if exclusions is not None:
         lines += [
-            f"- Excluidos por IA (sin rescate humano): {exclusions.excluded_ai}",
+            # «Rescate» se reserva para un informe no recuperado que el revisor evaluó (D2):
+            # aquí es otra cosa, una exclusión de la IA que un humano revirtió (D4).
+            f"- Excluidos por IA (sin revertir por un humano): {exclusions.excluded_ai}",
             f"- Excluidos por humano (explícito): {exclusions.excluded_human}",
-            f"- Rescatados por humano (IA excluía, humano incluyó): "
+            f"- Exclusiones de la IA revertidas por un humano (IA excluía, humano incluyó): "
             f"{exclusions.overridden_to_include}",
             f"- Cortados por humano (IA no excluía, humano excluyó): "
             f"{exclusions.overridden_to_exclude}",

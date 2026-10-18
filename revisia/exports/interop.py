@@ -22,6 +22,7 @@ from importlib import resources
 
 from revisia.exports.prisma_flow import PrismaCounts
 from revisia.meta_analysis import MetaAnalysisResult
+from revisia.provenance.ledger import plain_text
 from revisia.schemas.rob import RoBAssessment
 
 # Vocabulario de juicios que espera robvis (tipo RoB2/ROBINS-I).
@@ -77,9 +78,20 @@ def render_metafor_csv(result: MetaAnalysisResult) -> str:
     return buf.getvalue()
 
 
+def _semi_label(label: str) -> str:
+    """Una etiqueta de ``_semi_list`` sin los separadores del formato.
+
+    Las razones de exclusión son texto libre (humano o el criterio que cita la IA) y los
+    nombres de base vienen de las APIs: un ``;`` o una ``,`` dentro partía el par
+    ``Etiqueta, n`` del paquete PRISMA2020, y un salto de línea, la celda (revisión final
+    de la Ola 1, C1). Ambos separadores pasan a `` - `` y el texto a una línea.
+    """
+    return plain_text(label.replace(";", " - ").replace(",", " - "))
+
+
 def _semi_list(pairs: dict[str, int]) -> str:
     """Formato ``"Etiqueta, n; Etiqueta, n"`` que espera el paquete PRISMA2020."""
-    return "; ".join(f"{label}, {n}" for label, n in sorted(pairs.items()))
+    return "; ".join(f"{_semi_label(label)}, {n}" for label, n in sorted(pairs.items()))
 
 
 def render_prisma2020_flow_csv(counts: PrismaCounts, *, meta_k: int | None = None) -> str:
