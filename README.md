@@ -239,15 +239,15 @@ un mensaje que dice qué corregir.
   la solicitud de texto completo cambia y una corrida `completed` vuelve a
   `paused` en ese gate.
 - Si un gate se aprobó con `--auto-approve` y reanudas sin él, esa aprobación de
-  demostración sigue valiendo para la misma solicitud (está en el ledger) y la
-  corrida no vuelve a pausar. Para sustituirla por una decisión humana, copia
-  `<etapa>/decision.template.yml` como `<etapa>/decision.yml`, rellénalo con tu
-  `actor: human:<nombre>` y reanuda: la decisión del fichero pasa a ser la
-  efectiva y las dos quedan en el ledger. Hazlo en cada gate que aprobó la demo.
+  demostración ya no vale: la corrida pausa en ese gate y pide una decisión
+  humana para la misma solicitud. Copia `<etapa>/decision.template.yml` como
+  `<etapa>/decision.yml`, rellénalo con tu `actor: human:<nombre>` y reanuda: la
+  decisión del fichero pasa a ser la efectiva y las dos quedan en el ledger.
+  Reanudar **con** `--auto-approve` sigue reutilizando la de la demo.
 - Sin `pypdf` instalado, un texto completo en abierto que es un PDF queda como
   no recuperado (`texto_vacio`), y como ese motivo es definitivo no se reintenta
-  al reanudar. `pypdf` no está en ningún extra: instálalo antes de correr con
-  `uv pip install pypdf` (el preflight avisa si falta).
+  al reanudar. Los extras `search` y `demo` ya lo instalan; si instalaste otro,
+  añádelo con `uv sync --inexact --extra search` (el preflight avisa si falta).
 - Limitación conocida (Ola 2, M15): un fallo determinista de un registro (un
   400 por contexto excedido, un bloqueo de seguridad del proveedor, una
   respuesta que no se puede interpretar una y otra vez) sale con código 3 en
@@ -270,7 +270,7 @@ uv run revisia export runs/<slug>-<fecha>
 #   → runs/<slug>-<fecha>/deliverable/<slug>.html
 
 # PDF (opcional · WeasyPrint: multiplataforma, sin Word/LaTeX/pandoc/Chromium)
-uv sync --extra pdf
+uv sync --inexact --extra pdf   # --inexact: no desinstala los otros extras
 uv run revisia export runs/<slug>-<fecha> --format pdf --out articulo.pdf
 ```
 

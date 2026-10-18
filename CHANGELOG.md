@@ -225,6 +225,19 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   demostración prevista», «rescate» se reserva para el no recuperado evaluado
   por el revisor y las bases de importación manual no se llaman «APIs
   abiertas».
+- Cierre de las decisiones pendientes de la Ola 1:
+  - `pypdf` viene en los extras `search` y `demo`. Antes no lo instalaba ningún
+    extra y los PDF en abierto quedaban «no recuperados».
+  - `pytest-xdist` en el extra `dev`: `uv run pytest -n auto` reparte la suite
+    entre núcleos (el CI ya la corre así).
+  - Al reanudar **sin** `--auto-approve`, una aprobación de demostración del
+    ledger ya no vale: el gate pausa y pide un `decision.yml` humano para la
+    misma solicitud. Reanudar con `--auto-approve` la sigue reutilizando.
+  - Las pistas de instalación (preflight, errores de búsqueda, de proveedor y de
+    export PDF) dicen `uv sync --inexact --extra …`: sin `--inexact`, `uv sync`
+    desinstala los extras que no se nombran.
+  - El auditor avisa (WARN en `deliverable`) cuando la revisión termina con 0
+    estudios incluidos: es un resultado válido, pero hay que declararlo.
 
 ### Cambios incompatibles
 - `revisia validate` y `revisia run` salen con código 2 ante cualquier error de
