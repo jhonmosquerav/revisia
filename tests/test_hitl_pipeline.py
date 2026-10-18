@@ -2196,7 +2196,11 @@ def test_reporte_a3_declarado_se_fuerza_a_a1_y_solo_se_completa_con_adjudicacion
         "reporte",
         flags={str(indice): {"verdict": "false_positive", "reason": "[2019] es un año"}},
     )
-    result = run_pipeline(protocol, proto, RunContext.open(ctx.run_dir), **kwargs)
+    # Con --auto-approve: los gates previos los aprobó la demo y, sin la bandera, pedirían
+    # humano. El de reporte lo exige igual (M5).
+    result = run_pipeline(
+        protocol, proto, RunContext.open(ctx.run_dir), auto_approve=True, **kwargs
+    )
 
     assert (result.status, result.stage) == ("completed", None)
     reporte = [e for e in ctx.ledger.read_all() if e.stage == "reporte"]
