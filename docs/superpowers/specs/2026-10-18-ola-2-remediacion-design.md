@@ -102,7 +102,10 @@ Cinco hallazgos de la exploración condicionan el diseño:
 
 D1–D6 las tomó el arquitecto el 2026-10-18 entre alternativas presentadas con
 recomendación. D7–D27 son supuestos propuestos con el diseño y aceptados con él;
-son revocables.
+son revocables. Tras la revisión del constructor (§3, preguntas sobre D5, D11,
+D15, D23 y D25), el arquitecto confirmó D11 explícitamente ese mismo día
+(actualiza el CLI y ejecuta él la sonda antes de PR-A); D5, D15, D23 y D25
+se ajustaron como supuestos y así quedan marcados.
 
 | # | Decisión | Razón |
 |---|---|---|
