@@ -30,7 +30,7 @@ Requiere **Python 3.13+** y [`uv`](https://docs.astral.sh/uv/).
 ```bash
 git clone <tu-fork> revisia && cd revisia
 uv sync --extra dev          # instala el motor + herramientas de desarrollo
-uv run pytest -q -n auto     # ~2 100 tests, offline, sin API key (-n auto: en paralelo)
+uv run pytest -q             # ~2 100 tests, offline, sin API key (en paralelo: abajo)
 ```
 
 Los tests corren **sin credenciales** gracias al proveedor `fake` determinista.
@@ -43,7 +43,8 @@ Tu rama debe pasar, en este orden:
 ```bash
 uv run ruff check .          # linting
 uv run black --check .       # formato (line-length 100)
-uv run pytest -q -n auto     # todos los tests verdes (en serie tarda ~11 min)
+uv run pytest -q -n auto -m "not cronometrado"   # en paralelo (en serie tarda ~11 min)
+uv run pytest -q -m cronometrado                 # los de cota de tiempo, en serie
 ```
 
 Pautas:

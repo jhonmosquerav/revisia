@@ -544,6 +544,7 @@ def test_request_hash_bomba_anidada_de_cadenas_en_la_decision_no_agota_la_memori
     assert len(filas) == len(CHECKS)
 
 
+@pytest.mark.cronometrado
 @pytest.mark.parametrize("fichero", ["review_request.yml", "decision.yml"])
 def test_request_hash_bomba_de_tuplas_de_pairs_no_agota_la_memoria(corrida, fichero: str) -> None:
     # `!!pairs` (y `!!omap`) construye listas de tuplas, y el JSON canónico las vuelca como

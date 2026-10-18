@@ -107,3 +107,6 @@ target-version = ["py313"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# Tests con una cota de tiempo de pared: con `-n auto` compiten por CPU y fallan en falso.
+# El CI y CONTRIBUTING los corren aparte y en serie: `-m cronometrado`.
+markers = ["cronometrado: cota de tiempo de pared; correr en serie, fuera de -n auto"]
