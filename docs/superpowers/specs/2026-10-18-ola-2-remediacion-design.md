@@ -373,8 +373,10 @@ pipeline; cada una tiene su test en el lado que la produce.
     recalculan desde la narrativa de `documento.md` y coinciden en número e ids
     con `checks`; `n_uncited_quantitative` coincide. Cada `check` con
     `exists_in_corpus and source_available` en modo `judge` tiene su línea
-    `check:<i>:<id>` en `verification.jsonl` con exactamente una llamada `ok`.
-    `grounded` se recalcula con la regla de §4.2 y coincide.
+    `check:<i>:<id>` en `verification.jsonl` con exactamente una llamada `ok` y
+    con `inputs.ventana_sha256 == sha256(source_window(...))` recalculada desde
+    el texto en caché (D15). `grounded` se recalcula con la regla de §4.2 y
+    coincide; `numbers_missing` se recalcula sobre la fuente completa.
 
 *Meta-análisis (D16)*
 
