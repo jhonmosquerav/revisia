@@ -1047,3 +1047,17 @@ def test_deliverable_completo_avisa_del_meta_analisis_ajeno_a_los_incluidos(corr
     assert "metodologia.md" in deliverable.detail  # el aviso reconoce que ya lo declara
     # Los 11 de siempre + meta_analisis.md + effects_metafor.csv + la lista 16b de la Ola 1.
     assert "14 artefactos" in deliverable.detail
+
+
+def test_deliverable_avisa_de_una_revision_vacia(corrida_sin_registros) -> None:
+    # Una revisión sin incluidos es un resultado legítimo (empty review), pero el entregable
+    # debe declararlo: WARN, no PASS silencioso ni FAIL (decisión pendiente 8 de la Ola 1).
+    report = auditar(corrida_sin_registros)
+    deliverable = fila(report, "deliverable")
+    assert deliverable.status == "WARN"
+    assert "revisión vacía" in deliverable.detail
+    assert report.publishable
+
+
+def test_deliverable_con_incluidos_no_avisa_de_revision_vacia(corrida) -> None:
+    assert "revisión vacía" not in fila(auditar(corrida), "deliverable").detail
