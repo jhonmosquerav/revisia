@@ -210,7 +210,12 @@ def test_brain_no_sedimenta_dos_veces(tmp_path: Path, capsys: pytest.CaptureFixt
     assert not ResearchBrain(cerebro).has_run("demo-mini-review", "T")
 
     for _ in range(2):  # reanudar una corrida completada no la duplica en el cerebro
-        assert cli.main(["run", "--resume", str(ctx.run_dir), "--brain", str(cerebro)]) == 0
+        assert (
+            cli.main(
+                ["run", "--resume", str(ctx.run_dir), "--auto-approve", "--brain", str(cerebro)]
+            )
+            == 0
+        )
 
     eventos = (cerebro / "genome" / "events.jsonl").read_text(encoding="utf-8").splitlines()
     assert [json.loads(e)["timestamp"] for e in eventos] == ["T"]
@@ -235,14 +240,23 @@ def test_brain_ya_sedimentada_no_pisa_el_flow_de_actualizacion(tmp_path: Path) -
     cerebro = tmp_path / "cerebro"
     corrida_a = tmp_path / "runs" / "demo-mini-review-A"
     corrida_b = tmp_path / "runs" / "demo-mini-review-B"
-    assert cli.main(["run", "--resume", str(corrida_a), "--brain", str(cerebro)]) == 0
-    assert cli.main(["run", "--resume", str(corrida_b), "--brain", str(cerebro)]) == 0
+    assert (
+        cli.main(["run", "--resume", str(corrida_a), "--auto-approve", "--brain", str(cerebro)])
+        == 0
+    )
+    assert (
+        cli.main(["run", "--resume", str(corrida_b), "--auto-approve", "--brain", str(cerebro)])
+        == 0
+    )
     flow = corrida_b / "deliverable" / "prisma_flow_updated.md"
     assert flow.exists()  # B se sedimentó como actualización de A
     marcado = flow.read_text(encoding="utf-8") + "\n<!-- generado en la primera finalización -->\n"
     flow.write_text(marcado, encoding="utf-8")
 
-    assert cli.main(["run", "--resume", str(corrida_b), "--brain", str(cerebro)]) == 0
+    assert (
+        cli.main(["run", "--resume", str(corrida_b), "--auto-approve", "--brain", str(cerebro)])
+        == 0
+    )
 
     assert flow.read_text(encoding="utf-8") == marcado
 
@@ -385,7 +399,16 @@ def test_error_de_otro_fichero_no_se_atribuye_a_run_json(
 
     monkeypatch.setattr(ResearchBrain, "record_from_run", _manifiesto_roto)
 
-    rc = cli.main(["run", "--resume", str(ctx.run_dir), "--brain", str(tmp_path / "cerebro")])
+    rc = cli.main(
+        [
+            "run",
+            "--resume",
+            str(ctx.run_dir),
+            "--auto-approve",
+            "--brain",
+            str(tmp_path / "cerebro"),
+        ]
+    )
 
     err = capsys.readouterr().err
     assert rc == 2
@@ -606,17 +629,26 @@ def test_brain_ya_sedimentada_no_dice_que_se_registrara(
         )
     corrida_a = tmp_path / "runs" / "demo-mini-review-A"
     corrida_b = tmp_path / "runs" / "demo-mini-review-B"
-    assert cli.main(["run", "--resume", str(corrida_a), "--brain", str(cerebro)]) == 0
+    assert (
+        cli.main(["run", "--resume", str(corrida_a), "--auto-approve", "--brain", str(cerebro)])
+        == 0
+    )
     capsys.readouterr()
 
     # B es nueva para el cerebro, que ya conoce el slug: se registrará como actualización.
-    assert cli.main(["run", "--resume", str(corrida_b), "--brain", str(cerebro)]) == 0
+    assert (
+        cli.main(["run", "--resume", str(corrida_b), "--auto-approve", "--brain", str(cerebro)])
+        == 0
+    )
     primera = capsys.readouterr().out
     assert "se registrará como actualización" in primera
     assert "ya estaba sedimentada" not in primera
 
     # Reanudar B otra vez: ya está sedimentada.
-    assert cli.main(["run", "--resume", str(corrida_b), "--brain", str(cerebro)]) == 0
+    assert (
+        cli.main(["run", "--resume", str(corrida_b), "--auto-approve", "--brain", str(cerebro)])
+        == 0
+    )
     segunda = capsys.readouterr().out
     assert "ya estaba sedimentada" in segunda
     assert "se registrará como actualización" not in segunda

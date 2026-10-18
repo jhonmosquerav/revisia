@@ -241,7 +241,7 @@ def check_provider(
             _error(
                 where,
                 f"el proveedor {cfg.provider!r} necesita el paquete {req.sdk_module!r}, que "
-                f"no está instalado: `uv sync --extra {req.extra}`.",
+                f"no está instalado: `uv sync --inexact --extra {req.extra}`.",
             )
         )
     if req.env_var is not None and not env.get(req.env_var):
@@ -376,13 +376,13 @@ def check_databases(
                 )
             )
     if not _importable("pypdf", find_spec):
-        # pypdf no está en ningún extra de pyproject.toml (decisión del arquitecto): sin él un
+        # pypdf viene en los extras `search` y `demo`, pero otro extra no lo trae: sin él un
         # texto completo en abierto que es PDF no se extrae (revisión final de la Ola 1, A5).
         issues.append(
             _warning(
                 "texto_completo",
                 "falta pypdf: los PDF en abierto quedarán como no recuperados "
-                "(`uv pip install pypdf`).",
+                "(`uv sync --inexact --extra search`).",
             )
         )
     if not _importable("httpx", find_spec):
@@ -392,7 +392,7 @@ def check_databases(
                     "busqueda",
                     "falta httpx (extra `search`): fallarían todas las bases con backend "
                     f"({', '.join(with_backend)}) y la recuperación de texto completo. "
-                    "Instálalo con `uv sync --extra search`.",
+                    "Instálalo con `uv sync --inexact --extra search`.",
                 )
             )
         else:
@@ -401,7 +401,7 @@ def check_databases(
                     "texto_completo",
                     "falta httpx (extra `search`): no se recuperará ningún texto completo y "
                     "todos los registros quedarán como no recuperados. "
-                    "`uv sync --extra search`.",
+                    "`uv sync --inexact --extra search`.",
                 )
             )
     return issues

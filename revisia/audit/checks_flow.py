@@ -2138,10 +2138,24 @@ def check_deliverable(ctx: AuditContext) -> Verdict:
             problems.append(f"{name} ({reason})")
     if problems:
         return "FAIL", f"Entregable incompleto: {_limitar(problems)}."
-    aviso = _meta_sin_incluidos(ctx, protocolo)
-    if aviso is not None:
-        return "WARN", f"Entregable completo ({len(required)} artefactos); {aviso}."
+    avisos = [a for a in (_revision_vacia(ctx), _meta_sin_incluidos(ctx, protocolo)) if a]
+    if avisos:
+        return "WARN", f"Entregable completo ({len(required)} artefactos); {'; '.join(avisos)}."
     return "PASS", f"Entregable completo ({len(required)} artefactos)."
+
+
+def _revision_vacia(ctx: AuditContext) -> str | None:
+    """WARN si la revisión no incluyó ningún estudio (empty review).
+
+    Es un resultado válido y publicable (Cochrane lo admite), no un FAIL; pero el manuscrito
+    debe declararlo y justificar que la búsqueda y los criterios no lo explican.
+    """
+    if included_ids(ctx) != []:
+        return None
+    return (
+        "revisión vacía: 0 estudios incluidos. Decláralo en el manuscrito y justifica que la "
+        "búsqueda y los criterios de elegibilidad no lo explican"
+    )
 
 
 def _meta_sin_incluidos(ctx: AuditContext, protocolo: _EfectosProtocolo) -> str | None:

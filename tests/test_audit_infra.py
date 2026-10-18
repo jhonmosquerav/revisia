@@ -442,6 +442,7 @@ _VECTORES_CUADRATICOS = [
 ]
 
 
+@pytest.mark.cronometrado
 @pytest.mark.parametrize(("texto", "motivo"), _VECTORES_CUADRATICOS)
 def test_yaml_con_costes_cuadraticos_no_cuelga_la_carga(corrida, texto, motivo: str) -> None:
     (corrida / "manifest.yml").write_text(texto(), encoding="utf-8")

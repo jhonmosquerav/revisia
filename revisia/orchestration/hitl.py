@@ -818,6 +818,7 @@ def review_gate(
 
     decision = _read_decision(decision_path)
     from_file = decision is not None
+    effective = None
     if decision is not None and decision.request_sha256 != request_sha256:
         return GateResult(
             "paused",
@@ -837,6 +838,9 @@ def review_gate(
             # Con `force_human` solo vale una decisión humana: una aprobación de
             # demostración de la misma solicitud no resuelve una cita marcada (M5, D8).
             and (not force_human or is_human_actor(effective.actor))
+            # Reanudar sin --auto-approve no hereda la aprobación de demostración: quien
+            # quita la bandera pide decidir en persona (decisión pendiente 6 de la Ola 1).
+            and (auto_approve or effective.actor != AUTO_APPROVE_ACTOR)
         ):
             # El ledger manda: la decisión de esta solicitud ya está registrada.
             approved = effective.action != "reject"
@@ -869,11 +873,19 @@ def review_gate(
                 request_sha256=request_sha256, approved=True, actor=AUTO_APPROVE_ACTOR
             )
     if decision is None:
+        demo = (
+            "La aprobación de demostración (--auto-approve) de esta solicitud no vale al "
+            "reanudar sin la bandera: hace falta una decisión humana. "
+            if effective is not None
+            and effective.request_sha256 == request_sha256
+            and effective.actor == AUTO_APPROVE_ACTOR
+            else ""
+        )
         return GateResult(
             "paused",
             (
-                f"Checkpoint humano en '{stage}' ({autonomy}). Revisa {request_path}, rellena "
-                f"{stage_dir / TEMPLATE_FILE} y guárdalo como {decision_path} (o vuelve a "
+                f"Checkpoint humano en '{stage}' ({autonomy}). {demo}Revisa {request_path}, "
+                f"rellena {stage_dir / TEMPLATE_FILE} y guárdalo como {decision_path} (o vuelve a "
                 f"correr con --auto-approve). {resume}"
             ),
             request_sha256,

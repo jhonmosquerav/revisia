@@ -107,6 +107,39 @@ def test_sin_decision_pausa(tmp_path: Path) -> None:
     assert result.status == "paused"
 
 
+def test_reanudar_sin_auto_approve_no_reutiliza_la_aprobacion_de_demostracion(
+    tmp_path: Path,
+) -> None:
+    # Antes, reanudar sin --auto-approve heredaba del ledger la aprobación sintética y la
+    # corrida seguía sin humano (el auditor la daba por no publicable). Ahora pausa y pide
+    # un decision.yml humano para la misma solicitud.
+    ctx = RunContext("demo", tmp_path, "T")
+    demo = _solicitar(ctx, auto_approve=True)
+    assert demo.status == "approved"
+
+    pausa = _solicitar(ctx)
+    assert pausa.status == "paused"
+    assert pausa.request_sha256 == demo.request_sha256
+    assert "aprobación de demostración" in pausa.message
+
+    _decidir(
+        ctx, 'request_sha256: "@SHA@"\napproved: true\nactor: human:ana\n', pausa.request_sha256
+    )
+    humano = _solicitar(ctx)
+    assert (humano.status, humano.actor) == ("approved", "human:ana")
+    assert [e.actor for e in ctx.ledger.read_all()] == ["auto-approve (demo)", "human:ana"]
+
+
+def test_reanudar_con_auto_approve_reutiliza_la_aprobacion_de_demostracion(
+    tmp_path: Path,
+) -> None:
+    ctx = RunContext("demo", tmp_path, "T")
+    _solicitar(ctx, auto_approve=True)
+    otra = _solicitar(ctx, auto_approve=True)
+    assert otra.status == "approved"
+    assert len(ctx.ledger.read_all()) == 1  # idempotente: no la duplica
+
+
 # ── request_sha256 y ledger idempotente (Ola 1, spec 2026-10-04 §7) ─────────
 
 

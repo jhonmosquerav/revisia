@@ -223,11 +223,11 @@ def _fetch_fulltext(record: SearchRecord, *, mailto: str | None, max_chars: int)
 
     if "pdf" in content_type.lower() or url.lower().endswith(".pdf"):
         if importlib.util.find_spec("pypdf") is None:
-            # pypdf no está en ningún extra (decisión pendiente del arquitecto): el preflight
-            # lo avisa y el README lo dice; aquí el detalle no lo esconde tras «sin texto».
+            # pypdf viene en los extras `search` y `demo`; sin él, el preflight lo avisa y
+            # aquí el detalle no lo esconde tras «sin texto».
             return fallback(
                 "texto_vacio",
-                f"{url} es un PDF y pypdf no está instalado (`uv pip install pypdf`)",
+                f"{url} es un PDF y pypdf no está instalado (`uv sync --inexact --extra search`)",
             )
         text = _extract_pdf(raw)
     else:

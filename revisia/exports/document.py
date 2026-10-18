@@ -212,7 +212,7 @@ _FIGURAS_META: tuple[tuple[str, str], ...] = (
 
 _PDF_HINT = (
     "El formato pdf requiere WeasyPrint (extra opcional): instálalo con "
-    "`uv sync --extra pdf` (o `pip install 'revisia[pdf]'`). WeasyPrint usa "
+    "`uv sync --inexact --extra pdf` (o `pip install 'revisia[pdf]'`). WeasyPrint usa "
     "Pango: presente en Linux; en macOS `brew install pango`; en Windows el "
     "runtime GTK3 o MSYS2. Alternativa sin instalar nada: exporta con "
     "`--format html` y desde el navegador imprime a PDF."
