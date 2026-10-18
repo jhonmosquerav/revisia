@@ -39,4 +39,4 @@ jobs:
         run: uv run black --check .
 
       - name: Tests (pytest, offline)
-        run: uv run pytest -q -rs
+        run: uv run pytest -q -rs -n auto
