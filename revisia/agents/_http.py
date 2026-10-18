@@ -54,7 +54,8 @@ def make_client(timeout: float = 60.0, *, mailto: str | None = None) -> Any:
         import httpx
     except ImportError as exc:  # pragma: no cover - depende del entorno
         raise HttpxMissingError(
-            "Los backends de búsqueda requieren httpx. Instala el extra: `uv sync --extra search`."
+            "Los backends de búsqueda requieren httpx. Instala el extra: "
+            "`uv sync --inexact --extra search`."
         ) from exc
     return httpx.Client(
         timeout=timeout, follow_redirects=True, headers={"User-Agent": user_agent(mailto)}

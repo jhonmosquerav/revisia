@@ -211,7 +211,7 @@ def test_pdf_sin_weasyprint_error_accionable(
 ) -> None:
     # None en sys.modules fuerza ImportError aunque el extra esté instalado.
     monkeypatch.setitem(sys.modules, "weasyprint", None)
-    with pytest.raises(RuntimeError, match="uv sync --extra pdf"):
+    with pytest.raises(RuntimeError, match="uv sync --inexact --extra pdf"):
         export_run(run_dir, fmt="pdf")
 
 
@@ -233,7 +233,7 @@ def test_cli_export_pdf_sin_weasyprint(
     monkeypatch.setitem(sys.modules, "weasyprint", None)
     assert main(["export", str(run_dir), "--format", "pdf"]) == 2
     err = capsys.readouterr().err
-    assert "uv sync --extra pdf" in err
+    assert "uv sync --inexact --extra pdf" in err
     assert "--format html" in err
 
 

@@ -105,7 +105,8 @@ def search(query: str, max_results: int = 25, *, mailto: str | None = None) -> l
         import httpx
     except ImportError as exc:  # pragma: no cover - depende del entorno
         raise RuntimeError(
-            "El agente de búsqueda requiere httpx. Instala el extra: `uv sync --extra search`."
+            "El agente de búsqueda requiere httpx. Instala el extra: "
+            "`uv sync --inexact --extra search`."
         ) from exc
 
     params = _build_params(query, max_results, mailto)

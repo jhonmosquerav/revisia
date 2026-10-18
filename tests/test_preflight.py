@@ -111,7 +111,7 @@ def test_preflight_sdk_ausente_es_error_con_extra_sugerido(proto_dir: Path) -> N
         find_spec=lambda name: None if name == "openai" else object(),
     )
     assert not report.ok
-    assert "uv sync --extra openai" in _messages(report.errors)
+    assert "uv sync --inexact --extra openai" in _messages(report.errors)
 
 
 def test_preflight_paquete_padre_ausente_no_revienta(proto_dir: Path) -> None:
@@ -122,7 +122,7 @@ def test_preflight_paquete_padre_ausente_no_revienta(proto_dir: Path) -> None:
 
     protocol = _proto(llm={"default": {"provider": "gemini", "model": "gemini-3.5-flash-lite"}})
     report = _run(protocol, proto_dir, env={"GEMINI_API_KEY": "k"}, find_spec=find_spec)
-    assert "uv sync --extra gemini" in _messages(report.errors)
+    assert "uv sync --inexact --extra gemini" in _messages(report.errors)
 
 
 def test_preflight_key_ausente_es_error(proto_dir: Path) -> None:
@@ -274,7 +274,7 @@ def test_preflight_databases_vacio_avisa_openalex(proto_dir: Path) -> None:
 
 def test_preflight_httpx_ausente_es_error_con_bases_con_backend(proto_dir: Path) -> None:
     report = _run(_proto(databases=["OpenAlex"]), proto_dir, find_spec=_sin_httpx)
-    assert "uv sync --extra search" in _messages(report.errors)
+    assert "uv sync --inexact --extra search" in _messages(report.errors)
     # Solo bases manuales: no hay búsqueda programática, pero todo quedará como
     # no recuperado → aviso, no error.
     (proto_dir / "imported").mkdir()
@@ -367,7 +367,7 @@ def test_preflight_databases_vacio_sin_httpx_es_error(proto_dir: Path) -> None:
     # que es un backend con httpx: error de httpx además del aviso de lista vacía.
     report = _run(_proto(databases=[]), proto_dir, find_spec=_sin_httpx)
     errores = _messages(report.errors)
-    assert "uv sync --extra search" in errores
+    assert "uv sync --inexact --extra search" in errores
     assert "OpenAlex" in errores
     assert "`databases` está vacío" in _messages(report.warnings)
 

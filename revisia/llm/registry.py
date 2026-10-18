@@ -97,7 +97,7 @@ def build_provider(cfg: ProviderConfig) -> LLMProvider:
     except ImportError as exc:  # SDK del proveedor no instalado
         raise RuntimeError(
             f"El proveedor {cfg.provider!r} requiere una dependencia no instalada. "
-            f"Instala el extra correspondiente, p. ej. `uv sync --extra {cfg.provider}`. "
+            f"Instala el extra correspondiente, p. ej. `uv sync --inexact --extra {cfg.provider}`. "
             f"Detalle: {exc}"
         ) from exc
     provider_cls = getattr(module, class_name)
