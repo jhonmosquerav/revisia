@@ -5,6 +5,7 @@
 - **Base:** `main` @ `c1af7c3` (v0.8.0; 1 359 funciones `test_` en 65 ficheros, ≈2 100 casos recogidos al cerrar la Ola 1, en verde en 3.11, 3.12 y 3.13; cobertura medida el 2026-10-18: 95 %).
 - **Alcance declarado por la auditoría:** cierra C2, C3 en la parte del benchmark, A4, A5, A6, A7, A8, A10, A12, A15 y A16. Además cierra M3, M14, M15, M16, M17, M22, M24 y lo que la Ola 1 dejó pendiente (§1).
 - **Spec anterior:** [`2026-10-04-ola-1-remediacion-design.md`](2026-10-04-ola-1-remediacion-design.md).
+- **Estado:** aprobado por el arquitecto el 2026-10-18 tras la revisión de un constructor independiente. Los planes de implementación (uno por PR) se escriben a partir de este documento.
 
 ## 1. Por qué esta ola existe
 
