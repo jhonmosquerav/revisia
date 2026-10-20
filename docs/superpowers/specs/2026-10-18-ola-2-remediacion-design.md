@@ -854,7 +854,8 @@ Y la **frontera**: `test_pipeline_fake_con_humano_judge_audita_sin_fail`,
 
 - `pyproject.toml`: `requires-python >= 3.11`; `target-version = "py311"`
   (ruff y black); `pytest-cov` en `dev`; `[tool.coverage.run] source =
-  ["revisia"]`, `omit` solo para `cli.py:main` no; `fail_under = 80`.
+  ["revisia"]`, `omit` solo para `cli.py:main` no; `fail_under = 90` (D25;
+  §19 fila 5).
   `uv lock` regenerado para 3.11.
 - `.github/workflows/ci.yml`: `permissions: contents: read`; job `lint`
   (ruff, black, `uv lock --check`) y job `test` con `strategy.matrix: os
@@ -881,7 +882,7 @@ Y la **frontera**: `test_pipeline_fake_con_humano_judge_audita_sin_fail`,
 - Windows: los tests que escriben rutas largas usan `tmp_path` corto; los
   `cronometrado` tienen tolerancia ×2 en Windows (`sys.platform`).
 
-**Criterio:** CI verde en las 6 celdas; cobertura ≥ 80 %; `uv build` limpio.
+**Criterio:** CI verde en las 6 celdas; cobertura ≥ 90 % (D25); `uv build` limpio.
 
 ## 13. PR-I · `feat/ola2-cierre` (M16, D7, D27 y documentación)
 
@@ -1022,7 +1023,7 @@ registran en §19, no se consultan (salvo que cambien una decisión D1–D6).
 
 Criterio de cierre de cada PR: CI verde en la matriz de D25 (6 celdas);
 `uv run ruff check .`, `uv run ruff format --check .`, `uv run black --check .`,
-`uv lock --check` limpios; cobertura ≥ 80 %.
+`uv lock --check` limpios; cobertura ≥ 90 % (D25).
 
 Criterio de cierre del motor (0.9.0), de punta a punta con el demo y el
 proveedor fake por CLI:
@@ -1104,8 +1105,18 @@ Criterio de cierre de la ola (1.0.0): §14.
 
 ## 19. Desviaciones durante la implementación
 
-Registro de lo que cambie respecto a §4–§14 y a los planes, y por qué. Vacío al
-redactar.
+Registro de lo que cambie respecto a §4–§14 y a los planes, y por qué. Las
+filas 1–8 las decidió el arquitecto el 2026-10-19 al revisar los supuestos
+revocables de los planes de PR-0 y PR-H; las siguientes se numeran a
+continuación, en el orden en que se registren.
 
 | # | Dónde | Cambio | Origen |
 |---|---|---|---|
+| 1 | D12, §4.2 | `ARTIFACT_SCHEMA_VERSION` es una sola constante y sube a 2 para **todos** los artefactos que la usan (también `SearchLog`, `DedupReport`, `review_request.yml`), no solo para los seis modelos que enumera D12. `RUNMETA_SCHEMA_VERSION = 2` vive en `runmeta.py` y un test fija que son iguales. Los JSON v1 siguen leyéndose (el campo es `int`); el auditor reconoce una corrida 0.8 por la ausencia de `environment` y de `outcome`/`attempt`, no por `schema_version` | Arquitecto, 2026-10-19 (supuesto del plan PR-0) |
+| 2 | §4.2 `RoBAssessment` v2, §9 | `RoBDomain` conserva `domain` (nombre legible: lo usan robvis, la solicitud del gate y `riesgo_de_sesgo.md`) y gana `id: str \| None`. `judgment` es `str`: la escala la valida `RoBToolSpec.scale_for`, no el modelo, para que una evaluación 0.8 siga cargando en el diagnóstico (D12). «Obligatorio» en PR-E significa: el agente lo rellena siempre y el check `rob` (PR-G) da FAIL a un dominio sin `id`; **el esquema lo deja opcional** | Arquitecto, 2026-10-19 (supuesto del plan PR-0, con matiz) |
+| 3 | §4.2 `EffectInput`, `MetaAnalysisResult`, `ExtractionAgreement` v2 | `EffectInput.outcome: str \| None` en el modelo; PR-F lo exige en `protocol_files.EffectsFile` (rc 2 con mensaje de migración). Un efecto sin desenlace solo existe dentro del motor y se agrupa como desenlace único. La forma por desenlace de `MetaAnalysisResult` (PI, subgrupos, duplicados) la define PR-F en `meta_analysis.py`, y `ExtractionAgreement` v2, PR-C en `extraction_agreement.py` (§15: módulos de esas pistas); PR-0 solo les da `schema_version` | Arquitecto, 2026-10-19 (supuesto del plan PR-0) |
+| 4 | §4.2 `RoBToolSpec`, §4.4 | Newcastle-Ottawa (ambos formularios): `unit: star`, los 8 ítems oficiales como dominios con escala `["0","1"]` (`C1` hasta `"2"`), sin preguntas señalizadoras ni global obligatorio. RoB 2: dominio 2 en la variante «efecto de la asignación» (7 preguntas); adherencia, cruzados y conglomerados quedan fuera (una variante futura sería una herramienta aparte, p. ej. `RoB2-adherence`) | Arquitecto, 2026-10-19 (supuesto del plan PR-0) |
+| 5 | D25, §12, §16 | Cobertura mínima **90 %** (D25), no 80 % (cifra de la auditoría que arrastraban §12 y §16, corregidos en el texto): `--cov-fail-under=90` en `ubuntu/3.13` y `[tool.coverage.report] fail_under = 90` | Arquitecto, 2026-10-19 (supuesto del plan PR-H) |
+| 6 | §12 M20, D25 | Los SDK (`gemini`, `openai`, `anthropic`) no entran en la matriz: los proveedores API se prueban con clientes falsos inyectados en `_client` (y `_config` en Gemini), y lo que aplica PR-A va en tres `xfail(strict=True)` que PR-A vuelve verdes. **Además**, un job `sdk-smoke` (solo `ubuntu/3.13`, con los tres extras, sin red ni claves reales) construye los clientes reales con los `_client()` del paquete y comprueba que existe la superficie que imitan los falsos (verificado el 2026-10-19 con openai 2.44.0, anthropic 0.112.0 y google-genai 2.10.0 de `uv.lock`) | Arquitecto, 2026-10-19 (supuesto del plan PR-H, ampliado) |
+| 7 | §12 A13 | El rc 3 de `run` no se fuerza en un subproceso sin red: sigue cubierto en proceso por `test_cli_reanudacion.py::test_cli_interrupcion_rc_3_con_instrucciones`; el subproceso cubre rc 0 y rc 2 (la misma propagación del código de salida). Sin ganchos de test en el código de producción | Arquitecto, 2026-10-19 (supuesto del plan PR-H) |
+| 8 | §12, D25 | La versión de uv se fija en `setup-uv` (`0.11.26`) para que `uv lock --check` sea reproducible; subirla es un commit propio y `RELEASING.md` lo documenta (PR-I). No se fija en local (sin `[tool.uv] required-version`) | Arquitecto, 2026-10-19 (supuesto del plan PR-H) |

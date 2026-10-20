@@ -4,7 +4,7 @@
 
 **Goal:** Que la suite corra en la matriz `ubuntu-latest`/`windows-latest` × Python 3.11/3.12/3.13 con `uv lock --check`, cobertura ≥ 90 % y humo de empaquetado, y que los huecos de la auditoría 2026-09-03 en tests (A13 entrypoints, M18 parsers Crossref/S2, M19 ruta de texto completo, M20 proveedores API) y el test de pico de memoria sensible a los extras (memoria de la Ola 1) queden cerrados antes de que las demás pistas se desarrollen sobre esta rama.
 
-**Architecture:** `pyproject.toml` baja el suelo a 3.11 (ya probado en la Ola 1 con venv desechable), fija `target-version py311`, añade `pytest-cov` y la configuración de cobertura; `ci.yml` pasa de un job a tres (`lint`, `test` en matriz, `build`), con acciones fijadas por SHA y el extra `pdf` solo en Ubuntu. Los tests nuevos son offline: dobles de cliente HTTP (`httpx.MockTransport` para la red real de `fetch_fulltext`, clientes falsos para los SDK) y fixtures JSON reales recortadas; los de entrypoints corren el pipeline con el proveedor `fake` y un protocolo cuya única fuente es `imported/` (sin red), y el CLI `run` en un subproceso.
+**Architecture:** `pyproject.toml` baja el suelo a 3.11 (ya probado en la Ola 1 con venv desechable), fija `target-version py311`, añade `pytest-cov` y la configuración de cobertura; `ci.yml` pasa de un job a cuatro (`lint`, `test` en matriz, `build` y `sdk-smoke`, §19 fila 6), con acciones fijadas por SHA y el extra `pdf` solo en Ubuntu. Los tests nuevos son offline: dobles de cliente HTTP (`httpx.MockTransport` para la red real de `fetch_fulltext`, clientes falsos para los SDK) y fixtures JSON reales recortadas; los de entrypoints corren el pipeline con el proveedor `fake` y un protocolo cuya única fuente es `imported/` (sin red), y el CLI `run` en un subproceso.
 
 **Tech Stack:** Python 3.11/3.12/3.13, uv 0.11.x, GitHub Actions (`actions/checkout`, `astral-sh/setup-uv` fijados por SHA), pytest + pytest-xdist + pytest-cov, httpx (`MockTransport`), pypdf, ruff + black (línea 100).
 
@@ -776,7 +776,7 @@ git commit -m "test: ruta Unpaywall → PDF/HTML de fetch_fulltext con httpx.Moc
 
 **Interfaces:**
 - Consumes: `GeminiProvider` (`_client`, `_config`), `OpenAIProvider`/`LocalOpenAIProvider`/`ZaiProvider`/`OpenRouterProvider` (`_client`), `AnthropicProvider` (`_client`); `RunMeta` v2 (PR-0); `sha256_text`.
-- Produces: solo tests. Los SDK **no** están instalados en el CI (extras `gemini`/`openai`/`anthropic` fuera de la matriz): los «transports falsos» son objetos que imitan la superficie que cada proveedor usa (`models.generate_content`, `chat.completions.create`, `beta.chat.completions.parse`, `messages.create`), inyectados por `monkeypatch` en `_client` (y en `_config` de Gemini, que importa `google.genai.types`). Lo que **PR-A** cambia (`*_applied`, `model_source`, `backend_version`, `prompt_sha256` del texto enviado en `local_openai`) va en tests `xfail(strict=True, reason="PR-A …")`: hoy fallan a propósito y PR-A, al implementarlo, quita el marcador (un XPASS estricto rompe la suite, así que no puede olvidarse).
+- Produces: solo tests. Los SDK **no** están instalados en la matriz del CI (extras `gemini`/`openai`/`anthropic` fuera; el job `sdk-smoke` de la Tarea 8 comprueba aparte, con los SDK reales, que la superficie imitada existe; §19 fila 6): los «transports falsos» son objetos que imitan la superficie que cada proveedor usa (`models.generate_content`, `chat.completions.create`, `beta.chat.completions.parse`, `messages.create`), inyectados por `monkeypatch` en `_client` (y en `_config` de Gemini, que importa `google.genai.types`). Lo que **PR-A** cambia (`*_applied`, `model_source`, `backend_version`, `prompt_sha256` del texto enviado en `local_openai`) va en tests `xfail(strict=True, reason="PR-A …")`: hoy fallan a propósito y PR-A, al implementarlo, quita el marcador (un XPASS estricto rompe la suite, así que no puede olvidarse).
 
 - [ ] **Step 1: Tests que fallan** — crear `tests/test_providers_api.py`:
 
@@ -1006,12 +1006,13 @@ git commit -m "test: proveedores API con clientes falsos; RunMeta v2 aplicado en
 
 ---
 
-## Tarea 8: CI en matriz, `uv lock --check`, cobertura, `uv build` y `CONTRIBUTING.md`
+## Tarea 8: CI en matriz, `uv lock --check`, cobertura, `uv build`, humo de los SDK y `CONTRIBUTING.md`
 
 **Files:**
 - Modify: `.github/workflows/ci.yml` (reescritura completa).
 - Modify: `CONTRIBUTING.md` (sección «Entorno de desarrollo» y «Antes de abrir un PR»).
 - Test: `tests/test_ci_workflow.py` (nuevo).
+- Test: `tests/test_sdk_superficie.py` (nuevo; lo corre el job `sdk-smoke`).
 
 **Interfaces:**
 - Produces (D25, §12):
@@ -1020,6 +1021,8 @@ git commit -m "test: proveedores API con clientes falsos; RunMeta v2 aplicado en
   - Job `lint` (`ubuntu-latest`, Python 3.13): `uv lock --check`, `uv sync --extra dev`, `uv run ruff check .`, `uv run ruff format --check .`, `uv run black --check .`.
   - Job `test`: `strategy: {fail-fast: false, matrix: {os: [ubuntu-latest, windows-latest], python: ["3.11", "3.12", "3.13"]}}`, `runs-on: ${{ matrix.os }}`, `defaults.run.shell: bash`; pasos: checkout; setup-uv (`python-version: ${{ matrix.python }}`); **solo Ubuntu** (`if: runner.os == 'Linux'`): `sudo apt-get install -y --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0`, `uv sync --extra dev --extra search --extra meta --extra pdf`, `uv run python -c "import weasyprint; print(weasyprint.__version__)"`; **solo Windows** (`if: runner.os == 'Windows'`): `uv sync --extra dev --extra search --extra meta`; ambos: `uv run python -c "import httpx, pypdf, scipy; print('extras ok')"` (sin esto, `importorskip` saltaría tests en silencio); tests **sin cobertura** (`if: "!(matrix.os == 'ubuntu-latest' && matrix.python == '3.13')"`): `uv run pytest -q -rs -n auto -m "not cronometrado" $BASETEMP` y `uv run pytest -q -rs -m cronometrado $BASETEMP`, donde en Windows `BASETEMP="--basetemp=${RUNNER_TEMP}/p"` (ruta corta; Review Focus 1) y en Linux vacío; tests **con cobertura** (`if: matrix.os == 'ubuntu-latest' && matrix.python == '3.13'`): `uv run pytest -q -rs -n auto -m "not cronometrado" --cov --cov-report=xml --cov-report=term --cov-fail-under=0` (la primera pasada no juzga: pytest-cov aplicaría el `fail_under` del `pyproject` a un subconjunto) y `uv run pytest -q -rs -m cronometrado --cov --cov-append --cov-report=xml --cov-report=term --cov-fail-under=90` (la cota se juzga sobre la suma de las dos pasadas).
   - Job `build` (`ubuntu-latest`): checkout; setup-uv; `uv build`; `uv run --no-project python -m zipfile -l dist/*.whl | grep -cE "revisia/(rob/tools/RoB2\.yml|prompts/screening/v1\.md)$"` debe dar `2`; `uv run --no-project python -m tarfile -l dist/*.tar.gz | grep -c "^runs/"` debe dar `0` (humo del empaquetado: los datos viajan, las corridas no).
+  - Job `sdk-smoke` (`ubuntu-latest`, Python 3.13; §19 fila 6): checkout; setup-uv (misma versión y caché); `uv sync --extra dev --extra gemini --extra openai --extra anthropic`; `uv run pytest -q -rs tests/test_sdk_superficie.py` con `env: REVISIA_SDK_SMOKE: "1"`. Sin red ni claves reales: las claves son ficticias y ningún test llama a la API.
+  - `tests/test_sdk_superficie.py`: `_sdk(nombre)` devuelve el módulo con `importlib.import_module`; si falta y `REVISIA_SDK_SMOKE` vale `"1"`, **falla** (`pytest.fail`: en el job de humo un SDK ausente es un error, no un salto); si no, `pytest.skip` con la razón (en la matriz se salta y `-rs` lo muestra). Tres tests, uno por SDK, que construyen el cliente **con el `_client()` del propio proveedor** (`monkeypatch.setenv` de `GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `ZAI_API_KEY`, `OPENROUTER_API_KEY` con `"clave-ficticia"`) y comprueban la superficie que imitan los clientes falsos de la Tarea 7: `GeminiProvider(...)._client().models.generate_content` invocable y `GeminiProvider(...)._config(REQ)` construye un `GenerateContentConfig` con `temperature` y `seed`; `OpenAIProvider`, `ZaiProvider`, `OpenRouterProvider` y `LocalOpenAIProvider`: `_client().chat.completions.create` y `_client().beta.chat.completions.parse` invocables; `AnthropicProvider(...)._client().messages.create` invocable. Comprobado el 2026-10-19 con las versiones de `uv.lock` (openai 2.44.0, anthropic 0.112.0, google-genai 2.10.0): toda esa superficie existe. Si una subida del lock la rompe, el fallo es del proveedor (territorio de PR-A, §15): se marca ese test `xfail(strict=True, reason=…)` con la causa y se abre la corrección, nunca se borra el test.
   - `CONTRIBUTING.md`: «Requiere **Python 3.11+**»; la lista «Antes de abrir un PR» añade `uv lock --check` y una línea de cobertura (`uv run pytest -q -n auto -m "not cronometrado" --cov --cov-report=term` → ≥ 90 %); un párrafo «El CI corre la suite en Ubuntu y Windows con 3.11, 3.12 y 3.13».
 
 - [ ] **Step 1: Test que falla** — crear `tests/test_ci_workflow.py`:
@@ -1048,7 +1051,7 @@ def _pasos(job: str) -> list[dict]:
 def test_permisos_minimos_y_tres_jobs() -> None:
     wf = _workflow()
     assert wf["permissions"] == {"contents": "read"}
-    assert set(wf["jobs"]) == {"lint", "test", "build"}
+    assert set(wf["jobs"]) == {"lint", "test", "build", "sdk-smoke"}
     assert wf["jobs"]["test"]["runs-on"] == "${{ matrix.os }}"
 
 
@@ -1063,7 +1066,7 @@ def test_acciones_fijadas_por_sha_y_uv_con_version() -> None:
     texto = CI.read_text(encoding="utf-8")
     usos = re.findall(r"uses:\s*(\S+)", texto)
     assert usos and all(re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", u) for u in usos)
-    for paso in _pasos("test") + _pasos("lint") + _pasos("build"):
+    for paso in _pasos("test") + _pasos("lint") + _pasos("build") + _pasos("sdk-smoke"):
         if "setup-uv" in paso.get("uses", ""):
             assert paso["with"]["enable-cache"] is True and re.fullmatch(r"\d+\.\d+\.\d+", str(paso["with"]["version"]))
 
@@ -1091,12 +1094,24 @@ def test_pdf_solo_en_ubuntu_y_cobertura_solo_en_ubuntu_313() -> None:
 def test_build_hace_humo_del_empaquetado() -> None:
     runs = " ".join(p.get("run", "") for p in _pasos("build"))
     assert "uv build" in runs and "zipfile -l" in runs and "rob/tools/RoB2" in runs and "tarfile -l" in runs
+
+
+def test_sdk_smoke_instala_los_tres_sdk_y_no_admite_saltos() -> None:
+    job = _workflow()["jobs"]["sdk-smoke"]
+    assert job["runs-on"] == "ubuntu-latest"
+    runs = " ".join(p.get("run", "") for p in job["steps"])
+    for extra in ("--extra gemini", "--extra openai", "--extra anthropic"):
+        assert extra in runs
+    paso = next(p for p in job["steps"] if "test_sdk_superficie" in p.get("run", ""))
+    assert paso["env"]["REVISIA_SDK_SMOKE"] == "1"
 ```
+
+Y crear `tests/test_sdk_superficie.py` según Interfaces (en local, sin los SDK, sus tres tests salen `SKIPPED`; con `REVISIA_SDK_SMOKE=1` y sin los SDK, `FAILED`).
 
 - [ ] **Step 2: Run para verificar que falla**
 
 Run: `uv run pytest -p no:cacheprovider tests/test_ci_workflow.py -v`
-Expected: FAIL (un solo job `test`, sin `permissions`, sin matriz).
+Expected: FAIL (un solo job `test`, sin `permissions`, sin matriz, sin `sdk-smoke`).
 
 - [ ] **Step 3: Implementar** `.github/workflows/ci.yml` según Interfaces (comentarios en español que expliquen cada decisión: por qué Pango solo en Ubuntu, por qué `--basetemp` en Windows, por qué la versión de uv fija) y los párrafos de `CONTRIBUTING.md`.
 
@@ -1115,11 +1130,19 @@ uv build && uv run --no-project python -m zipfile -l dist/*.whl | grep -cE "revi
 
 Expected: verde; cobertura total ≥ 90 % (hoy 95 %); `2`. Borrar `dist/`, `coverage.xml` y `.coverage*` (están en `.gitignore`).
 
+Run (el job `sdk-smoke` en local, con los SDK del lock):
+
+```bash
+REVISIA_SDK_SMOKE=1 uv run --extra dev --extra gemini --extra openai --extra anthropic pytest -p no:cacheprovider -q -rs tests/test_sdk_superficie.py
+```
+
+Expected: 3 passed, ningún skip. Después `uv sync --extra dev --extra search --extra meta` para volver al entorno de trabajo.
+
 - [ ] **Step 5: Commit**
 
 ```bash
-git add .github/workflows/ci.yml tests/test_ci_workflow.py CONTRIBUTING.md
-git commit -m "ci: matriz ubuntu/windows x 3.11-3.13, uv lock --check, cobertura 90 en ubuntu/3.13, humo de uv build (D25, M22, M24)" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+git add .github/workflows/ci.yml tests/test_ci_workflow.py tests/test_sdk_superficie.py CONTRIBUTING.md
+git commit -m "ci: matriz ubuntu/windows x 3.11-3.13, uv lock --check, cobertura 90 en ubuntu/3.13, humo de uv build y de los SDK (D25, M22, M24)" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1146,15 +1169,12 @@ git commit -m "ci: matriz ubuntu/windows x 3.11-3.13, uv lock --check, cobertura
 
 En `### Changed`: ``- `requires-python` baja a `>= 3.11` (amplía, no rompe); `ruff`/`black` apuntan a `py311`; `CONTRIBUTING.md` describe la matriz y los comandos nuevos.``
 
-- [ ] **Step 2: §19 del spec.** Añadir las filas que correspondan (plantilla; completar con lo que la revisión por tarea haya producido):
+- [ ] **Step 2: §19 del spec.** Las filas 5–8 de §19 ya registran las decisiones del arquitecto del 2026-10-19 sobre los supuestos de este plan (cobertura 90 %, SDK fuera de la matriz con `sdk-smoke`, rc 3 en proceso, uv fijado): no se repiten. Añadir **a continuación de la última fila existente**, con numeración consecutiva (plantilla; completar con lo que la revisión por tarea haya producido):
 
 ```
-| 9 | §12 cobertura | `--cov-fail-under=90` (D25) y no 80 (§12/§16 conservan la cifra de la auditoría); configurado también en `[tool.coverage.report] fail_under = 90` | Plan PR-H |
-| 10 | §12 A13 | El rc 3 de `run` no se reproduce en un subproceso sin red: sigue cubierto en proceso por `test_cli_interrupcion_rc_3_con_instrucciones`; el subproceso cubre rc 0 y rc 2 | Plan PR-H |
-| 11 | §12 M20 | Los SDK no están en la matriz: los «transports falsos» son clientes falsos inyectados en `_client` (y `_config` en Gemini); lo que PR-A aplica va en `xfail(strict=True)` | Plan PR-H |
-| 12 | §12 CI | Versión de uv fija en `setup-uv` (`0.11.26`) para que `uv lock --check` sea reproducible; `--basetemp=${RUNNER_TEMP}/p` en Windows; la primera pasada con cobertura lleva `--cov-fail-under=0` y la cota se juzga en la segunda (`--cov-append`) | Plan PR-H |
-| 13 | §12 M21 | `test_export_corrida_real` y `_REAL_RUN` se borran: sus aserciones del motor ya las cubren los tests sobre la fixture `run_dir`; un test fija que ningún test apunte a `runs/` | Plan PR-H |
-| 14 | §12 A13 | `new`, `export`, `check` y `audit` por `main([...])` ya estaban cubiertos (ficheros citados en la docstring de `test_entrypoints.py`); PR-H añade `gold-template`, `run` en subproceso (rc 0 y 2), `run_review`, `resume_review` y `agent_driver` | Plan PR-H |
+| n | §12 CI | `--basetemp=${RUNNER_TEMP}/p` en Windows; la primera pasada con cobertura lleva `--cov-fail-under=0` y la cota se juzga en la segunda (`--cov-append`) | Plan PR-H |
+| n+1 | §12 M21 | `test_export_corrida_real` y `_REAL_RUN` se borran: sus aserciones del motor ya las cubren los tests sobre la fixture `run_dir`; un test fija que ningún test apunte a `runs/` | Plan PR-H |
+| n+2 | §12 A13 | `new`, `export`, `check` y `audit` por `main([...])` ya estaban cubiertos (ficheros citados en la docstring de `test_entrypoints.py`); PR-H añade `gold-template`, `run` en subproceso (rc 0 y 2), `run_review`, `resume_review` y `agent_driver` | Plan PR-H |
 ```
 
 - [ ] **Step 3: Commit de documentación.**
@@ -1188,13 +1208,13 @@ M22 y M24 (CI sin matriz, sin `uv lock --check`, sin cobertura, sin `permissions
 ## Qué cambia
 
 - `pyproject.toml`: `requires-python >= 3.11`, `py311` en ruff/black, `pytest-cov` en `dev`, `[tool.coverage]` con `fail_under = 90`; `uv.lock` regenerado.
-- `.github/workflows/ci.yml`: jobs `lint` (ruff, black, `uv lock --check`), `test` (matriz 2 × 3, `fail-fast: false`, caché de uv, Pango + extra `pdf` solo en Ubuntu, cobertura en Ubuntu/3.13, `--basetemp` corto en Windows) y `build` (`uv build` + humo del wheel y del sdist). Acciones fijadas por SHA; uv fijado en 0.11.26.
-- Tests: `test_entrypoints.py`, `test_search_backends_parsers.py` (+ `tests/fixtures/`), `test_fulltext_fallback.py`, `test_providers_api.py` (3 `xfail(strict)` que PR-A vuelve verdes), `test_pyproject.py`, `test_ci_workflow.py`; `_SCRIPT_MEDIDO` precalienta imports; `cota_de_tiempo` ×2 en Windows.
+- `.github/workflows/ci.yml`: jobs `lint` (ruff, black, `uv lock --check`), `test` (matriz 2 × 3, `fail-fast: false`, caché de uv, Pango + extra `pdf` solo en Ubuntu, cobertura en Ubuntu/3.13, `--basetemp` corto en Windows), `build` (`uv build` + humo del wheel y del sdist) y `sdk-smoke` (los tres SDK reales, sin red: existe la superficie que imitan los clientes falsos). Acciones fijadas por SHA; uv fijado en 0.11.26.
+- Tests: `test_entrypoints.py`, `test_search_backends_parsers.py` (+ `tests/fixtures/`), `test_fulltext_fallback.py`, `test_providers_api.py` (3 `xfail(strict)` que PR-A vuelve verdes), `test_pyproject.py`, `test_ci_workflow.py`, `test_sdk_superficie.py`; `_SCRIPT_MEDIDO` precalienta imports; `cota_de_tiempo` ×2 en Windows.
 - `CONTRIBUTING.md`: Python 3.11+, `uv lock --check`, cobertura, matriz. `revisia/` no cambia.
 
 ## Verificación
 
-- CI: seis celdas en verde; `lint` y `build` en verde; cobertura <X> % en Ubuntu/3.13 (cota 90).
+- CI: seis celdas en verde; `lint`, `build` y `sdk-smoke` en verde; cobertura <X> % en Ubuntu/3.13 (cota 90).
 - Local (Windows): suite en 3.11, 3.12 y 3.13; `ruff`, `black`, `uv lock --check` limpios. <N₁> recogidos (base PR-0: <N₀>).
 
 ## Pila
@@ -1214,6 +1234,7 @@ Expected: URL de la PR; el CI arranca.
 - `test`: **las seis celdas** verdes. Una celda Windows roja por tiempo o rutas no se apaga: se corrige (cota, `--basetemp`, un test concreto con `tmp_path` más corto) y se anota en §19; si una celda falla por un test que depende de la plataforma de forma legítima, se marca con `pytest.mark.skipif(sys.platform == …, reason=…)` **con la razón escrita**, nunca en bloque (riesgo 9).
 - Cobertura en Ubuntu/3.13 ≥ 90 % (leer el `term` del log; anotar la cifra en el cuerpo de la PR).
 - `build`: verde (los seis YAML de RoB y las plantillas viajan en el wheel; el sdist no lleva `runs/`).
+- `sdk-smoke`: verde, 3 passed y ningún skip.
 - `uv run ruff check .`, `uv run ruff format --check .`, `uv run black --check .`, `uv lock --check` limpios en local.
 
 Expected: todo verde. Actualizar el cuerpo de la PR con `<X>`, `<N₀>` y `<N₁>` reales (`gh pr edit <n> --body-file …`). Sin merge: lo decide el arquitecto. A partir de aquí PR-A rebasa sobre `feat/ola2-ci-tests` antes de abrir su PR (§15).
