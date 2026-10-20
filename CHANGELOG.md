@@ -6,6 +6,23 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+
+- **Contratos de la Ola 2** (spec `docs/superpowers/specs/2026-10-18-ola-2-remediacion-design.md`, §4):
+  `RunMeta` v2 (lo aplicado frente a lo pedido, intento y resultado, plantilla, versión del
+  backend, latencia y coste), `MetaSink` por contexto (`revisia/provenance/sink.py`),
+  `TransientCallError`/`DeterministicCallError`, artefactos v2 (`Environment`, `RunInfo.kind`,
+  `JournalEntry` con fallo, `RetrievalOutcome` con rescate humano y recorte, `DepositInfo`),
+  acciones `edit_field`/`edit_domain`/`rescue_text` del ledger, modelos `FieldEdits`/`DomainEdits`
+  de `decision.yml`, extracción/RoB/verificación/efectos v2, `BenchmarkPanel`/`BenchmarkResult`,
+  seis especificaciones oficiales de RoB como datos (`revisia/rob/tools/*.yml`),
+  `ingest.doi.normalize_doi` (sin cablear) y la sonda `scripts/sonda_claude_cli.py`.
+  `ARTIFACT_SCHEMA_VERSION` pasa a 2. Sin cambio de comportamiento del motor.
+
+### Changed
+
+- `RoBTool` ya no admite `GRADE` (califica certeza por desenlace, no riesgo de sesgo por estudio; vuelve como etapa propia) y gana `NewcastleOttawaCaseControl` (D5). Un `protocol.yml` con `rob_tool: GRADE` deja de cargar.
+
 ## [0.8.0] · 2026-10-18
 
 ### Added
