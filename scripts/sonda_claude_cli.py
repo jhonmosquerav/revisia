@@ -123,7 +123,11 @@ def _home_corto(home: str) -> str | None:
 
 
 def _identidad_local() -> tuple[set[str], set[str]]:
-    """Rutas del home (largas y cortas) y nombre de usuario; nunca lanza (rc 0 siempre)."""
+    """Rutas del home (largas y cortas) y nombre de usuario; nunca lanza (rc 0 siempre).
+
+    Cada home va con barras invertidas, con ``/``, con las barras dobladas (JSON) y en la forma
+    de Git Bash (``C:/Users/x`` → ``/c/Users/x``).
+    """
     homes: set[str] = set()
     try:
         home = os.path.expanduser("~")
@@ -137,6 +141,9 @@ def _identidad_local() -> tuple[set[str], set[str]]:
     variantes: set[str] = set()
     for h in homes:
         variantes |= {h, h.replace("\\", "/"), h.replace("\\", "\\\\")}
+        unidad = re.match(r"([A-Za-z]):[\\/](.*)", h)
+        if unidad:
+            variantes.add(f"/{unidad[1].lower()}/{unidad[2].replace(chr(92), '/')}")
     usuarios: set[str] = set()
     try:
         usuario = getpass.getuser()
@@ -154,13 +161,18 @@ def redact(text: str, secrets: Iterable[str | None]) -> str:
     text = re.sub(r"sk-[A-Za-z0-9_-]{16,}", "<redacted>", text)
     text = re.sub(r"Bearer \S+", "Bearer <redacted>", text)
     # El informe se commitea en un repo público: fuera la ruta del usuario, su nombre y su correo.
+    # Sin distinguir mayúsculas: en Windows `c:\users\x` y `C:\Users\X` son la misma ruta.
     variantes, usuarios = _identidad_local()
     for h in sorted(variantes, key=len, reverse=True):
         if h and h not in ("~", "/"):
-            text = text.replace(h, "~")
+            text = re.sub(re.escape(h), "~", text, flags=re.I)
     for u in usuarios:
-        text = text.replace(u, "<usuario>")
-    return re.sub(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", "<correo>", text)
+        text = re.sub(re.escape(u), "<usuario>", text, flags=re.I)
+    # Un correo acaba en un TLD alfabético y su parte local no empieza tras `/` ni a mitad de
+    # palabra: `@anthropic-ai/claude-code@2.1.3` es un paquete npm, no un correo.
+    return re.sub(
+        r"(?<![\w.+/-])[\w.+-]+@[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{2,}(?![\w-])", "<correo>", text
+    )
 
 
 def _fmt_cmd(command: list[str]) -> str:

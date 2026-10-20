@@ -313,3 +313,29 @@ def test_redact_tapa_la_forma_corta_8_3_y_el_usuario_y_no_lanza(
     monkeypatch.setattr(sonda.os.path, "expanduser", _falla)
     monkeypatch.setattr(sonda.getpass, "getuser", _falla)
     assert sonda.redact("limpio", []) == "limpio"
+
+
+def test_redact_tapa_el_home_sin_importar_mayusculas_ni_la_forma_de_git_bash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Windows no distingue mayúsculas en las rutas: `c:\users\…` y `C:\USERS\…` son el mismo
+    # home, y Git Bash lo escribe `/c/Users/…`. Las tres formas, largas y cortas, se tapan.
+    sonda = _modulo()
+    monkeypatch.setattr(sonda.os.path, "expanduser", lambda _h: r"C:\Users\JhonAlex")
+    monkeypatch.setattr(sonda, "_home_corto", lambda _h: r"C:\Users\JHONAL~1")
+    monkeypatch.setattr(sonda.getpass, "getuser", lambda: "JhonAlex")
+    texto = (
+        r"c:\users\jhonalex\a C:/USERS/JHONALEX/b c:\users\jhonal~1\c "
+        "/c/Users/JhonAlex/d /C/users/jhonal~1/e y soy jhonalex"
+    )
+    salida = sonda.redact(texto, [])
+    assert "jhonal" not in salida.lower() and "users" not in salida.lower()
+    assert "~" + chr(92) + "a" in salida and "~/b" in salida and "~/d" in salida
+    assert "~/e" in salida and "<usuario>" in salida
+
+
+def test_redact_no_toma_un_paquete_npm_por_un_correo() -> None:
+    sonda = _modulo()
+    paquete = "npm i -g @anthropic-ai/claude-code@2.1.3 y scope/pkg@1.0.0"
+    assert sonda.redact(paquete, []) == paquete
+    assert sonda.redact("escribe a ana.b+x@uni.edu.co", []) == "escribe a <correo>"
