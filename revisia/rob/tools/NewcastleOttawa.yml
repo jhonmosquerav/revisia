@@ -1,0 +1,48 @@
+# Escala Newcastle-Ottawa (NOS), formulario para estudios de cohortes.
+# Fuente: https://www.ohri.ca/programs/clinical_epidemiology/oxford.asp
+# Los 8 ítems oficiales van como dominios con escala de estrellas ["0", "1"]; la
+# comparabilidad (C1) admite hasta 2 estrellas: máximo 9 (spec §19, fila 4). No hay
+# preguntas señalizadoras: cada ítem es la pregunta y su name es una paráfrasis propia.
+# Las preguntas son paráfrasis propias con el id oficial; el texto literal está en la
+# fuente (licencia: Ottawa Hospital Research Institute, sin licencia abierta explícita).
+id: NewcastleOttawa
+name: Escala Newcastle-Ottawa, cohortes (Newcastle-Ottawa Scale, cohort studies)
+version: NOS cohortes
+unit: star
+judgment_scale: ["0", "1"]
+overall_scale: null
+aggregation: nos_stars
+critical_items: []
+applicability: []
+robvis_template: generic
+source:
+  citation: >-
+    Wells GA, Shea B, O'Connell D, Peterson J, Welch V, Losos M, Tugwell P. The
+    Newcastle-Ottawa Scale (NOS) for assessing the quality of nonrandomised studies in
+    meta-analyses. Ottawa Hospital Research Institute.
+  url: https://www.ohri.ca/programs/clinical_epidemiology/oxford.asp
+  version: NOS cohortes
+  license_note: >-
+    El formulario lo publica el Ottawa Hospital Research Institute sin licencia abierta
+    explícita; por prudencia se trata como RoB 2: solo ids oficiales y paráfrasis propias,
+    y el evaluador consulta el formulario oficial.
+domains:
+  - id: S1
+    name: Selección · representatividad de la cohorte expuesta (representativeness of the exposed cohort)
+  - id: S2
+    name: Selección · origen de la cohorte no expuesta (selection of the non exposed cohort)
+  - id: S3
+    name: Selección · comprobación de la exposición (ascertainment of exposure)
+  - id: S4
+    name: >-
+      Selección · el desenlace no estaba presente al inicio del estudio
+      (demonstration that outcome of interest was not present at start of study)
+  - id: C1
+    name: Comparabilidad de las cohortes por diseño o análisis (comparability of cohorts)
+    scale: ["0", "1", "2"]
+  - id: O1
+    name: Desenlace · evaluación del desenlace (assessment of outcome)
+  - id: O2
+    name: Desenlace · seguimiento suficientemente largo para que ocurra (follow-up long enough)
+  - id: O3
+    name: Desenlace · adecuación del seguimiento de las cohortes (adequacy of follow up of cohorts)

@@ -1,0 +1,77 @@
+# AMSTAR 2: calidad metodológica de revisiones sistemáticas, versión 2017 (16 ítems, 7
+# críticos: 2, 4, 7, 9, 11, 13 y 15).
+# Fuente: https://amstar.ca/Amstar-2.php
+# Cada ítem es un dominio sin preguntas señalizadoras; su name es una paráfrasis propia.
+# Las escalas van entre comillas: YAML 1.1 (yaml.safe_load) leería yes/no como booleanos.
+# Las preguntas son paráfrasis propias con el id oficial; el texto literal está en la
+# fuente (licencia CC BY-NC 4.0 del artículo en BMJ).
+id: AMSTAR2
+name: AMSTAR 2 (A MeaSurement Tool to Assess systematic Reviews 2)
+version: AMSTAR 2 · 2017
+unit: item
+judgment_scale: ["yes", "partial_yes", "no"]
+overall_scale: ["high", "moderate", "low", "critically_low"]
+aggregation: amstar2
+critical_items: ["2", "4", "7", "9", "11", "13", "15"]
+applicability: []
+robvis_template: generic
+source:
+  citation: >-
+    Shea BJ, Reeves BC, Wells G, et al. AMSTAR 2: a critical appraisal tool for systematic
+    reviews that include randomised or non-randomised studies of healthcare interventions,
+    or both. BMJ 2017;358:j4008. doi:10.1136/bmj.j4008
+  url: https://amstar.ca/Amstar-2.php
+  version: AMSTAR 2 · 2017
+  license_note: >-
+    El artículo y su lista de comprobación se publican bajo CC BY-NC 4.0, que excluye el
+    uso comercial que Apache-2.0 permite: aquí solo van ids oficiales y paráfrasis propias,
+    y el evaluador consulta el texto oficial por su id.
+domains:
+  - id: "1"
+    name: ¿La pregunta y los criterios de inclusión recogen los componentes PICO?
+    scale: ["yes", "no"]
+  - id: "2"
+    name: ¿Hubo protocolo previo a la revisión y se justifican las desviaciones? (crítico)
+    scale: ["yes", "partial_yes", "no"]
+  - id: "3"
+    name: ¿Se explica la elección de los diseños de estudio incluidos?
+    scale: ["yes", "no"]
+  - id: "4"
+    name: ¿La estrategia de búsqueda fue exhaustiva? (crítico)
+    scale: ["yes", "partial_yes", "no"]
+  - id: "5"
+    name: ¿La selección de estudios se hizo por duplicado?
+    scale: ["yes", "no"]
+  - id: "6"
+    name: ¿La extracción de datos se hizo por duplicado?
+    scale: ["yes", "no"]
+  - id: "7"
+    name: ¿Se lista y justifica cada estudio excluido? (crítico)
+    scale: ["yes", "partial_yes", "no"]
+  - id: "8"
+    name: ¿Se describen con suficiente detalle los estudios incluidos?
+    scale: ["yes", "partial_yes", "no"]
+  - id: "9"
+    name: ¿Se usó una técnica satisfactoria para evaluar el riesgo de sesgo de cada estudio? (crítico)
+    scale: ["yes", "partial_yes", "no"]
+  - id: "10"
+    name: ¿Se informan las fuentes de financiación de los estudios incluidos?
+    scale: ["yes", "no"]
+  - id: "11"
+    name: Si hubo metaanálisis, ¿la combinación estadística fue apropiada? (crítico)
+    scale: ["yes", "no", "no_meta_analysis"]
+  - id: "12"
+    name: Si hubo metaanálisis, ¿se evaluó el impacto del riesgo de sesgo sobre los resultados?
+    scale: ["yes", "no", "no_meta_analysis"]
+  - id: "13"
+    name: ¿Se tuvo en cuenta el riesgo de sesgo al interpretar o discutir los resultados? (crítico)
+    scale: ["yes", "no"]
+  - id: "14"
+    name: ¿Se explica y discute satisfactoriamente la heterogeneidad observada?
+    scale: ["yes", "no"]
+  - id: "15"
+    name: Si hubo síntesis cuantitativa, ¿se investigó el sesgo de publicación? (crítico)
+    scale: ["yes", "no", "no_meta_analysis"]
+  - id: "16"
+    name: ¿Se declaran los conflictos de interés, incluida la financiación de la revisión?
+    scale: ["yes", "no"]

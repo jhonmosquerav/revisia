@@ -1,0 +1,151 @@
+# ROBINS-I: riesgo de sesgo en estudios no aleatorizados de intervenciones, versión 2016
+# (formulario de evaluación del 19 de septiembre de 2016).
+# Fuente: https://www.riskofbias.info/welcome/home/current-version-of-robins-i
+# Las preguntas son paráfrasis propias con el id oficial; el texto literal está en la
+# fuente (licencia CC BY-NC-ND 4.0).
+id: ROBINS-I
+name: ROBINS-I (Risk Of Bias In Non-randomised Studies - of Interventions)
+version: ROBINS-I · 2016
+unit: domain
+judgment_scale: [low, moderate, serious, critical, no_information]
+overall_scale: [low, moderate, serious, critical, no_information]
+aggregation: robins_i
+critical_items: []
+applicability: []
+robvis_template: robins_i
+source:
+  citation: >-
+    Sterne JAC, Hernán MA, Reeves BC, et al. ROBINS-I: a tool for assessing risk of bias in
+    non-randomised studies of interventions. BMJ 2016;355:i4919. doi:10.1136/bmj.i4919
+  url: https://www.riskofbias.info/welcome/home/current-version-of-robins-i
+  version: ROBINS-I · 2016
+  license_note: >-
+    El formulario y la guía oficiales se publican bajo CC BY-NC-ND 4.0, incompatible con
+    redistribuir derivados en un paquete Apache-2.0: aquí solo van ids oficiales y
+    paráfrasis propias; el evaluador consulta el texto oficial por su id.
+domains:
+  - id: D1
+    name: Sesgo por confusión (bias due to confounding)
+    signalling_questions:
+      - id: "1.1"
+        text: ¿Hay posibilidad de confusión del efecto de la intervención en este estudio?
+        answers: [Y, PY, PN, N, NI]
+      - id: "1.2"
+        text: ¿El análisis divide el seguimiento de cada participante según la intervención recibida?
+        answers: [Y, PY, PN, N, NI]
+      - id: "1.3"
+        text: Si es así, ¿las interrupciones o cambios de intervención pudieron deberse a factores pronósticos?
+        answers: [Y, PY, PN, N, NI]
+      - id: "1.4"
+        text: ¿Se usó un método de análisis que controle todos los dominios de confusión importantes?
+        answers: [Y, PY, PN, N, NI]
+      - id: "1.5"
+        text: ¿Los dominios de confusión controlados se midieron de forma válida y fiable?
+        answers: [Y, PY, PN, N, NI]
+      - id: "1.6"
+        text: ¿Se ajustó por variables posteriores al inicio que la intervención pudo modificar?
+        answers: [Y, PY, PN, N, NI]
+      - id: "1.7"
+        text: ¿Se usó un método adecuado para controlar la confusión variable en el tiempo?
+        answers: [Y, PY, PN, N, NI]
+      - id: "1.8"
+        text: ¿Los factores de confusión variables en el tiempo se midieron de forma válida y fiable?
+        answers: [Y, PY, PN, N, NI]
+  - id: D2
+    name: Sesgo en la selección de participantes (bias in selection of participants into the study)
+    signalling_questions:
+      - id: "2.1"
+        text: ¿La inclusión se basó en características observadas después de iniciar la intervención?
+        answers: [Y, PY, PN, N, NI]
+      - id: "2.2"
+        text: Si es así, ¿esas variables de selección se asocian con la intervención?
+        answers: [Y, PY, PN, N, NI]
+      - id: "2.3"
+        text: Si es así, ¿esas variables de selección se ven influidas por el resultado o su causa?
+        answers: [Y, PY, PN, N, NI]
+      - id: "2.4"
+        text: ¿Coinciden para la mayoría el inicio del seguimiento y el de la intervención?
+        answers: [Y, PY, PN, N, NI]
+      - id: "2.5"
+        text: ¿Se usaron técnicas de ajuste que probablemente corrijan el sesgo de selección?
+        answers: [Y, PY, PN, N, NI]
+  - id: D3
+    name: Sesgo en la clasificación de las intervenciones (bias in classification of interventions)
+    signalling_questions:
+      - id: "3.1"
+        text: ¿Los grupos de intervención están claramente definidos?
+        answers: [Y, PY, PN, N, NI]
+      - id: "3.2"
+        text: ¿La información que define los grupos se registró al inicio de la intervención?
+        answers: [Y, PY, PN, N, NI]
+      - id: "3.3"
+        text: ¿La clasificación de la intervención pudo verse afectada por conocer el resultado o el riesgo?
+        answers: [Y, PY, PN, N, NI]
+  - id: D4
+    name: >-
+      Sesgo por desviaciones de las intervenciones previstas
+      (bias due to deviations from intended interventions)
+    signalling_questions:
+      - id: "4.1"
+        text: (Efecto de la asignación) ¿Hubo desviaciones de la intervención más allá de la práctica habitual?
+        answers: [Y, PY, PN, N, NI]
+      - id: "4.2"
+        text: (Efecto de la asignación) Si las hubo, ¿estaban desequilibradas y pudieron afectar el resultado?
+        answers: [Y, PY, PN, N, NI]
+      - id: "4.3"
+        text: (Efecto de iniciar y adherirse) ¿Las cointervenciones importantes estaban equilibradas entre grupos?
+        answers: [Y, PY, PN, N, NI]
+      - id: "4.4"
+        text: (Efecto de iniciar y adherirse) ¿La intervención se aplicó con éxito en la mayoría?
+        answers: [Y, PY, PN, N, NI]
+      - id: "4.5"
+        text: (Efecto de iniciar y adherirse) ¿Los participantes se adhirieron al régimen asignado?
+        answers: [Y, PY, PN, N, NI]
+      - id: "4.6"
+        text: (Efecto de iniciar y adherirse) Si no, ¿se usó un análisis adecuado para estimar ese efecto?
+        answers: [Y, PY, PN, N, NI]
+  - id: D5
+    name: Sesgo por datos faltantes (bias due to missing data)
+    signalling_questions:
+      - id: "5.1"
+        text: ¿Hay datos del resultado de todos o casi todos los participantes?
+        answers: [Y, PY, PN, N, NI]
+      - id: "5.2"
+        text: ¿Se excluyeron participantes por faltar datos sobre su estado de intervención?
+        answers: [Y, PY, PN, N, NI]
+      - id: "5.3"
+        text: ¿Se excluyeron participantes por faltar datos de otras variables del análisis?
+        answers: [Y, PY, PN, N, NI]
+      - id: "5.4"
+        text: Si faltan datos, ¿la proporción y los motivos son parecidos entre intervenciones?
+        answers: [Y, PY, PN, N, NI]
+      - id: "5.5"
+        text: Si faltan datos, ¿hay evidencia de que el resultado es robusto a esa ausencia?
+        answers: [Y, PY, PN, N, NI]
+  - id: D6
+    name: Sesgo en la medición de los resultados (bias in measurement of outcomes)
+    signalling_questions:
+      - id: "6.1"
+        text: ¿La medida del resultado pudo verse influida por saber qué intervención se recibió?
+        answers: [Y, PY, PN, N, NI]
+      - id: "6.2"
+        text: ¿Quienes evaluaban el resultado conocían la intervención recibida?
+        answers: [Y, PY, PN, N, NI]
+      - id: "6.3"
+        text: ¿Los métodos de evaluación del resultado eran comparables entre grupos?
+        answers: [Y, PY, PN, N, NI]
+      - id: "6.4"
+        text: ¿Hubo errores sistemáticos de medición del resultado relacionados con la intervención?
+        answers: [Y, PY, PN, N, NI]
+  - id: D7
+    name: Sesgo en la selección del resultado informado (bias in selection of the reported result)
+    signalling_questions:
+      - id: "7.1"
+        text: ¿El resultado pudo elegirse entre varias mediciones del desenlace?
+        answers: [Y, PY, PN, N, NI]
+      - id: "7.2"
+        text: ¿El resultado pudo elegirse entre varios análisis de la relación intervención-desenlace?
+        answers: [Y, PY, PN, N, NI]
+      - id: "7.3"
+        text: ¿El resultado pudo elegirse entre distintos subgrupos?
+        answers: [Y, PY, PN, N, NI]
