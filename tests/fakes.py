@@ -267,7 +267,7 @@ def fetch_disponible_largo(n_chars: int) -> Callable[[SearchRecord], FullText]:
                 f"{k * 7} participantes."
             )
             partes.append(parrafo)
-            total += len(parrafo) + 2
+            total += len(parrafo) + (2 if partes[:-1] else 0)  # separador solo entre párrafos
             k += 1
         return FullText(
             text="\n\n".join(partes)[:n_chars],

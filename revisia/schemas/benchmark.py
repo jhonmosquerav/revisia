@@ -80,7 +80,7 @@ def load_panel(path: str | Path) -> BenchmarkPanel:
         if not isinstance(crudo, dict):
             raise ValueError("la raíz del panel debe ser un mapa")
         return BenchmarkPanel.model_validate(crudo)
-    except (yaml.YAMLError, ValidationError, ValueError) as exc:
+    except (OSError, yaml.YAMLError, ValidationError, ValueError) as exc:
         raise ValueError(f"{path}: {exc}") from exc
 
 

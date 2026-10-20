@@ -117,3 +117,31 @@ def test_benchmark_result_celdas_unicas_e_ic_acotado() -> None:
     with pytest.raises(ValidationError):
         BenchmarkCellResult(**_celda(recall_ci95=(0.0, 1.5)))
     assert BenchmarkCellResult(**_celda(recall_ci95=None)).recall_ci95 is None
+
+
+@pytest.mark.parametrize("contenido", ["", "- a\n- b\n"])
+def test_load_panel_raiz_que_no_es_mapa(tmp_path: Path, contenido: str) -> None:
+    path = tmp_path / "panel.yml"
+    path.write_text(contenido, encoding="utf-8")
+    with pytest.raises(ValueError, match="panel.yml"):
+        load_panel(path)
+
+
+def test_load_panel_esquema_invalido_es_value_error_con_la_ruta(tmp_path: Path) -> None:
+    path = tmp_path / "panel.yml"
+    path.write_text("name: p\ncells: []\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="panel.yml") as exc:
+        load_panel(path)
+    assert type(exc.value) is ValueError
+
+
+def test_load_panel_fichero_inexistente_es_value_error(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="no-existe.yml"):
+        load_panel(tmp_path / "no-existe.yml")
+
+
+def test_temperature_por_defecto_es_cero() -> None:
+    panel = BenchmarkPanel.model_validate(
+        {"name": "p", "cells": [{"name": "a", "provider": "fake", "model": "m"}]}
+    )
+    assert panel.cells[0].temperature == 0.0

@@ -192,3 +192,20 @@ def test_fetch_disponible_largo_tiene_exactamente_n_caracteres() -> None:
     assert "\n\n" in fetch_disponible_largo(1_000)(rec).text  # párrafos para la ventana de D15
     with pytest.raises(ValueError):
         fetch_disponible_largo(0)
+
+
+def test_fetch_disponible_largo_es_exacto_en_todo_el_barrido() -> None:
+    from fakes import fetch_disponible_largo
+
+    for titulo in ("Título A", "Un título bastante más largo para variar los cortes"):
+        rec = _rec("10.1/a", titulo)
+        for n in range(1, 400):
+            assert len(fetch_disponible_largo(n)(rec).text) == n, (titulo, n)
+
+
+def test_si_coinciden_gana_el_fallo_determinista() -> None:
+    from revisia.llm.base import DeterministicCallError
+
+    proveedor = ScriptedProvider(fail_at=1, fail_deterministic_at=1)
+    with pytest.raises(DeterministicCallError):
+        _cribar(proveedor, _rec("a", "alfa"))
