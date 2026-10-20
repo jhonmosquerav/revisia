@@ -25,6 +25,13 @@ def test_deterministic_call_error_lleva_los_intentos() -> None:
     assert DeterministicCallError("400").attempts == 1
 
 
+@pytest.mark.parametrize("intentos", [0, -1])
+def test_deterministic_call_error_exige_al_menos_un_intento(intentos: int) -> None:
+    # Rendirse sin haber intentado nada no es un fallo determinista: es un bug del llamador.
+    with pytest.raises(ValueError, match="attempts"):
+        DeterministicCallError("400", attempts=intentos)
+
+
 def test_llm_request_admite_prompt_template_y_sigue_siendo_inmutable() -> None:
     req = LLMRequest(prompt="p")
     assert req.prompt_template is None

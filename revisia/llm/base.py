@@ -26,9 +26,10 @@ class TransientCallError(RuntimeError):
     """El intento falló por algo que reanudar puede arreglar (429, 5xx, red, timeout).
 
     Regla de D9 (spec 2026-10-18): lo transitorio se reanuda sin molestar al humano.
-    Los 401 y 403 son globales (credencial, permiso) y se tratan como transitorios:
-    decisión del orquestador al revisar el plan de PR-A. Subclase de ``RuntimeError``
-    para que el código de la Ola 1 que atrapa ``RuntimeError`` (rc 3) siga funcionando.
+    Los 401 y 403 son globales (credencial, permiso) y se tratan como transitorios
+    (§19 fila 14 del spec). Subclase de ``RuntimeError`` para que el código de la Ola 1
+    que atrapa ``RuntimeError`` (rc 3) siga funcionando.
+
     """
 
 
@@ -40,11 +41,15 @@ class DeterministicCallError(RuntimeError):
     D9: lo determinista pasa al humano; reintentarlo solo gastaría presupuesto.
 
     Attributes:
-        attempts: intentos consumidos antes de rendirse (1 si falló a la primera).
+        attempts: intentos consumidos antes de rendirse (1 si falló a la primera). Al
+            menos 1: rendirse sin haber intentado es un bug del llamador (``ValueError``).
     """
 
     def __init__(self, message: str, *, attempts: int = 1) -> None:
+        if attempts < 1:
+            raise ValueError(f"attempts debe ser >= 1 (llegó {attempts})")
         super().__init__(message)
+
         self.attempts = attempts
 
 
