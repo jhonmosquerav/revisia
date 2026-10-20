@@ -1546,6 +1546,7 @@ git commit -m "feat(ingest): normalize_doi y doi_url, la única normalización d
 
 **Files:**
 - Modify: `tests/fakes.py` (`ScriptedProvider.__init__`, línea 71; `_llamar`, 102; `structured`, 126; función nueva tras `fetch_no_disponible`, 153).
+- Modify: `tests/test_reanudacion.py:99` (`"RuntimeError: 429 Too Many Requests"` → `"TransientCallError: 429 Too Many Requests"`: la interrupción registra el nombre de la clase y ese test usa `ScriptedProvider(fail_at=1)`). `tests/test_reanudacion.py:209` **no** cambia: lanza un `RuntimeError` explícito, no el del doble. Hallazgo del redactor de PR-A, 2026-10-19.
 - Test: `tests/test_fakes.py` (añadir).
 
 **Interfaces:**
