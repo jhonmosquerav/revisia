@@ -54,10 +54,21 @@ class RunDirExistsError(FileExistsError):
 
 
 class LegacyRunError(ValueError):
-    """La carpeta no tiene ``run.json``: corrida anterior a la Ola 1 (D13).
+    """Corrida de un motor anterior que no se puede reanudar (rc 2 en el CLI).
 
-    Sin instantánea del protocolo ni de la búsqueda, reanudarla obligaría a
-    repetir la búsqueda con resultados distintos de los que ya se cribaron.
+    Cubre dos casos:
+
+    - Sin ``run.json``: corrida anterior a la Ola 1 (D13). Sin instantánea del
+      protocolo ni de la búsqueda, reanudarla obligaría a repetir la búsqueda con
+      resultados distintos de los que ya se cribaron.
+    - Con ``run.json`` de ``schema_version < 2``: corrida anterior a la Ola 2
+      (motor < 0.9; D12), por su subclase ``PreOla2RunError``
+      (``revisia.orchestration.snapshot``). La versión de los artefactos entra en el
+      ``request_sha256`` de cada gate: reanudarla volvería a pedir todos los gates y
+      mezclaría artefactos v1 y v2. Se regenera con el motor actual.
+
+    El pipeline la trata como error de configuración (no como interrupción) y el CLI
+    sale con rc 2.
     """
 
 
