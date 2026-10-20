@@ -354,6 +354,15 @@ def test_retrieval_outcome_v2_rescate_humano_y_recorte() -> None:
         RetrievalOutcome(available=True, source="human_rescue")
     with pytest.raises(ValidationError):  # fichero sin ser rescate
         RetrievalOutcome(available=True, rescue_file="screening_ft/rescues/a.pdf")
+    with pytest.raises(ValidationError):  # hash suelto en un texto de acceso abierto
+        RetrievalOutcome(available=True, source="oa", rescue_file_sha256="f" * 64)
+    with pytest.raises(ValidationError):  # rescate con fichero y sin hash
+        RetrievalOutcome(
+            available=True, source="human_rescue", rescue_file="screening_ft/rescues/a.pdf"
+        )
+    with pytest.raises(ValidationError):  # rescate con hash y sin fichero
+        RetrievalOutcome(available=True, source="human_rescue", rescue_file_sha256="f" * 64)
+
     recortado = RetrievalOutcome(
         available=True, n_chars=120_000, n_chars_total=150_000, truncated=True
     )
