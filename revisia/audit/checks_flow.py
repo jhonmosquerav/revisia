@@ -1846,19 +1846,25 @@ def _meta_distinto(actual: Any, esperado: Any, donde: str = "") -> str | None:
     Los números se comparan con tolerancia relativa (la misma cuenta en otra plataforma puede
     diferir en el último bit) y se ignoran los p-valores que dependen de ``scipy``. Es el JSON
     completo: una clave de más en disco (que el recálculo no tiene) también es una diferencia.
+    ``schema_version`` en la raíz no cuenta: un ``meta_analysis.json`` v1 (corrida 0.8) no lo
+    lleva y el recálculo sí, y la versión del contrato no es un resultado del meta-análisis
+    (revisión final de PR-0; D12).
     """
     if isinstance(esperado, dict):
         if not isinstance(actual, dict):
             return donde or "raíz"
+        version = set() if donde else {"schema_version"}
         for clave, valor in esperado.items():
-            if clave in _META_SEGUN_ENTORNO:
+            if clave in _META_SEGUN_ENTORNO or clave in version:
                 continue
             if clave not in actual:
                 return f"{donde}.{clave}".lstrip(".")
             diferencia = _meta_distinto(actual[clave], valor, f"{donde}.{clave}")
             if diferencia is not None:
                 return diferencia
-        extra = next((clave for clave in actual if clave not in esperado), None)
+        extra = next(
+            (clave for clave in actual if clave not in esperado and clave not in version), None
+        )
         return None if extra is None else f"{donde}.{extra}".lstrip(".")
     if isinstance(esperado, list):
         if not isinstance(actual, list) or len(actual) != len(esperado):

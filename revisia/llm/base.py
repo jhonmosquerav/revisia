@@ -22,6 +22,37 @@ from revisia.provenance.runmeta import RunMeta
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 
+class TransientCallError(RuntimeError):
+    """El intento falló por algo que reanudar puede arreglar (429, 5xx, red, timeout).
+
+    Regla de D9 (spec 2026-10-18): lo transitorio se reanuda sin molestar al humano.
+    Los 401 y 403 son globales (credencial, permiso) y se tratan como transitorios
+    (§19 fila 14 del spec). Subclase de ``RuntimeError`` para que el código de la Ola 1
+    que atrapa ``RuntimeError`` (rc 3) siga funcionando.
+
+    """
+
+
+class DeterministicCallError(RuntimeError):
+    """El intento falló por algo que repetir no arregla (D9; §19 fila 14).
+
+    Cubre el 4xx distinto de 401/403/408/429, el bloqueo de contenido, el límite de
+    presupuesto o de turnos y la salida que no valida tras los reintentos. Regla de
+    D9: lo determinista pasa al humano; reintentarlo solo gastaría presupuesto.
+
+    Attributes:
+        attempts: intentos consumidos antes de rendirse (1 si falló a la primera). Al
+            menos 1: rendirse sin haber intentado es un bug del llamador (``ValueError``).
+    """
+
+    def __init__(self, message: str, *, attempts: int = 1) -> None:
+        if attempts < 1:
+            raise ValueError(f"attempts debe ser >= 1 (llegó {attempts})")
+        super().__init__(message)
+
+        self.attempts = attempts
+
+
 @dataclass(slots=True, frozen=True)
 class LLMRequest:
     """Una petición a un proveedor LLM, agnóstica del backend.
@@ -29,6 +60,10 @@ class LLMRequest:
     Los parámetros de muestreo viajan en la petición (no en el proveedor)
     para que una misma instancia de proveedor sirva distintas etapas con
     distinta temperatura/seed.
+
+    ``prompt_template`` es el nombre con versión de la plantilla renderizada
+    (``"extraccion/v2.md"``); es el que viaja a ``RunMeta.prompt_template``
+    (auditoría 2026-09-03, A7). Lo rellenan los agentes en PR-A.
     """
 
     prompt: str
@@ -37,6 +72,7 @@ class LLMRequest:
     top_p: float | None = None
     seed: int | None = None
     max_tokens: int = 4096
+    prompt_template: str | None = None
 
 
 @dataclass(slots=True, frozen=True)

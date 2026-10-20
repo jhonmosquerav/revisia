@@ -9,7 +9,9 @@ productor y verificador no se pueden contradecir en silencio.
 
 La especificación completa (qué fichero existe cuándo y qué relaciones deben
 cumplirse entre ellos) está en
-``docs/superpowers/specs/2026-10-04-ola-1-remediacion-design.md`` §4.
+``docs/superpowers/specs/2026-10-04-ola-1-remediacion-design.md`` §4 y, para
+los contratos v2 de la Ola 2, en
+``docs/superpowers/specs/2026-10-18-ola-2-remediacion-design.md`` §4.
 
 Convenciones (spec §4.1): horas ISO-8601 UTC con zona (``utc_now_iso``), rutas
 relativas con ``/``, ``schema_version`` en todo JSON nuevo. Ningún
@@ -24,9 +26,11 @@ from pydantic import BaseModel, Field, model_validator
 
 from revisia.provenance.runmeta import RunMeta, utc_now_iso
 
-# Versión del esquema de todos los artefactos JSON nuevos de la Ola 1. Sube
-# solo con un cambio incompatible de alguno de estos modelos.
-ARTIFACT_SCHEMA_VERSION: int = 1
+# Versión del esquema de todos los artefactos JSON. Sube con un cambio de
+# alguno de estos modelos. Ola 2 (D12): una sola constante y sube a 2 para
+# todos a la vez; los JSON v1 siguen leyéndose porque el campo es ``int`` y los
+# campos nuevos tienen valor por defecto.
+ARTIFACT_SCHEMA_VERSION: int = 2
 
 # Estados de una corrida en ``run.json`` (spec §4.3). ``paused`` sigue saliendo
 # con rc 0; ``interrupted`` es un error a mitad de corrida que se reanuda (D14).
@@ -95,6 +99,35 @@ QueryOrigin = Literal["file", "question_fallback"]
 ReasonSource = Literal["human", "ai"]
 GateAction = Literal["approve", "reject", "auto-proceed"]
 
+# Ola 2 (spec §4): tipo de corrida, estado de la cita, texto sobre el que se
+# ancla, estado de un registro en el diario, modo del verificador, origen del
+# texto completo y motivo por el que un directorio no se deposita (D17).
+RunKind = Literal["review", "benchmark"]
+QuoteStatus = Literal["exact", "normalized", "not_found", "none"]
+SourceText = Literal["fulltext", "abstract"]
+RecordStatus = Literal["ok", "failed"]
+GroundingMode = Literal["existence", "judge", "embedder"]
+FulltextSource = Literal["oa", "human_rescue"]
+WithheldReason = Literal["copyright", "private"]
+
+# Nombres de distribución (``importlib.metadata.version``) cuya versión se
+# guarda en ``Environment.packages``; PR-A recorre la tupla y anota los presentes.
+ENVIRONMENT_PACKAGES: tuple[str, ...] = (
+    "pydantic",
+    "pyyaml",
+    "python-dotenv",
+    "markdown",
+    "nh3",
+    "httpx",
+    "pypdf",
+    "scipy",
+    "matplotlib",
+    "google-genai",
+    "openai",
+    "anthropic",
+    "weasyprint",
+)
+
 
 class RunInterruption(BaseModel):
     """Una interrupción registrada en ``run.json`` (error redactado)."""
@@ -104,6 +137,25 @@ class RunInterruption(BaseModel):
     error: str
 
 
+class Environment(BaseModel):
+    """Entorno de ejecución de la corrida (D20): lo que hace reproducible el run.
+
+    ``prompt_templates`` guarda el hash de cada plantilla con claves
+    ``"<agente>/<ver>.md"`` y ``"rob/<tool>.yml"``. ``git_commit`` y
+    ``git_dirty`` son ``None`` si el motor no corre desde un repositorio.
+    """
+
+    engine_version: str
+    python_version: str
+    python_implementation: str
+    platform: str
+    git_commit: str | None = None
+    git_dirty: bool | None = None
+    packages: dict[str, str] = Field(default_factory=dict)
+    prompt_templates: dict[str, str] = Field(default_factory=dict)
+    created_utc: str
+
+
 class RunInfo(BaseModel):
     """``run.json``: identidad, parámetros, huellas, historia y estado de la corrida.
 
@@ -111,6 +163,10 @@ class RunInfo(BaseModel):
     correo, nunca el correo. ``protocol_sha256`` va sobre ``00_protocol/``
     (texto con CRLF convertido a LF) y ``prompt_sha256`` sobre
     ``revisia/prompts/`` con claves ``"<agente>/v1.md"``.
+
+    Ola 2: ``kind`` distingue una revisión de un benchmark (por defecto
+    ``review``) y ``environment`` es ``None`` en las corridas anteriores a la
+    Ola 2 (PR-A lo escribe en ``ensure_snapshot``).
     """
 
     schema_version: int = ARTIFACT_SCHEMA_VERSION
@@ -126,6 +182,8 @@ class RunInfo(BaseModel):
     resumes: list[str] = Field(default_factory=list)
     interruptions: list[RunInterruption] = Field(default_factory=list)
     status: RunStatus = "running"
+    kind: RunKind = "review"
+    environment: Environment | None = None
     stage: str | None = None
     updated_utc: str = Field(default_factory=utc_now_iso)
 
@@ -158,6 +216,14 @@ class LLMCall(RunMeta):
         return cls.model_validate(data)
 
 
+class JournalFailure(BaseModel):
+    """El fallo de un registro en el diario (D21). ``message`` va redactado."""
+
+    type: str
+    message: str
+    attempts: int = Field(ge=1)
+
+
 class JournalEntry(BaseModel):
     """Una línea del diario de una etapa (D3).
 
@@ -167,15 +233,29 @@ class JournalEntry(BaseModel):
     (``ScreeningDecision`` sin campos humanos, ``RetrievalOutcome``,
     ``ExtractionRecord``, ``RoBAssessment``, ``{"narrative": ...}`` o
     ``VerificationReport``).
+
+    Ola 2 (D21): un registro que falló de forma determinista se anota con
+    ``status="failed"``, ``output`` nulo y ``error``; uno ``ok`` lleva ``output``
+    y no lleva ``error``. La clave ``output`` sigue siendo obligatoria.
     """
 
     schema_version: int = ARTIFACT_SCHEMA_VERSION
     stage: JournalStage
     record_id: str
     input_sha256: str
-    output: dict
+    output: dict | None
+    error: JournalFailure | None = None
+    status: RecordStatus = "ok"
     metas: list[LLMCall] = Field(default_factory=list)
     timestamp_utc: str = Field(default_factory=utc_now_iso)
+
+    @model_validator(mode="after")
+    def _fallo_coherente(self) -> JournalEntry:
+        if not ((self.status == "failed") == (self.output is None) == (self.error is not None)):
+            raise ValueError(
+                "una entrada failed lleva output nulo y error; una ok, output y sin error"
+            )
+        return self
 
 
 class SearchLogEntry(BaseModel):
@@ -243,6 +323,10 @@ class RetrievalOutcome(BaseModel):
 
     ``reason`` es nulo si y solo si ``available``: un fallo sin motivo, o un
     éxito con motivo, no es un resultado válido.
+
+    Ola 2 (D23): ``truncated`` y ``n_chars_total`` dicen si el texto guardado es
+    un recorte; ``source="human_rescue"`` marca un texto traído por una persona
+    y exige el fichero y su hash (``rescue_file``, ``rescue_file_sha256``).
     """
 
     available: bool
@@ -252,6 +336,11 @@ class RetrievalOutcome(BaseModel):
     n_chars: int = 0
     text_sha256: str | None = None
     text_file: str | None = None
+    truncated: bool = False
+    n_chars_total: int | None = None
+    source: FulltextSource = "oa"
+    rescue_file: str | None = None
+    rescue_file_sha256: str | None = None
 
     @model_validator(mode="after")
     def _motivo_solo_si_falla(self) -> RetrievalOutcome:
@@ -259,6 +348,20 @@ class RetrievalOutcome(BaseModel):
             raise ValueError("un texto completo recuperado no lleva motivo de fallo")
         if not self.available and self.reason is None:
             raise ValueError("un texto completo no recuperado necesita un motivo")
+        return self
+
+    @model_validator(mode="after")
+    def _rescate_y_recorte_coherentes(self) -> RetrievalOutcome:
+        campos = (self.rescue_file, self.rescue_file_sha256)
+        if self.source == "human_rescue":
+            if any(c is None for c in campos):
+                raise ValueError("un rescate humano lleva fichero y hash")
+        elif any(c is not None for c in campos):
+            raise ValueError("solo un rescate humano lleva fichero de rescate")
+        if self.truncated and not (
+            self.n_chars_total is not None and self.n_chars_total > self.n_chars
+        ):
+            raise ValueError("un texto recortado necesita n_chars_total mayor que n_chars")
         return self
 
 
@@ -295,6 +398,8 @@ class GateSummary(BaseModel):
             ``decision_sha256`` (contadas en el ledger, no tomadas del
             ``detail``: así el auditor puede contrastarlas).
         n_flag_reviews: ídem con ``flag_review`` (citas adjudicadas, D8).
+        n_edits: ediciones ``edit_field``/``edit_domain`` de la decisión
+            efectiva (Ola 2; las cuenta ``summarize_gates``).
         forced_human: el gate exigió humano por ``hallucination_flagged`` (M5).
         timestamp_utc: hora de la entrada efectiva.
     """
@@ -307,5 +412,49 @@ class GateSummary(BaseModel):
     decision_sha256: str | None = None
     n_labels: int = 0
     n_flag_reviews: int = 0
+    n_edits: int = 0
     forced_human: bool = False
     timestamp_utc: str
+
+
+# ── Depósito (D17) ────────────────────────────────────────────────────────────
+
+DEPOSIT_FILE = "deposit.json"
+
+# Directorios de una corrida que no se depositan: texto con derechos de autor y
+# rescates humanos (pueden ser privados).
+WITHHELD_DIRS: tuple[str, ...] = ("04_fulltext/texts/", "screening_ft/rescues/")
+
+
+class WithheldFile(BaseModel):
+    """Un fichero retenido del depósito, identificado por su hash."""
+
+    relpath: str
+    sha256: str
+    n_bytes: int
+
+
+class WithheldDir(BaseModel):
+    """Un directorio retenido, con su motivo y los ficheros que contenía."""
+
+    path: str
+    reason: WithheldReason
+    files: list[WithheldFile] = Field(default_factory=list)
+
+
+class DepositSource(BaseModel):
+    """La corrida de la que sale el depósito y la huella de su manifiesto."""
+
+    slug: str
+    timestamp: str
+    manifest_sha256: str
+
+
+class DepositInfo(BaseModel):
+    """``deposit.json``: qué se retuvo del depósito y cómo comprobarlo (D17)."""
+
+    schema_version: int = ARTIFACT_SCHEMA_VERSION
+    created_utc: str = Field(default_factory=utc_now_iso)
+    source_run: DepositSource
+    withheld: list[WithheldDir]
+    engine_version: str

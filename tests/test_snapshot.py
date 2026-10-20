@@ -157,3 +157,45 @@ def test_gold_efectivo_persistido(tmp_path: Path) -> None:
     assert gold == {"rec-1": True, "rec-2": False}
     metricas = json.loads((ctx.run_dir / "03_screening" / "metrics.json").read_text("utf-8"))
     assert metricas["n"] == 2
+
+
+# ── Ola 2: una corrida 0.8 no se reanuda (spec 2026-10-18 D12; revisión final de PR-0) ──
+
+
+def _como_corrida_08(ctx: RunContext) -> None:
+    """Deja ``run.json`` como lo escribía el motor 0.8: ``schema_version: 1``."""
+    ruta = ctx.run_dir / "run.json"
+    datos = json.loads(ruta.read_text(encoding="utf-8"))
+    datos["schema_version"] = 1
+    ruta.write_text(json.dumps(datos, indent=2) + "\n", encoding="utf-8")
+
+
+def test_ensure_snapshot_rechaza_una_corrida_08(tmp_path: Path) -> None:
+    from revisia.orchestration.snapshot import PreOla2RunError, ensure_snapshot
+
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    assert run_pipeline(protocol, EXAMPLE, ctx, search_fn=_busqueda).status == "paused"
+    _como_corrida_08(ctx)
+    antes = (ctx.run_dir / "run.json").read_text(encoding="utf-8")
+
+    with pytest.raises(PreOla2RunError, match="anterior a la Ola 2") as exc:
+        ensure_snapshot(None, ctx, max_results=10, mailto=None)
+
+    assert isinstance(exc.value, LegacyRunError)
+    assert "regenera la corrida con el motor actual" in str(exc.value)
+    assert (ctx.run_dir / "run.json").read_text(encoding="utf-8") == antes  # no toca nada
+
+
+def test_reanudar_una_corrida_08_sale_con_rc_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from revisia.cli import main
+
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    assert run_pipeline(protocol, EXAMPLE, ctx, search_fn=_busqueda).status == "paused"
+    _como_corrida_08(ctx)
+
+    assert main(["run", "--resume", str(ctx.run_dir)]) == 2
+    assert "regenera la corrida con el motor actual" in capsys.readouterr().err

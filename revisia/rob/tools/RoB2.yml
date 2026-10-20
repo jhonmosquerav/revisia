@@ -1,0 +1,110 @@
+# RoB 2: herramienta Cochrane de riesgo de sesgo para ensayos aleatorizados
+# (individualmente aleatorizados, diseño paralelo), versión del 22 de agosto de 2019.
+# Fuente: https://www.riskofbias.info/welcome/rob-2-0-tool/current-version-of-rob-2
+# Dominio 2 en la variante "efecto de la asignación a la intervención" (spec §19, fila 4).
+# Las preguntas son paráfrasis propias con el id oficial; el texto literal está en la
+# fuente (licencia CC BY-NC-ND 4.0).
+id: RoB2
+name: RoB 2 (Cochrane risk-of-bias tool for randomized trials)
+version: RoB 2 · 2019-08-22
+unit: domain
+judgment_scale: ["low", "some_concerns", "high"]
+overall_scale: ["low", "some_concerns", "high"]
+aggregation: rob2
+critical_items: []
+applicability: []
+robvis_template: rob2
+source:
+  citation: >-
+    Sterne JAC, Savović J, Page MJ, et al. RoB 2: a revised tool for assessing risk of bias
+    in randomised trials. BMJ 2019;366:l4898. doi:10.1136/bmj.l4898
+  url: https://www.riskofbias.info/welcome/rob-2-0-tool/current-version-of-rob-2
+  version: RoB 2 · 2019-08-22
+  license_note: >-
+    El formulario y la guía oficiales se publican bajo CC BY-NC-ND 4.0, incompatible con
+    redistribuir derivados en un paquete Apache-2.0: aquí solo van ids oficiales y
+    paráfrasis propias; el evaluador consulta el texto oficial por su id.
+domains:
+  - id: D1
+    name: Sesgo derivado del proceso de aleatorización (bias arising from the randomization process)
+    signalling_questions:
+      - id: "1.1"
+        text: ¿La secuencia de asignación fue aleatoria?
+        answers: ["Y", "PY", "PN", "N", "NI"]
+      - id: "1.2"
+        text: ¿La secuencia quedó oculta hasta que cada participante fue asignado?
+        answers: ["Y", "PY", "PN", "N", "NI"]
+      - id: "1.3"
+        text: ¿Los desequilibrios basales entre grupos sugieren un problema en la aleatorización?
+        answers: ["Y", "PY", "PN", "N", "NI"]
+  - id: D2
+    name: >-
+      Sesgo por desviaciones de las intervenciones previstas, efecto de la asignación
+      (bias due to deviations from intended interventions, effect of assignment)
+    signalling_questions:
+      - id: "2.1"
+        text: ¿Los participantes sabían qué intervención se les asignó durante el ensayo?
+        answers: ["Y", "PY", "PN", "N", "NI"]
+      - id: "2.2"
+        text: ¿Quienes cuidaban o aplicaban la intervención conocían la asignación?
+        answers: ["Y", "PY", "PN", "N", "NI"]
+      - id: "2.3"
+        text: Si hubo conocimiento de la asignación, ¿hubo desviaciones surgidas del contexto del ensayo?
+        answers: ["Y", "PY", "PN", "N", "NI", "NA"]
+      - id: "2.4"
+        text: Si las hubo, ¿es probable que esas desviaciones afectaran el resultado?
+        answers: ["Y", "PY", "PN", "N", "NI", "NA"]
+      - id: "2.5"
+        text: Si afectaron el resultado, ¿estuvieron equilibradas entre los grupos?
+        answers: ["Y", "PY", "PN", "N", "NI", "NA"]
+      - id: "2.6"
+        text: ¿El análisis fue adecuado para estimar el efecto de la asignación?
+        answers: ["Y", "PY", "PN", "N", "NI"]
+      - id: "2.7"
+        text: Si el análisis no fue adecuado, ¿pudo influir mucho no analizar a cada participante en su grupo asignado?
+        answers: ["Y", "PY", "PN", "N", "NI", "NA"]
+  - id: D3
+    name: Sesgo por datos de resultado faltantes (bias due to missing outcome data)
+    signalling_questions:
+      - id: "3.1"
+        text: ¿Hay datos del resultado de todos o casi todos los participantes aleatorizados?
+        answers: ["Y", "PY", "PN", "N", "NI"]
+      - id: "3.2"
+        text: Si faltan datos, ¿hay evidencia de que el resultado no está sesgado por ello?
+        answers: ["Y", "PY", "PN", "N", "NI", "NA"]
+      - id: "3.3"
+        text: ¿La falta de datos pudo depender del valor verdadero del resultado?
+        answers: ["Y", "PY", "PN", "N", "NI", "NA"]
+      - id: "3.4"
+        text: ¿Es probable que la falta de datos dependiera del valor verdadero del resultado?
+        answers: ["Y", "PY", "PN", "N", "NI", "NA"]
+  - id: D4
+    name: Sesgo en la medición del resultado (bias in measurement of the outcome)
+    signalling_questions:
+      - id: "4.1"
+        text: ¿El método de medición del resultado era inapropiado?
+        answers: ["Y", "PY", "PN", "N", "NI"]
+      - id: "4.2"
+        text: ¿La medición o comprobación del resultado pudo diferir entre grupos?
+        answers: ["Y", "PY", "PN", "N", "NI"]
+      - id: "4.3"
+        text: ¿Quienes evaluaban el resultado conocían la intervención recibida?
+        answers: ["Y", "PY", "PN", "N", "NI", "NA"]
+      - id: "4.4"
+        text: ¿Ese conocimiento pudo influir en la evaluación del resultado?
+        answers: ["Y", "PY", "PN", "N", "NI", "NA"]
+      - id: "4.5"
+        text: ¿Es probable que ese conocimiento influyera en la evaluación del resultado?
+        answers: ["Y", "PY", "PN", "N", "NI", "NA"]
+  - id: D5
+    name: Sesgo en la selección del resultado informado (bias in selection of the reported result)
+    signalling_questions:
+      - id: "5.1"
+        text: ¿Se analizó según un plan preespecificado y cerrado antes de ver datos sin cegar?
+        answers: ["Y", "PY", "PN", "N", "NI"]
+      - id: "5.2"
+        text: ¿Es probable que el resultado se eligiera, a la vista de los datos, entre varias mediciones elegibles del desenlace?
+        answers: ["Y", "PY", "PN", "N", "NI"]
+      - id: "5.3"
+        text: ¿Es probable que el resultado se eligiera, a la vista de los datos, entre varios análisis elegibles de los datos?
+        answers: ["Y", "PY", "PN", "N", "NI"]

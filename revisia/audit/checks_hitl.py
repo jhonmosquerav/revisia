@@ -60,6 +60,12 @@ _MAX_IDS = 3  # ids de registro que se listan dentro de un problema (caben en `_
 _LIMITE_ID = 60  # caracteres de un id de registro
 # Gates donde el motor escribe una `label` por registro etiquetado (spec §4.3).
 _ETAPAS_DE_CRIBADO = tuple(s for s in GATED_STAGES if s.startswith("screening_"))
+# Etapa de cada acción de la Ola 2 (`DecisionEntry`; spec 2026-10-18 §4.2, D3, D5, D21).
+_ETAPA_DE_LA_EDICION: dict[str, str] = {
+    "edit_field": "extraccion",
+    "edit_domain": "rob",
+    "rescue_text": "screening_ft",
+}
 # Decisiones por registro de cada gate de cribado (H en las reglas de `hitl`, spec §9.3).
 DECISIONES_DE_CRIBADO = {"screening_ta": TA, "screening_ft": FT}
 # Artefacto aprobado en bloque y su `artifact_sha256` en la solicitud (D1, spec §4.3).
@@ -173,6 +179,11 @@ def _relacion_16(entries: tuple[tuple[int, DecisionEntry], ...]) -> list[str]:
     entrada al reanudar). Una ``label`` solo existe en los gates de cribado y una
     ``flag_review`` solo en ``reporte``. Las entradas sin ``request_sha256`` (ledger anterior a la
     Ola 1) no entran en la unicidad: entonces no había tuplas.
+
+    Las acciones de la Ola 2 siguen la misma regla (``DecisionEntry``; spec 2026-10-18 §4.2, D3,
+    D5, D21): ``edit_field`` solo en ``extraccion``, ``edit_domain`` solo en ``rob`` y
+    ``rescue_text`` solo en ``screening_ft``, antes de su ``approve`` y nunca con un ``reject``
+    (revisión final de PR-0: antes pasaban en cualquier etapa y orden).
     """
     problems: list[str] = []
     cierres: dict[tuple[str, str], list[tuple[int, str]]] = {}
@@ -195,7 +206,7 @@ def _relacion_16(entries: tuple[tuple[int, DecisionEntry], ...]) -> list[str]:
                 f"línea {number}: repite la tupla de la línea {vistas[tupla]} (relación 16)"
             )
         vistas.setdefault(tupla, number)
-        if entry.action not in ("label", "flag_review"):
+        if entry.action not in ("label", "flag_review", *_ETAPA_DE_LA_EDICION):
             continue
         accion, etapa = short_text(entry.action), short_text(entry.stage)
         if entry.action == "label" and entry.stage not in _ETAPAS_DE_CRIBADO:
@@ -204,6 +215,9 @@ def _relacion_16(entries: tuple[tuple[int, DecisionEntry], ...]) -> list[str]:
             )
         if entry.action == "flag_review" and entry.stage != "reporte":
             problems.append(f"línea {number}: `flag_review` en `{etapa}` (solo en `reporte`, §4.3)")
+        propia = _ETAPA_DE_LA_EDICION.get(entry.action)
+        if propia is not None and entry.stage != propia:
+            problems.append(f"línea {number}: `{accion}` en `{etapa}` (solo en `{propia}`, §4.3)")
         sha = _hash(entry, "decision_sha256")
         decidida = cierres.get((entry.stage, sha), []) if sha is not None else []
         if any(action == "reject" for _, action in decidida):

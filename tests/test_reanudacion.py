@@ -96,7 +96,7 @@ def test_interrupcion_queda_en_run_json_y_se_relanza(
     assert (info.status, info.stage) == ("interrupted", "screening_ta")
     (interrupcion,) = info.interruptions
     assert interrupcion.stage == "screening_ta"
-    assert interrupcion.error == "RuntimeError: 429 Too Many Requests"
+    assert interrupcion.error == "TransientCallError: 429 Too Many Requests"
 
 
 def test_preflight_al_empezar_no_crea_nada(tmp_path: Path) -> None:

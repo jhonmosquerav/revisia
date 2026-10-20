@@ -21,7 +21,7 @@ import shutil
 from pathlib import Path
 
 from revisia import __version__
-from revisia.orchestration.run_context import RUN_INFO_FILE, RunContext
+from revisia.orchestration.run_context import RUN_INFO_FILE, LegacyRunError, RunContext
 from revisia.provenance.runmeta import sha256_text, utc_now_iso
 from revisia.schemas.artifacts import RunInfo
 
@@ -99,6 +99,24 @@ def write_run_info(run_dir: str | Path, info: RunInfo) -> RunInfo:
     return info
 
 
+class PreOla2RunError(LegacyRunError):
+    """``run.json`` con ``schema_version < 2``: corrida anterior a la Ola 2 (motor < 0.9; D12).
+
+    No se reanuda: ``ARTIFACT_SCHEMA_VERSION`` entra en el ``request_sha256`` de cada gate, así
+    que el motor actual volvería a pedir todos los gates ya firmados, y mezclaría artefactos v1
+    y v2 en la misma corrida. Al ser ``LegacyRunError``, el pipeline la trata como error de
+    configuración y el CLI sale con rc 2.
+    """
+
+    def __init__(self, run_dir: str | Path) -> None:
+        self.run_dir = Path(run_dir)
+        super().__init__(
+            f"{run_dir}: corrida anterior a la Ola 2 (motor < 0.9): sin procedencia aplicada "
+            "ni verificación por juez; regenera la corrida con el motor actual "
+            "(`revisia run <protocolo>`)."
+        )
+
+
 def _differences(expected: dict[str, str], actual: dict[str, str]) -> list[str]:
     return sorted(k for k in expected.keys() | actual.keys() if expected.get(k) != actual.get(k))
 
@@ -122,6 +140,8 @@ def ensure_snapshot(
         ``(00_protocol/, run_info)``.
 
     Raises:
+        PreOla2RunError: ``run.json`` con ``schema_version < 2`` (corrida 0.8; D12), antes de
+            tocar nada.
         ProtocolMismatchError: con la lista de ficheros distintos.
         ValueError: corrida nueva sin ``protocol_dir``.
     """
@@ -151,6 +171,8 @@ def ensure_snapshot(
             shutil.copyfile(source / relpath, target)
         return snapshot, info
 
+    if info.schema_version < 2:
+        raise PreOla2RunError(run_ctx.run_dir)
     files = [
         f"{SNAPSHOT_DIR}/{k}"
         for k in _differences(info.protocol_sha256, protocol_fingerprint(snapshot))

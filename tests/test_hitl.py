@@ -7,8 +7,22 @@ from pathlib import Path
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
-from revisia.orchestration.hitl import DecisionFileError, GateResult, review_gate
+from revisia.orchestration import hitl
+from revisia.orchestration.hitl import (
+    DecisionFileError,
+    DomainEdit,
+    DomainEdits,
+    FieldEdit,
+    FieldEdits,
+    GateResult,
+    HumanDecision,
+    RecordHint,
+    RecordLabel,
+    RecordPolicy,
+    review_gate,
+)
 from revisia.orchestration.run_context import RunContext
 from revisia.provenance.runmeta import canonical_sha256
 
@@ -222,7 +236,7 @@ def test_request_sha256_recomputable_desde_yaml(tmp_path: Path) -> None:
     sha = solicitud.pop("request_sha256")
     assert sha == result.request_sha256 == canonical_sha256(solicitud)
     assert (solicitud["schema_version"], solicitud["stage"], solicitud["autonomy"]) == (
-        1,
+        2,
         "reporte",
         "A1",
     )
@@ -253,7 +267,7 @@ def test_request_sha256_recomputable_con_texto_que_yaml_deforma(tmp_path: Path) 
         (ctx.run_dir / "reporte" / "review_request.yml").read_text(encoding="utf-8")
     )
     sha = solicitud.pop("request_sha256")
-    assert solicitud == {"schema_version": 1, "stage": "reporte", "autonomy": "A1", **payload}
+    assert solicitud == {"schema_version": 2, "stage": "reporte", "autonomy": "A1", **payload}
     assert sha == result.request_sha256 == canonical_sha256(solicitud)
 
 
@@ -307,3 +321,139 @@ def test_decision_humana_repetida_tras_oscilar_pide_cambiar_reason(tmp_path: Pat
     _decidir(ctx, texto, primera.request_sha256)  # vuelve a la primera, decisión idéntica
     with pytest.raises(DecisionFileError, match="cambia `reason` en decision.yml"):
         _solicitar(ctx, payload={"included": 1})
+
+
+# ── Ola 2 · modelos de decisión por campo y por dominio (spec 2026-10-18 §4.2; D3, D5, D21) ──
+
+
+def test_field_edits_y_domain_edits_son_estrictos() -> None:
+    edits = FieldEdits.model_validate({"fields": {"n": {"value": 240, "reason": "tabla 1"}}})
+    assert edits.fields["n"].value == 240
+    with pytest.raises(ValidationError):  # clave desconocida
+        FieldEdits.model_validate({"fields": {"n": {"value": 1, "reason": "r", "extra": 1}}})
+    with pytest.raises(ValidationError):  # razón en blanco
+        FieldEdit(value="x", reason="   ")
+    with pytest.raises(ValidationError):  # razón solo con marcas invisibles
+        DomainEdit(judgment="low", reason="​")
+    dominios = DomainEdits.model_validate(
+        {"domains": {"D1": {"judgment": "high", "reason": "sin cegamiento"}}, "overall": None}
+    )
+    assert dominios.domains["D1"].judgment == "high" and dominios.overall is None
+    assert (
+        DomainEdits.model_validate({"overall": {"judgment": "high", "reason": "r"}}).domains == {}
+    )
+
+
+@pytest.mark.parametrize(
+    ("crudo", "tipo"),
+    [
+        ({}, RecordLabel),
+        ({"label": "include", "reason": "ok"}, RecordLabel),
+        ({"fields": {"n": {"value": "240", "reason": "r"}}}, FieldEdits),
+        ({"domains": {"D1": {"judgment": "low", "reason": "r"}}}, DomainEdits),
+        ({"overall": {"judgment": "low", "reason": "r"}}, DomainEdits),
+    ],
+)
+def test_human_decision_records_admite_las_tres_formas(crudo: dict, tipo: type) -> None:
+    decision = HumanDecision.model_validate(
+        {"request_sha256": "h", "approved": True, "records": {"s1": crudo}}
+    )
+    assert isinstance(decision.records["s1"], tipo)
+
+
+def test_human_decision_records_rechaza_una_mezcla_de_formas() -> None:
+    with pytest.raises(ValidationError):
+        HumanDecision.model_validate(
+            {
+                "request_sha256": "h",
+                "approved": True,
+                "records": {"s1": {"label": "include", "fields": {}}},
+            }
+        )
+
+
+@pytest.mark.parametrize("ruta", ["rescues/a.pdf", "rescues/texto completo.txt"])
+def test_record_label_text_file_relativo_bajo_rescues(ruta: str) -> None:
+    assert RecordLabel(label="include", reason="r", text_file=ruta).text_file == ruta
+
+
+@pytest.mark.parametrize(
+    "ruta",
+    [
+        "a.pdf",
+        "rescues/../x.pdf",
+        "rescues/..",
+        "rescues/.",
+        "/tmp/rescues/a.pdf",
+        "C:\\rescues\\a.pdf",
+        "rescues/",
+        "rescues/a/b.pdf",
+    ],
+)
+def test_record_label_text_file_rechaza_rutas_fuera_de_rescues(ruta: str) -> None:
+    with pytest.raises(ValidationError):
+        RecordLabel(label="include", reason="r", text_file=ruta)
+
+
+def _decision_con(tmp_path: Path, records: dict) -> Path:
+    path = tmp_path / "decision.yml"
+    path.write_text(
+        yaml.safe_dump({"request_sha256": "h", "approved": True, "records": records}), "utf-8"
+    )
+    return path
+
+
+def test_validate_rechaza_ediciones_en_un_gate_de_cribado_con_mensaje(tmp_path: Path) -> None:
+    hints = (RecordHint(record_id="s1", title="t", proposal="include"),)
+    policy = RecordPolicy(hints=hints)
+    path = _decision_con(tmp_path, {"s1": {"fields": {"n": {"value": 1, "reason": "r"}}}})
+    decision = HumanDecision.model_validate(yaml.safe_load(path.read_text("utf-8")))
+    with pytest.raises(DecisionFileError, match="ediciones por campo o por dominio"):
+        hitl._validate(path, decision, records=policy, flags=None)
+
+
+def test_validate_rechaza_text_file_mientras_no_haya_rescate_con_texto(tmp_path: Path) -> None:
+    hints = (RecordHint(record_id="s1", title="t", proposal=None),)
+    policy = RecordPolicy(hints=hints, rescue_ids=frozenset({"s1"}))
+    path = _decision_con(
+        tmp_path, {"s1": {"label": "include", "reason": "pdf propio", "text_file": "rescues/a.pdf"}}
+    )
+    decision = HumanDecision.model_validate(yaml.safe_load(path.read_text("utf-8")))
+    with pytest.raises(DecisionFileError, match="text_file"):
+        hitl._validate(path, decision, records=policy, flags=None)
+
+
+def test_decision_sha256_de_una_decision_08_no_cambia() -> None:
+    """El hash de una decisión 0.8 es el que calculaba el motor de ``main`` (e938d45).
+
+    ``text_file`` (D5) no entra en el volcado cuando vale ``None``: si entrara, el
+    ``decision_sha256`` de toda corrida 0.8 cambiaría y el auditor la acusaría en falso de
+    que su ``decision.yml`` no es la decisión registrada. ``reason`` sí sigue volcándose.
+    """
+    decision = HumanDecision.model_validate(
+        {
+            "request_sha256": "a" * 64,
+            "approved": True,
+            "actor": "human:jhon",
+            "records": {
+                "r1": {"label": "include"},
+                "r2": {"label": "exclude", "reason": "fuera de población"},
+                "r3": {},
+            },
+            "flags": {"0": {"verdict": "false_positive", "reason": "ok"}},
+        }
+    )
+    volcado = decision.model_dump(mode="json")
+    assert volcado["records"]["r1"] == {"label": "include", "reason": None}
+    assert canonical_sha256(volcado) == (
+        "8bec350212ce5862f470695d953e569953c8c9aba91a870d240c45493cd8c4ab"
+    )
+
+
+def test_record_label_vuelca_text_file_si_tiene_valor() -> None:
+    etiqueta = RecordLabel(label="include", reason="rescate", text_file="rescues/a.txt")
+    assert etiqueta.model_dump(mode="json") == {
+        "label": "include",
+        "reason": "rescate",
+        "text_file": "rescues/a.txt",
+    }

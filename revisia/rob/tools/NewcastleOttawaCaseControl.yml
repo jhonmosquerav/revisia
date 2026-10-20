@@ -1,0 +1,50 @@
+# Escala Newcastle-Ottawa (NOS), formulario para estudios de casos y controles.
+# Fuente: https://www.ohri.ca/programs/clinical_epidemiology/oxford.asp
+# Los 8 ítems oficiales van como dominios con escala de estrellas ["0", "1"]; la
+# comparabilidad (C1) admite hasta 2 estrellas: máximo 9 (spec §19, fila 4). No hay
+# preguntas señalizadoras: cada ítem es la pregunta y su name es una paráfrasis propia.
+# Las preguntas son paráfrasis propias con el id oficial; el texto literal está en la
+# fuente (licencia: Ottawa Hospital Research Institute, sin licencia abierta explícita).
+id: NewcastleOttawaCaseControl
+name: Escala Newcastle-Ottawa, casos y controles (Newcastle-Ottawa Scale, case-control studies)
+version: NOS casos-controles
+unit: star
+judgment_scale: ["0", "1"]
+overall_scale: null
+aggregation: nos_stars
+critical_items: []
+applicability: []
+robvis_template: generic
+source:
+  citation: >-
+    Wells GA, Shea B, O'Connell D, Peterson J, Welch V, Losos M, Tugwell P. The
+    Newcastle-Ottawa Scale (NOS) for assessing the quality of nonrandomised studies in
+    meta-analyses. Ottawa Hospital Research Institute.
+  url: https://www.ohri.ca/programs/clinical_epidemiology/oxford.asp
+  version: NOS casos-controles
+  license_note: >-
+    El formulario lo publica el Ottawa Hospital Research Institute sin licencia abierta
+    explícita; por prudencia se trata como RoB 2: solo ids oficiales y paráfrasis propias,
+    y el evaluador consulta el formulario oficial.
+domains:
+  - id: S1
+    name: Selección · definición adecuada de los casos (is the case definition adequate)
+  - id: S2
+    name: Selección · representatividad de los casos (representativeness of the cases)
+  - id: S3
+    name: Selección · origen de los controles (selection of controls)
+  - id: S4
+    name: Selección · definición de los controles (definition of controls)
+  - id: C1
+    name: >-
+      Comparabilidad de casos y controles por diseño o análisis
+      (comparability of cases and controls on the basis of the design or analysis)
+    scale: ["0", "1", "2"]
+  - id: E1
+    name: Exposición · comprobación de la exposición (ascertainment of exposure)
+  - id: E2
+    name: >-
+      Exposición · mismo método de comprobación para casos y controles
+      (same method of ascertainment for cases and controls)
+  - id: E3
+    name: Exposición · tasa de no respuesta (non-response rate)

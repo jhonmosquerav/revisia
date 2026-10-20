@@ -24,18 +24,34 @@ en los gates de cribado el humano etiqueta registros (``records``) según una
 ``RecordPolicy``; en el gate final, con citas marcadas por el verificador,
 adjudica cada una (``flags``) según una ``FlagPolicy``. Cada etiqueta y cada
 adjudicación quedan en el ledger, antes del ``approve`` al que pertenecen.
+
+Ola 2 (spec 2026-10-18 §4.2; D3, D5, D21): ``records`` admite tres formas según el
+gate (etiqueta, ``FieldEdits`` en extracción, ``DomainEdits`` en RoB) y la etiqueta
+puede traer un ``text_file`` de rescate. En esta versión solo se aplica la de cribado
+sin ``text_file``; las otras validan su estructura y el gate las rechaza con un mensaje
+claro hasta que lleguen sus políticas (PR-C, PR-E).
 """
 
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    StrictBool,
+    ValidationError,
+    field_validator,
+    model_serializer,
+)
 
 from revisia.config import effective_autonomy
 from revisia.orchestration.run_context import RunContext, resume_command
@@ -120,6 +136,25 @@ class DecisionFileError(ValueError):
     """``decision.yml`` ilegible o inválido: mensaje accionable, no traceback."""
 
 
+def _claves_a_texto(value: object) -> object:
+    """Convierte a texto las claves escalares (``2019:`` llega como ``2019``).
+
+    Una clave que no es texto ni número (nula, binaria, una lista o un mapa) no
+    es un id: se rechaza con un error de validación, que ``_read_decision``
+    traduce a ``DecisionFileError``, en vez de volverla un texto sin sentido
+    (``str(["a"])``) que luego parecería "un id desconocido".
+    """
+    if not isinstance(value, dict):
+        return value
+    for key in value:
+        if not isinstance(key, str | int | float | date):
+            raise ValueError(
+                f"la clave {key!r} ({type(key).__name__}) no es un id válido: las claves "
+                "son texto o números, no listas, mapas ni nulos"
+            )
+    return {str(k): v for k, v in value.items()}
+
+
 class RecordLabel(BaseModel):
     """Etiqueta humana de un registro en ``decision.yml`` (``records``; D1, D4).
 
@@ -132,6 +167,101 @@ class RecordLabel(BaseModel):
 
     label: Literal["include", "exclude"] | None = None
     reason: str | None = None
+    text_file: str | None = None
+
+    @field_validator("text_file")
+    @classmethod
+    def _text_file_bajo_rescues(cls, value: str | None) -> str | None:
+        """Un solo nombre de fichero bajo ``rescues/``, relativo a ``screening_ft/`` (D5).
+
+        Sin subcarpetas, ni ``.``/``..``, ni rutas absolutas o con barra invertida: el texto
+        aportado nunca puede apuntar fuera del directorio de la etapa. Que el fichero
+        exista lo comprueba el gate de FT (PR-C).
+        """
+        if value is None:
+            return None
+        nombre = value.removeprefix("rescues/")
+        if not re.fullmatch(r"rescues/[^/\\]+", value) or nombre in {".", ".."}:
+            raise ValueError("text_file debe ser rescues/<nombre>, relativo a screening_ft/")
+        return value
+
+    @model_serializer(mode="wrap")
+    def _sin_text_file_nulo(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        """Omite ``text_file`` del volcado cuando vale ``None`` (revisión final de PR-0).
+
+        ``decision_sha256`` es ``canonical_sha256`` del volcado de la decisión: si un
+        ``text_file: None`` entrara en cada etiqueta, el hash de toda decisión 0.8 cambiaría y
+        el auditor acusaría en falso a esas corridas («decision.yml no es la decisión
+        registrada»). ``reason`` se vuelca siempre, como en 0.8.
+        """
+        volcado = handler(self)
+        if volcado.get("text_file") is None:
+            volcado.pop("text_file", None)
+        return volcado
+
+
+def _razon_obligatoria(value: str) -> str:
+    """La razón de una edición, que no puede quedar vacía a la vista (D3, D21)."""
+    if not plain_text(value):
+        raise ValueError("reason es obligatoria en una edición")
+    return value
+
+
+class FieldEdit(BaseModel):
+    """Corrección humana de un campo extraído (D3): el valor nuevo y por qué."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    value: str | int | float | None
+    reason: str
+
+    _razon = field_validator("reason")(_razon_obligatoria)
+
+
+class FieldEdits(BaseModel):
+    """Ediciones de un estudio en el gate de extracción: ``fields: {clave: FieldEdit}``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    fields: dict[str, FieldEdit]
+
+    @field_validator("fields", mode="before")
+    @classmethod
+    def _claves_como_texto(cls, value: object) -> object:
+        return _claves_a_texto(value)
+
+
+class DomainEdit(BaseModel):
+    """Juicio humano de un dominio de riesgo de sesgo (D5): el juicio y por qué."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    judgment: str
+    reason: str
+
+    _razon = field_validator("reason")(_razon_obligatoria)
+
+
+class DomainEdits(BaseModel):
+    """Ediciones de un estudio en el gate de RoB: dominios y juicio global."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    domains: dict[str, DomainEdit] = Field(default_factory=dict)
+    overall: DomainEdit | None = None
+
+    @field_validator("domains", mode="before")
+    @classmethod
+    def _claves_como_texto(cls, value: object) -> object:
+        return _claves_a_texto(value)
+
+
+# `union_mode` va en la unión, no en el `dict` (pydantic lo rechaza al definir la clase).
+# De izquierda a derecha, `{}` sigue siendo un `RecordLabel` «sin etiquetar»; `fields`,
+# `domains` u `overall` caen en su modelo porque `RecordLabel` prohíbe claves extra.
+RecordDecision = Annotated[
+    RecordLabel | FieldEdits | DomainEdits, Field(union_mode="left_to_right")
+]
 
 
 class FlagReview(BaseModel):
@@ -166,28 +296,14 @@ class HumanDecision(BaseModel):
     approved: StrictBool
     actor: str = "human:desconocido"
     reason: str | None = None
-    records: dict[str, RecordLabel] = Field(default_factory=dict)
+    records: dict[str, RecordDecision] = Field(default_factory=dict)
     flags: dict[str, FlagReview] = Field(default_factory=dict)
 
     @field_validator("records", "flags", mode="before")
     @classmethod
     def _claves_como_texto(cls, value: object) -> object:
-        """Convierte a texto las claves escalares (``2019:`` llega como ``2019``).
-
-        Una clave que no es texto ni número (nula, binaria, una lista o un mapa) no
-        es un id: se rechaza con un error de validación, que ``_read_decision``
-        traduce a ``DecisionFileError``, en vez de volverla un texto sin sentido
-        (``str(["a"])``) que luego parecería "un id desconocido".
-        """
-        if not isinstance(value, dict):
-            return value
-        for key in value:
-            if not isinstance(key, str | int | float | date):
-                raise ValueError(
-                    f"la clave {key!r} ({type(key).__name__}) no es un id válido: las claves "
-                    "son texto o números, no listas, mapas ni nulos"
-                )
-        return {str(k): v for k, v in value.items()}
+        """Convierte a texto las claves escalares (ver ``_claves_a_texto``)."""
+        return _claves_a_texto(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -472,6 +588,21 @@ def _validate(
         raise DecisionFileError(
             f"{path}: `flags` solo vale en el gate `reporte` con citas marcadas por el "
             "verificador, y esta solicitud no tiene ninguna."
+        )
+    editados = sorted(rid for rid, v in decision.records.items() if not isinstance(v, RecordLabel))
+    if editados:
+        raise DecisionFileError(
+            f"{path}: `records` con ediciones por campo o por dominio ({_listed(editados)}): "
+            "este gate etiqueta registros (label/reason); la corrección por campo (extraccion) "
+            "y por dominio (rob) llegan con sus políticas en la Ola 2 (PR-C, PR-E)."
+        )
+    con_texto = sorted(
+        rid for rid, v in decision.records.items() if isinstance(v, RecordLabel) and v.text_file
+    )
+    if con_texto:
+        raise DecisionFileError(
+            f"{path}: `text_file` en {_listed(con_texto)}: el rescate con texto completo llega "
+            "en la Ola 2 (PR-C); este motor todavía no lo ingiere."
         )
     if not decision.approved:
         return

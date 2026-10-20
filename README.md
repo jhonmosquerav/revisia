@@ -519,7 +519,7 @@ AGENTS.md             # el equipo: agentes, autonomías A0-A3, auditorías
 
 `revisia` automatiza un flujo de revisión sistemática canónico:
 PICO/PEO/SPIDER · protocolo PRISMA-P · búsqueda PRISMA-S · screening doble ·
-extracción · RoB2/ROBINS-I/GRADE · síntesis SWiM · checklist 27 ítems +
+extracción · RoB2/ROBINS-I/NOS/AMSTAR-2/QUADAS-2 · síntesis SWiM · checklist 27 ítems +
 resúmenes · PRISMA-trAIce. Cada etapa del pipeline espeja un paso de ese método.
 
 La **base de conocimiento** con las fuentes primarias (declaración PRISMA 2020,

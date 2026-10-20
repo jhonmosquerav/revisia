@@ -131,6 +131,60 @@ def test_ledger_etiqueta_o_adjudicacion_fuera_de_su_etapa_falla(corrida) -> None
     assert "`flag_review` en `rob` (solo en `reporte`, §4.3)" in ledger.detail
 
 
+# Las acciones de la Ola 2 (spec 2026-10-18 §4.2; D3, D5, D21) siguen la regla de `label`: solo en
+# su etapa, antes del `approve` de su decisión y nunca junto a un `reject` (revisión final de PR-0).
+_ACCIONES_OLA2 = [
+    ("edit_field", "extraccion", "rob", "10.1000/llm-1#n"),
+    ("edit_domain", "rob", "extraccion", "10.1000/llm-1#D1"),
+    ("rescue_text", "screening_ft", "rob", "10.1000/llm-1"),
+]
+
+
+@pytest.mark.parametrize(("accion", "etapa", "ajena", "target"), _ACCIONES_OLA2)
+def test_ledger_accion_ola2_fuera_de_su_etapa_falla(
+    corrida, accion: str, etapa: str, ajena: str, target: str
+) -> None:
+    def _fuera(entries: list[dict]) -> list[dict]:
+        i = _indice(entries, ajena, "approve")
+        return [*entries[:i], {**entries[i], "action": accion, "target": target}, *entries[i:]]
+
+    edit_ledger(corrida, _fuera)
+    ledger = fila(auditar(corrida), "ledger")
+    assert ledger.status == "FAIL"
+    assert f"`{accion}` en `{ajena}` (solo en `{etapa}`, §4.3)" in ledger.detail
+
+
+@pytest.mark.parametrize(("accion", "etapa", "ajena", "target"), _ACCIONES_OLA2)
+def test_ledger_accion_ola2_despues_de_su_approve_falla(
+    corrida, accion: str, etapa: str, ajena: str, target: str
+) -> None:
+    def _despues(entries: list[dict]) -> list[dict]:
+        j = _indice(entries, etapa, "approve")
+        edicion = {**entries[j], "action": accion, "target": target}
+        return [*entries[: j + 1], edicion, *entries[j + 1 :]]
+
+    edit_ledger(corrida, _despues)
+    ledger = fila(auditar(corrida), "ledger")
+    assert ledger.status == "FAIL"
+    assert f"`{accion}` después de su `approve` (relación 16)" in ledger.detail
+
+
+@pytest.mark.parametrize(("accion", "etapa", "ajena", "target"), _ACCIONES_OLA2)
+def test_ledger_accion_ola2_con_un_reject_falla(
+    corrida, accion: str, etapa: str, ajena: str, target: str
+) -> None:
+    def _rechazar(entries: list[dict]) -> list[dict]:
+        j = _indice(entries, etapa, "approve")
+        edicion = {**entries[j], "action": accion, "target": target}
+        rechazo = {**entries[j], "action": "reject"}
+        return [*entries[:j], edicion, rechazo, *entries[j + 1 :]]
+
+    edit_ledger(corrida, _rechazar)
+    ledger = fila(auditar(corrida), "ledger")
+    assert ledger.status == "FAIL"
+    assert f"`{accion}` acompaña a un `reject` (relación 16)" in ledger.detail
+
+
 def test_ledger_detalle_hostil_no_revienta_la_relacion_16(corrida) -> None:
     # `detail` es un mapa libre del ledger: un hash que es una lista o un mapa no es hashable.
     def _hostil(entries: list[dict]) -> None:
