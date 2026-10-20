@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from revisia.schemas import (
     ExtractionField,
+    ExtractionRecord,
     QuestionFramework,
     ResearchQuestion,
     ScreeningVote,
@@ -69,3 +70,36 @@ def test_verification_flagged_indices_es_la_regla_unica_de_cita_marcada() -> Non
     assert report.flagged_indices() == [1, 2, 3]
     assert report.recompute_flag() is True
     assert VerificationReport(stage="sintesis").flagged_indices() == []
+
+
+def test_extraction_field_v2_final_value_y_coherencia_humana() -> None:
+    campo = ExtractionField(value="240")
+    assert (campo.quote_status, campo.quote_offset, campo.human_edited) == ("none", None, False)
+    assert campo.final_value == "240"
+    editado = ExtractionField(
+        value="240",
+        human_value=236,
+        human_reason="tabla 2",
+        human_actor="human:ana",
+        human_edited=True,
+    )
+    assert editado.final_value == 236
+    with pytest.raises(ValidationError):  # editado sin razón ni actor
+        ExtractionField(value="1", human_value="2", human_edited=True)
+    with pytest.raises(ValidationError):  # valor humano sin marcar la edición
+        ExtractionField(value="1", human_value="2")
+    with pytest.raises(ValidationError):
+        ExtractionField(value="1", quote_status="maybe")
+
+
+def test_extraction_record_v1_valida_como_abstract_ok() -> None:
+    v1 = {"study_id": "s", "fields": {"n": {"value": "240"}}, "extractor": "agent:extraccion"}
+    rec = ExtractionRecord.model_validate(v1)
+    assert (rec.schema_version, rec.source_text, rec.text_sha256, rec.truncated, rec.status) == (
+        2,
+        "abstract",
+        None,
+        False,
+        "ok",
+    )
+    assert ExtractionRecord(study_id="s", status="failed").fields == {}
