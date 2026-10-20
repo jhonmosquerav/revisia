@@ -8,30 +8,42 @@ import pytest
 from pydantic import ValidationError
 
 from revisia.config import STAGES
-from revisia.provenance.runmeta import RunMeta, sha256_text
+from revisia.provenance.runmeta import RUNMETA_SCHEMA_VERSION, RunMeta, sha256_text
 from revisia.schemas.artifacts import (
     ARTIFACT_SCHEMA_VERSION,
+    DEPOSIT_FILE,
+    ENVIRONMENT_PACKAGES,
     GATED_STAGES,
     JOURNAL_PATHS,
     TRANSIENT_FULLTEXT_REASONS,
+    WITHHELD_DIRS,
     DedupReport,
+    DepositInfo,
+    DepositSource,
+    Environment,
     ExcludedReport,
     FulltextReason,
+    FulltextSource,
     GateAction,
     GateSummary,
+    GroundingMode,
     JournalEntry,
     JournalStage,
     LLMCall,
     LLMStage,
     QueryOrigin,
+    QuoteStatus,
     ReasonSource,
     RetrievalOutcome,
     RunInfo,
+    RunKind,
     RunStatus,
     SearchEntryKind,
     SearchEntryStatus,
     SearchLog,
     SearchLogEntry,
+    WithheldDir,
+    WithheldFile,
 )
 
 
@@ -157,7 +169,7 @@ def test_journal_entry_ida_y_vuelta() -> None:
         output={"record_id": "10.1/x", "ensemble_label": "include"},
         metas=[LLMCall.from_meta(_meta(), stage="screening_ft", record_id="10.1/x")],
     )
-    assert entry.schema_version == ARTIFACT_SCHEMA_VERSION == 1
+    assert entry.schema_version == ARTIFACT_SCHEMA_VERSION == 2
     assert entry.timestamp_utc.endswith("+00:00")
     assert JournalEntry.model_validate_json(entry.model_dump_json()) == entry
     with pytest.raises(ValidationError):
@@ -253,3 +265,128 @@ def test_gate_summary_acciones_validas() -> None:
     assert (summary.n_labels, summary.n_flag_reviews, summary.forced_human) == (0, 0, False)
     with pytest.raises(ValidationError):
         GateSummary(stage="reporte", action="label", actor="h", autonomy="A1", timestamp_utc="t")
+
+
+# ── Ola 2 · contratos v2 (spec 2026-10-18 §4.1, §4.2; D12, D17, D20, D21, D23) ──
+
+
+def test_schema_version_sube_a_2_y_coincide_con_runmeta() -> None:
+    assert ARTIFACT_SCHEMA_VERSION == RUNMETA_SCHEMA_VERSION == 2
+    assert set(get_args(RunKind)) == {"review", "benchmark"}
+    assert set(get_args(QuoteStatus)) == {"exact", "normalized", "not_found", "none"}
+    assert set(get_args(GroundingMode)) == {"existence", "judge", "embedder"}
+    assert set(get_args(FulltextSource)) == {"oa", "human_rescue"}
+    assert len(ENVIRONMENT_PACKAGES) == 13 and len(set(ENVIRONMENT_PACKAGES)) == 13
+
+
+def test_run_info_v1_valida_y_es_review_sin_entorno() -> None:
+    v1 = {
+        "schema_version": 1,
+        "slug": "s",
+        "timestamp": "T",
+        "started_utc": "2026-10-01T00:00:00+00:00",
+        "engine_version": "0.8.0",
+        "python_version": "3.13.0",
+        "max_results": 5,
+        "mailto_set": False,
+    }
+    info = RunInfo.model_validate(v1)
+    assert (info.kind, info.environment) == ("review", None)
+    assert RunInfo.model_validate({**v1, "kind": "benchmark"}).kind == "benchmark"
+    with pytest.raises(ValidationError):
+        RunInfo.model_validate({**v1, "kind": "piloto"})
+
+
+def test_environment_minimo_y_con_plantillas() -> None:
+    env = Environment(
+        engine_version="0.9.0",
+        python_version="3.13.0",
+        python_implementation="CPython",
+        platform="Windows-11",
+        created_utc="2026-10-18T00:00:00+00:00",
+        prompt_templates={"extraccion/v2.md": "a" * 64, "rob/RoB2.yml": "b" * 64},
+    )
+    assert (env.git_commit, env.git_dirty, env.packages) == (None, None, {})
+    assert Environment.model_validate(env.model_dump()) == env
+
+
+def _entrada_v1() -> dict:
+    return {
+        "schema_version": 1,
+        "stage": "screening_ta",
+        "record_id": "r",
+        "input_sha256": "i" * 64,
+        "output": {"record_id": "r"},
+    }
+
+
+def test_journal_entry_v1_es_ok_y_la_failed_exige_output_nulo_y_error() -> None:
+    assert JournalEntry.model_validate(_entrada_v1()).status == "ok"
+    fallo = {"type": "DeterministicCallError", "message": "400", "attempts": 3}
+    failed = JournalEntry.model_validate(
+        {**_entrada_v1(), "output": None, "error": fallo, "status": "failed"}
+    )
+    assert failed.error is not None and failed.error.attempts == 3
+    for incoherente in (
+        {**_entrada_v1(), "status": "failed"},  # failed con output
+        {**_entrada_v1(), "output": None},  # ok sin output
+        {**_entrada_v1(), "error": fallo},  # ok con error
+        {**_entrada_v1(), "output": None, "status": "failed"},  # failed sin error
+    ):
+        with pytest.raises(ValidationError):
+            JournalEntry.model_validate(incoherente)
+    with pytest.raises(ValidationError):
+        JournalEntry.model_validate({k: v for k, v in _entrada_v1().items() if k != "output"})
+
+
+def test_retrieval_outcome_v2_rescate_humano_y_recorte() -> None:
+    oa = RetrievalOutcome(available=True, n_chars=10, text_sha256="t")
+    assert (oa.source, oa.truncated, oa.n_chars_total, oa.rescue_file) == ("oa", False, None, None)
+    rescate = RetrievalOutcome(
+        available=True,
+        n_chars=10,
+        source="human_rescue",
+        rescue_file="screening_ft/rescues/a.pdf",
+        rescue_file_sha256="f" * 64,
+    )
+    assert rescate.source == "human_rescue"
+    with pytest.raises(ValidationError):  # rescate sin fichero
+        RetrievalOutcome(available=True, source="human_rescue")
+    with pytest.raises(ValidationError):  # fichero sin ser rescate
+        RetrievalOutcome(available=True, rescue_file="screening_ft/rescues/a.pdf")
+    recortado = RetrievalOutcome(
+        available=True, n_chars=120_000, n_chars_total=150_000, truncated=True
+    )
+    assert recortado.truncated
+    with pytest.raises(ValidationError):  # truncated sin total
+        RetrievalOutcome(available=True, n_chars=10, truncated=True)
+    with pytest.raises(ValidationError):  # total no mayor que lo guardado
+        RetrievalOutcome(available=True, n_chars=10, n_chars_total=10, truncated=True)
+
+
+def test_gate_summary_n_edits_vale_cero_por_defecto() -> None:
+    resumen = GateSummary(
+        stage="extraccion", action="approve", actor="human:ana", autonomy="A0", timestamp_utc="t"
+    )
+    assert resumen.n_edits == 0
+
+
+def test_deposit_info_lista_lo_retenido_con_sus_hashes() -> None:
+    info = DepositInfo(
+        source_run=DepositSource(slug="s", timestamp="T", manifest_sha256="m" * 64),
+        withheld=[
+            WithheldDir(
+                path="04_fulltext/texts/",
+                reason="copyright",
+                files=[
+                    WithheldFile(relpath="04_fulltext/texts/0001.txt", sha256="a" * 64, n_bytes=12)
+                ],
+            )
+        ],
+        engine_version="0.9.0",
+    )
+    assert info.schema_version == 2 and info.created_utc
+    assert WITHHELD_DIRS == ("04_fulltext/texts/", "screening_ft/rescues/")
+    assert DEPOSIT_FILE == "deposit.json"
+    with pytest.raises(ValidationError):
+        WithheldDir(path="x/", reason="porque sí")

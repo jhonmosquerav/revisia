@@ -222,7 +222,7 @@ def test_request_sha256_recomputable_desde_yaml(tmp_path: Path) -> None:
     sha = solicitud.pop("request_sha256")
     assert sha == result.request_sha256 == canonical_sha256(solicitud)
     assert (solicitud["schema_version"], solicitud["stage"], solicitud["autonomy"]) == (
-        1,
+        2,
         "reporte",
         "A1",
     )
@@ -253,7 +253,7 @@ def test_request_sha256_recomputable_con_texto_que_yaml_deforma(tmp_path: Path) 
         (ctx.run_dir / "reporte" / "review_request.yml").read_text(encoding="utf-8")
     )
     sha = solicitud.pop("request_sha256")
-    assert solicitud == {"schema_version": 1, "stage": "reporte", "autonomy": "A1", **payload}
+    assert solicitud == {"schema_version": 2, "stage": "reporte", "autonomy": "A1", **payload}
     assert sha == result.request_sha256 == canonical_sha256(solicitud)
 
 
