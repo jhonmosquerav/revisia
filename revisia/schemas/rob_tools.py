@@ -44,6 +44,12 @@ class SignallingQuestion(BaseModel):
     text: str = Field(min_length=1, max_length=200)
     answers: list[str] = Field(min_length=2)
 
+    @model_validator(mode="after")
+    def _respuestas_distintas(self) -> SignallingQuestion:
+        if len(set(self.answers)) != len(self.answers):
+            raise ValueError(f"pregunta {self.id}: respuestas repetidas {self.answers}")
+        return self
+
 
 class RoBDomainSpec(BaseModel):
     """Dominio (o ítem, en AMSTAR 2 y NOS) con sus preguntas y, si difiere, su escala."""
@@ -128,6 +134,15 @@ class RoBToolSpec(BaseModel):
         repetidas = sorted({q for q in preguntas if preguntas.count(q) > 1})
         if repetidas:
             raise ValueError(f"{self.id}: ids de pregunta repetidos {repetidas}")
+        for posicion, dominio in enumerate(self.domains, 1):
+            # El id oficial es «<n.º de dominio>.<n.º de pregunta>»: una pregunta colocada en
+            # otro dominio es un error de transcripción (riesgo 5).
+            for q in dominio.signalling_questions:
+                if q.id.split(".", 1)[0] != str(posicion) or "." not in q.id:
+                    raise ValueError(
+                        f"{self.id}: la pregunta {q.id} no lleva el prefijo «{posicion}.» "
+                        f"de su dominio {dominio.id}"
+                    )
         aplic = [a.id for a in self.applicability]
         if len(set(aplic)) != len(aplic):
             raise ValueError(f"{self.id}: ids de aplicabilidad repetidos")
@@ -167,7 +182,10 @@ def load_tool_spec(tool: RoBTool) -> RoBToolSpec:
     ``ValueError`` nombra el fichero para que se corrija ahí.
     """
     path = tool_spec_path(tool)
-    datos = yaml.safe_load(path.read_text(encoding="utf-8"))
+    try:
+        datos = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise ValueError(f"especificación de RoB ilegible en {path.name}: {exc}") from exc
     try:
         spec = RoBToolSpec.model_validate(datos)
     except ValidationError as exc:

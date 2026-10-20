@@ -47,10 +47,50 @@ def test_rob2_estructura_oficial() -> None:
 def test_robins_i_estructura_oficial() -> None:
     spec = load_tool_spec("ROBINS-I")
     assert spec.domain_ids == tuple(f"D{i}" for i in range(1, 8))
-    assert [len(d.signalling_questions) for d in spec.domains] == [8, 5, 3, 6, 5, 4, 3]
-    assert spec.n_questions == 34
+    # D4 en la variante «efecto de la asignación», como RoB 2: solo 4.1 y 4.2.
+    assert [len(d.signalling_questions) for d in spec.domains] == [8, 5, 3, 2, 5, 4, 3]
+    assert spec.n_questions == 30
     assert spec.judgment_scale == ["low", "moderate", "serious", "critical", "no_information"]
     assert (spec.aggregation, spec.robvis_template) == ("robins_i", "robins_i")
+
+
+def _ids(*por_dominio: int) -> list[str]:
+    """Secuencia oficial de ids ``"<dominio>.<n>"`` a partir del número de preguntas."""
+    return [f"{d}.{n}" for d, total in enumerate(por_dominio, 1) for n in range(1, total + 1)]
+
+
+@pytest.mark.parametrize(
+    ("tool", "ids"),
+    [
+        ("RoB2", _ids(3, 7, 4, 5, 3)),
+        ("ROBINS-I", _ids(8, 5, 3, 2, 5, 4, 3)),
+        ("QUADAS-2", _ids(3, 2, 2, 4)),
+        ("AMSTAR2", []),
+        ("NewcastleOttawa", []),
+        ("NewcastleOttawaCaseControl", []),
+    ],
+)
+def test_secuencia_completa_de_ids_de_preguntas(tool: str, ids: list[str]) -> None:
+    spec = load_tool_spec(tool)
+    assert [q.id for d in spec.domains for q in d.signalling_questions] == ids
+
+
+NA_OFICIAL = {
+    "RoB2": ["2.3", "2.4", "2.5", "2.7", "3.2", "3.3", "3.4", "4.3", "4.4", "4.5"],
+    "ROBINS-I": ["1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "2.2", "2.3", "2.5", "5.4"]
+    + ["5.5"],
+}
+
+
+@pytest.mark.parametrize("tool", HERRAMIENTAS)
+def test_na_solo_en_las_preguntas_condicionales(tool: str) -> None:
+    spec = load_tool_spec(tool)
+    con_na = [q.id for d in spec.domains for q in d.signalling_questions if "NA" in q.answers]
+    assert con_na == NA_OFICIAL.get(tool, [])
+    for d in spec.domains:
+        for q in d.signalling_questions:
+            base = ["Y", "N", "U"] if tool == "QUADAS-2" else ["Y", "PY", "PN", "N", "NI"]
+            assert q.answers == base + (["NA"] if q.id in con_na else [])
 
 
 @pytest.mark.parametrize(
@@ -146,6 +186,26 @@ def _pregunta(qid: str) -> dict:
                 {"id": "D2", "name": "b", "signalling_questions": [_pregunta("1.1")]},
             ]
         },  # pregunta repetida entre dominios
+        {
+            "domains": [
+                {"id": "D1", "name": "a", "signalling_questions": [_pregunta("1.1")]},
+                {"id": "D2", "name": "b", "signalling_questions": [_pregunta("1.2")]},
+            ]
+        },  # pregunta de D2 con el prefijo de D1
+        {
+            "domains": [
+                {"id": "D1", "name": "a", "signalling_questions": [_pregunta("11.1")]},
+            ]
+        },  # «11.1» no es del dominio 1 aunque empiece por «1»
+        {
+            "domains": [
+                {
+                    "id": "D1",
+                    "name": "a",
+                    "signalling_questions": [{"id": "1.1", "text": "t", "answers": ["Y", "Y"]}],
+                },
+            ]
+        },  # respuestas repetidas
     ],
 )
 def test_una_especificacion_incoherente_no_carga(cambios: dict) -> None:
@@ -191,3 +251,20 @@ def test_load_tool_spec_exige_que_el_id_coincida_con_el_fichero(tmp_path, monkey
     monkeypatch.setattr(modulo, "TOOLS_DIR", tmp_path)
     with pytest.raises(ValueError, match=r"AMSTAR2\.yml"):
         load_tool_spec("AMSTAR2")
+
+
+def test_load_tool_spec_con_yaml_mal_formado_nombra_el_fichero(tmp_path, monkeypatch) -> None:
+    import revisia.schemas.rob_tools as modulo
+
+    (tmp_path / "RoB2.yml").write_text("id: [sin cerrar\n", encoding="utf-8")
+    monkeypatch.setattr(modulo, "TOOLS_DIR", tmp_path)
+    with pytest.raises(ValueError, match=r"RoB2\.yml"):
+        load_tool_spec("RoB2")
+
+
+def test_load_tool_spec_sin_fichero_nombra_el_fichero(tmp_path, monkeypatch) -> None:
+    import revisia.schemas.rob_tools as modulo
+
+    monkeypatch.setattr(modulo, "TOOLS_DIR", tmp_path)
+    with pytest.raises(ValueError, match=r"QUADAS-2\.yml"):
+        load_tool_spec("QUADAS-2")

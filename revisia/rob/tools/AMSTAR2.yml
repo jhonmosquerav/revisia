@@ -2,6 +2,7 @@
 # críticos: 2, 4, 7, 9, 11, 13 y 15).
 # Fuente: https://amstar.ca/Amstar-2.php
 # Cada ítem es un dominio sin preguntas señalizadoras; su name es una paráfrasis propia.
+# Los ítems 9 y 11 colapsan en una sola escala la puntuación separada para ECA y NRSI.
 # Las escalas van entre comillas: YAML 1.1 (yaml.safe_load) leería yes/no como booleanos.
 # Las preguntas son paráfrasis propias con el id oficial; el texto literal está en la
 # fuente (licencia CC BY-NC 4.0 del artículo en BMJ).
@@ -70,7 +71,7 @@ domains:
     name: ¿Se explica y discute satisfactoriamente la heterogeneidad observada?
     scale: ["yes", "no"]
   - id: "15"
-    name: Si hubo síntesis cuantitativa, ¿se investigó el sesgo de publicación? (crítico)
+    name: Si hubo síntesis cuantitativa, ¿se investigó el sesgo de publicación y se discutió su impacto probable? (crítico)
     scale: ["yes", "no", "no_meta_analysis"]
   - id: "16"
     name: ¿Se declaran los conflictos de interés, incluida la financiación de la revisión?

@@ -9,7 +9,7 @@ id: QUADAS-2
 name: QUADAS-2 (Quality Assessment of Diagnostic Accuracy Studies 2)
 version: QUADAS-2 · 2011
 unit: domain
-judgment_scale: [low, high, unclear]
+judgment_scale: ["low", "high", "unclear"]
 overall_scale: null
 aggregation: none
 critical_items: []
@@ -38,43 +38,43 @@ domains:
     signalling_questions:
       - id: "1.1"
         text: ¿Se incluyó una muestra consecutiva o aleatoria de pacientes?
-        answers: [Y, N, U]
+        answers: ["Y", "N", "U"]
       - id: "1.2"
         text: ¿Se evitó un diseño de casos y controles?
-        answers: [Y, N, U]
+        answers: ["Y", "N", "U"]
       - id: "1.3"
         text: ¿El estudio evitó exclusiones inapropiadas?
-        answers: [Y, N, U]
+        answers: ["Y", "N", "U"]
   - id: index_test
     name: Dominio 2 · prueba índice (index test)
     signalling_questions:
       - id: "2.1"
         text: ¿La prueba índice se interpretó sin conocer el resultado del estándar de referencia?
-        answers: [Y, N, U]
+        answers: ["Y", "N", "U"]
       - id: "2.2"
         text: Si se usó un umbral, ¿estaba fijado de antemano?
-        answers: [Y, N, U]
+        answers: ["Y", "N", "U"]
   - id: reference_standard
     name: Dominio 3 · estándar de referencia (reference standard)
     signalling_questions:
       - id: "3.1"
         text: ¿Es probable que el estándar de referencia clasifique bien la condición diana?
-        answers: [Y, N, U]
+        answers: ["Y", "N", "U"]
       - id: "3.2"
         text: ¿El estándar de referencia se interpretó sin conocer el resultado de la prueba índice?
-        answers: [Y, N, U]
+        answers: ["Y", "N", "U"]
   - id: flow_and_timing
     name: Dominio 4 · flujo y tiempos (flow and timing)
     signalling_questions:
       - id: "4.1"
         text: ¿El intervalo entre la prueba índice y el estándar de referencia fue apropiado?
-        answers: [Y, N, U]
+        answers: ["Y", "N", "U"]
       - id: "4.2"
         text: ¿Todos los pacientes recibieron un estándar de referencia?
-        answers: [Y, N, U]
+        answers: ["Y", "N", "U"]
       - id: "4.3"
         text: ¿Todos los pacientes recibieron el mismo estándar de referencia?
-        answers: [Y, N, U]
+        answers: ["Y", "N", "U"]
       - id: "4.4"
         text: ¿Se incluyeron todos los pacientes en el análisis?
-        answers: [Y, N, U]
+        answers: ["Y", "N", "U"]
