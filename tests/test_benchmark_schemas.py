@@ -47,6 +47,22 @@ def test_panel_carga_desde_yaml_y_las_celdas_son_provider_config(tmp_path: Path)
     assert (cfg.provider, cfg.model, cfg.temperature, cfg.effort) == ("zai", "glm-4.6", 0.0, None)
 
 
+def test_to_provider_config_lleva_todos_los_campos_de_provider_config() -> None:
+    # Todo campo de ProviderConfig (también uno que se añada mañana) viaja a la configuración.
+    celda = BenchmarkCell(
+        name="c",
+        provider="claude_code",
+        model="m",
+        temperature=0.3,
+        top_p=0.9,
+        seed=7,
+        effort="high",
+    )
+    cfg = celda.to_provider_config()
+    assert cfg.model_dump() == celda.model_dump(exclude={"name"})
+    assert set(cfg.model_dump()) == set(ProviderConfig.model_fields)
+
+
 @pytest.mark.parametrize(
     "crudo",
     [

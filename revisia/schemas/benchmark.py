@@ -35,15 +35,12 @@ class BenchmarkCell(ProviderConfig):
     name: str = Field(pattern=_CELL_NAME_PATTERN)
 
     def to_provider_config(self) -> ProviderConfig:
-        """La configuración de proveedor pura, sin el nombre de la celda."""
-        return ProviderConfig(
-            provider=self.provider,
-            model=self.model,
-            temperature=self.temperature,
-            top_p=self.top_p,
-            seed=self.seed,
-            effort=self.effort,
-        )
+        """La configuración de proveedor pura, sin el nombre de la celda.
+
+        Se valida desde el volcado, no campo a campo: un campo nuevo de ``ProviderConfig``
+        viaja sin tocar este método (revisión final de PR-0).
+        """
+        return ProviderConfig.model_validate(self.model_dump(exclude={"name"}))
 
 
 class BenchmarkPanel(BaseModel):
