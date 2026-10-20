@@ -19,7 +19,7 @@
 - Comandos: un test, `uv run pytest -p no:cacheprovider <ruta>::<test> -v`; la suite, `uv run pytest -p no:cacheprovider -n auto -m "not cronometrado"` y después `uv run pytest -p no:cacheprovider -m cronometrado`; lint, primero `uv run black . && uv run ruff check --fix .` y después `uv run ruff check . && uv run ruff format --check . && uv run black --check .`. El código de test de este plan cabe en 100 columnas.
 - Commits pequeños, al menos uno por tarea, en español con prefijo convencional, terminados con `-m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"`.
 - **E₁ no toca** `revisia/orchestration/pipeline.py`, `gates.py` ni `hitl.py` (son de E₂, §15), ni `revisia/prompts/__init__.py` (`PROMPT_VERSIONS` y `load_template` son de PR-A), ni `revisia/llm/providers/*` (solo A), ni los YAML de `revisia/rob/tools/` salvo que una tarea encuentre un error de transcripción (entonces se corrige como dato, con su test, y se anota en §19).
-- **Los implementadores no tocan** `CHANGELOG.md`, `README.md`, `AGENTS.md`, `docs/auditoria/` ni el spec (§15): los actualiza el integrador al cerrar la PR (tarea de integración, que escribe el redactor de E₂).
+- **Los implementadores no tocan** `CHANGELOG.md`, `README.md`, `AGENTS.md`, `docs/auditoria/` ni el spec (§15): los actualiza el integrador al cerrar la PR (Tarea E2.6).
 - El texto de las preguntas señalizadoras **nunca** se transcribe literalmente (licencias de §4.4): el prompt usa el id oficial y la paráfrasis del YAML y remite a la fuente.
 - Convenciones de la Ola 1 que siguen: `canonical_json`, horas ISO-8601 UTC, ningún `record_id` como nombre de fichero, claves de registro entre comillas en YAML.
 - `tests/` no es un paquete: los dobles se importan como `from fakes import …`.
@@ -51,10 +51,11 @@ PR-E es una sola PR (`feat/ola2-rob-por-herramienta`, base D en §15) desarrolla
 | E1.6 | `revisia/agents/rob.py` (`assess_rob`, `failed_assessment`), `tests/fakes.py` | E1.2, E1.3, E1.5 |
 | E1.7 | `revisia/exports/interop.py` (`render_robvis_csv`), `tests/fakes.py` (`evaluacion_rob`) | E1.2 |
 | E1.8 | `revisia/exports/rob_report.py` | E1.7 |
+| E2.0–E2.6 | ver «Fase E₂»: rebase, `GRADE`, gate `rob` por dominio, pipeline, fixtures para G₂, integración | D lista |
 
 E1.2, E1.3 y E1.4 son independientes entre sí; E1.7 puede ir en paralelo con E1.5–E1.6. Con subagentes en un solo worktree se ejecutan en secuencia, en este orden.
 
-**Ciclo por tarea (§16):** implementador (subagente nuevo, TDD estricto: test rojo → código mínimo → verde → lint → commit) → revisor (subagente nuevo: primero cumplimiento del spec y de este plan, después calidad) → correcciones. Desviaciones descubiertas en revisión se corrigen y se anotan en §19 (tarea de integración de E₂), no se consultan, salvo que cambien una decisión D1–D6. **El merge lo decide el arquitecto.**
+**Ciclo por tarea (§16):** implementador (subagente nuevo, TDD estricto: test rojo → código mínimo → verde → lint → commit) → revisor (subagente nuevo: primero cumplimiento del spec y de este plan, después calidad) → correcciones. Desviaciones descubiertas en revisión se corrigen y se anotan en §19 (Tarea E2.6), no se consultan, salvo que cambien una decisión D1–D6. **El merge lo decide el arquitecto.**
 
 ### Compatibilidad mientras E₂ no exista (decisión de este plan)
 
@@ -69,8 +70,8 @@ E1.2, E1.3 y E1.4 son independientes entre sí; E1.7 puede ir en paralelo con E1
 | `revisia/agents/rob.py:94` y `:101` (`load_prompt("rob").format(` y `req = LLMRequest(...)`) | A (plantilla versionada y `prompt_template` en cada agente) | E1.6 reescribe `assess_rob` y esas líneas desaparecen: quedarse con la versión de E y llevar la intención de A a `build_prompt` (`load_template("rob", "v2")`, E₂) |
 | `tests/test_hitl_pipeline.py::_ProveedorConTablas` (`:1617-1662`) | C (rama de extracción, contigua a la de RoB) | Unión: la rama de extracción de C y la de RoB de E (`issubclass(schema, RoBOutput)`) |
 | `tests/fakes.py` | A (`_meta`/`structured` de `ScriptedProvider`: `RunMeta` v2, `emit` al sink); C/D (guiones de extracción y juez) | Quedarse con `_meta`/`structured` de A y reinsertar dentro la rama de RoB de E1.6 y la validación de claves del guion; `evaluacion_rob` es aditiva. Si A cambia la firma de `_meta`, adaptar `_Respuestas` en `tests/test_rob_agent.py` |
-| Test de A que fija `PROMPT_VERSIONS["rob"] == "v1"` | A | E₂ lo cambia a `"v2"` en el mismo commit en que añade la clave (cambio de expectativa por D10) |
-| `tests/test_snapshot.py:72-78` | A (pasa a `environment.prompt_templates`), C y D (sus `v2.md`) | Unión de las plantillas sobre la forma de A |
+| Test de A que fijara `PROMPT_VERSIONS["rob"] == "v1"` | A | Según el plan de A, ningún test fija los valores (se derivan del diccionario): nada que resolver; E2.0 lo comprueba |
+| `tests/test_snapshot.py:72-78` | A (pasa a `environment.prompt_templates`, con el conjunto **derivado** de `PROMPT_VERSIONS` y `rob/<tool>.yml`), C y D | Se queda la forma derivada de A y se descarta la línea `"rob/v2.md"` de E1.5 (la cubre `PROMPT_VERSIONS["rob"] = "v2"`, E2.0) |
 | `revisia/exports/__init__.py` | G (`deposit`) | Exports aditivos: unión |
 - **`find_quote`.** Ubicación compartida fijada por este plan: `revisia/text/quotes.py`, **dueña PR-C** (D22 es suyo), con el contrato de la Tarea E1.3. E₁ crea una versión provisional con el mismo contrato para poder probar `quote_status`; al rebasar sobre D, el conflicto *add/add* se resuelve **quedándose con la versión de C** (y su `__init__.py`), y el test de contrato de E₁ (`tests/test_quotes_contrato_rob.py`, fichero propio) sigue corriendo contra ella. El redactor de PR-C debe respetar ruta, nombre, firma y estados.
 - **Exports.** `render_robvis_csv(assessments, spec=None)` sigue aceptando la llamada de hoy (`pipeline.py:1190`): sin `spec` la deriva de `assessment.tool`. La tabla Markdown nueva vive en `revisia/exports/rob_report.py`; `pipeline._rob_table_md` (`pipeline.py:210-220`) sigue escribiendo `risk_of_bias.md` hasta que E₂ la sustituya.
@@ -348,7 +349,7 @@ def test_aggregation_notes_senala_lo_que_la_regla_deja_a_juicio() -> None:
 - [ ] **Step 2: Run para verificar que falla**
 
 Run: `uv run pytest -p no:cacheprovider tests/test_rob_aggregate.py -v`
-Expected: FAIL (`ModuleNotFoundError: No module named 'revisia.rob.aggregate'`).
+Expected: ERROR de colección (`ModuleNotFoundError: No module named 'revisia.rob.aggregate'`).
 
 - [ ] **Step 3: Implementar** `revisia/rob/aggregate.py` según Interfaces y las reglas de arriba. Docstring del módulo: la regla es la oficial de cada herramienta con su cita; lo que la guía deja a juicio no se automatiza, se señala (`aggregation_notes`); el global que cuenta es el del algoritmo sobre los juicios **finales** (relación 27). Cada función con su cita en la docstring. Las notas, en español, nombran los dominios y la fuente (`Sterne et al. 2019` / `Sterne et al. 2016`).
 
@@ -435,7 +436,7 @@ def test_cita_inventada_o_sin_texto_es_not_found() -> None:
 - [ ] **Step 2: Run para verificar que falla**
 
 Run: `uv run pytest -p no:cacheprovider tests/test_quotes_contrato_rob.py -v`
-Expected: FAIL (`ModuleNotFoundError: No module named 'revisia.text'`).
+Expected: ERROR de colección (`ModuleNotFoundError: No module named 'revisia.text'`).
 
 - [ ] **Step 3: Implementar** `revisia/text/__init__.py` y `revisia/text/quotes.py` según Interfaces (normalización con `str.translate` sobre una tabla de guiones y comillas, `casefold` y `" ".join(s.split())`; búsqueda con `in`).
 
@@ -559,7 +560,7 @@ def test_quadas2_exige_la_aplicabilidad() -> None:
 - [ ] **Step 2: Run para verificar que falla**
 
 Run: `uv run pytest -p no:cacheprovider tests/test_rob_agent.py -v`
-Expected: FAIL (`ImportError: cannot import name 'RoBOutput'`).
+Expected: ERROR de colección (`ImportError: cannot import name 'RoBOutput'`).
 
 - [ ] **Step 3: Implementar** `RoBOutput` y `response_model` en `revisia/agents/rob.py` según Interfaces. `Literal[tuple(escala)]` para construir el tipo desde la lista (válido en 3.11). Nombres de los modelos dinámicos legibles en el JSON Schema (`RoB2_D1`, `RoB2_dominios`, `RoB2_respuesta`; sustituir por `_` lo que no sea `[A-Za-z0-9_]` en el id de la herramienta). Caché con `functools.cache` sobre una función privada que recibe `(tool, version)` y relee la especificación con `load_tool_spec`.
 
@@ -713,7 +714,7 @@ Y en `tests/test_snapshot.py:72-78`, el conjunto pasa a incluir `"rob/v2.md"` (c
 - [ ] **Step 2: Run para verificar que falla**
 
 Run: `uv run pytest -p no:cacheprovider tests/test_rob_agent.py tests/test_snapshot.py -v`
-Expected: FAIL (`ImportError: cannot import name 'build_prompt'`; y el conjunto de `test_snapshot` sin `rob/v2.md`).
+Expected: ERROR de colección (`ImportError: cannot import name 'build_prompt'`; y el conjunto de `test_snapshot` sin `rob/v2.md`).
 
 - [ ] **Step 3: Implementar** la plantilla con el texto de arriba y `build_prompt` según Interfaces.
 
@@ -932,7 +933,7 @@ Cambios de expectativa en tests existentes (todos por D5):
 - [ ] **Step 2: Run para verificar que falla**
 
 Run: `uv run pytest -p no:cacheprovider tests/test_rob_agent.py tests/test_rob.py tests/test_fakes.py -v`
-Expected: FAIL (`TypeError: assess_rob() got an unexpected keyword argument 'spec'`).
+Expected: ERROR de colección (`ImportError: cannot import name 'failed_assessment'`).
 
 - [ ] **Step 3: Implementar** según Interfaces: `assess_rob` con sus dos `@overload`, `_problems`, `failed_assessment`; borrar `TOOL_DOMAINS`, `_RoBDomainOut`, `_RoBOut` y el alias `RoBJudgment`; la rama de RoB de `ScriptedProvider`; los cambios de expectativa. Docstring del módulo del agente: la especificación manda (dominios, escalas, agregación); el global del modelo es informativo; dos capas de reintento (las del proveedor por esquema, PR-A; la del agente por cobertura, aquí) y por qué el agente reintenta una sola vez (D9: lo que no se arregla repitiendo pasa al humano).
 
@@ -961,7 +962,7 @@ git commit -m "feat(rob): assess_rob por especificación con reintento, fallo de
 **Interfaces:**
 - Consumes: `final_judgments`, `aggregate` (E1.2); `RoBToolSpec.robvis_template`, `scale_for`, `load_tool_spec`.
 - Produces:
-  - `render_robvis_csv(assessments: Mapping[str, RoBAssessment], spec: RoBToolSpec | None = None) -> str`. Sin `spec` (la llamada de hoy en `pipeline.py:1190`) se carga con `load_tool_spec` desde `assessment.tool`; sin evaluaciones ni `spec` → `ValueError`; una evaluación de otra herramienta → `ValueError` con su id. Las evaluaciones `status == "failed"` se omiten (no tienen juicios). Columnas: `Study`, `D1`…`Dn` (posicionales, en el orden de `spec.domain_ids`, como las plantillas de robvis), `Overall`, `Weight` (siempre `1`). Celdas con el juicio **final** (`final_judgments`) mapeado según `spec.robvis_template`:
+  - `render_robvis_csv(assessments: Mapping[str, RoBAssessment], spec: RoBToolSpec | None = None) -> str`. Sin `spec` (la llamada de hoy en `pipeline.py:1190`) se carga con `load_tool_spec` desde `assessment.tool`; sin evaluaciones ni `spec` → `ValueError`; una evaluación de otra herramienta → `ValueError` con su id. Las evaluaciones **sin dominios** (`domains == []`: una `failed_assessment` sin decidir) se omiten; una `failed` con dominios humanos tiene fila (§19 «fila de un RoB fallido»). Columnas: `Study`, `D1`…`Dn` (posicionales, en el orden de `spec.domain_ids`, como las plantillas de robvis), `Overall`, `Weight` (siempre `1`). Celdas con el juicio **final** (`final_judgments`) mapeado según `spec.robvis_template`:
     - `rob2`: `low → Low`, `some_concerns → Some concerns`, `high → High`; global igual.
     - `robins_i`: `low → Low`, `moderate → Moderate`, `serious → Serious`, `critical → Critical`, `no_information → No information`; global igual.
     - `quadas2`: `low → Low`, `high → High`, `unclear → Unclear`; `Overall` = `No information` (QUADAS-2 no tiene global).
@@ -1047,7 +1048,7 @@ def test_robvis_rechaza_mezclas_y_omite_fallidas() -> None:
 - [ ] **Step 2: Run para verificar que falla**
 
 Run: `uv run pytest -p no:cacheprovider tests/test_interop.py -v`
-Expected: FAIL (`ImportError: cannot import name 'evaluacion_rob' from 'fakes'`).
+Expected: ERROR de colección (`ImportError: cannot import name 'evaluacion_rob' from 'fakes'`).
 
 - [ ] **Step 3: Implementar** `render_robvis_csv`, `robvis_note` (exportarla también en `revisia/exports/__init__.py`, junto a `render_robvis_csv`, líneas 23 y 53) y `evaluacion_rob`. Mapeos como constantes de módulo por plantilla; un juicio sin mapeo → `ValueError` (escala violada: mejor ruidoso que un CSV falso).
 
@@ -1077,9 +1078,9 @@ git commit -m "feat(exports): robvis.csv según la plantilla de cada herramienta
 - Produces: `render_rob_markdown(spec: RoBToolSpec, assessments: Mapping[str, RoBAssessment]) -> str` (E₂ la cablea en lugar de `pipeline._rob_table_md`, `pipeline.py:210-220`, llamada en 1117-1119). Contenido:
   - `# Riesgo de sesgo · {spec.name}`, línea `Versión: {spec.version} · Fuente: {spec.source.citation} ({spec.source.url})`, leyenda `- **{id}** · {name}` por dominio y `Escala: {v1} · {v2} · …` (la de la herramienta); en AMSTAR 2, `\* ítem crítico`.
   - Sin evaluaciones: `_(sin estudios evaluados)_`.
-  - Tabla `| Estudio | <id>… | Global |` (sin `Global` en QUADAS-2), una fila por evaluación `ok` en el orden del dict, con el juicio **final** de cada dominio y `†` si es humano (`†` también en `Global` si `overall_human`); en AMSTAR 2 la cabecera marca los críticos (`2*`); en NOS cada celda es `★` repetida `int(juicio)` veces o `—` con `0`, y `Global` es `{total}/{máximo}` (máximo = suma del último valor de cada escala, 9).
+  - Tabla `| Estudio | <id>… | Global |` (sin `Global` en QUADAS-2), una fila por evaluación **con dominios** (cualquier `status`) en el orden del dict; si es `failed`, la celda del estudio es `{id} (la IA falló, D9)`; con el juicio **final** de cada dominio y `†` si es humano (`†` también en `Global` si `overall_human`); en AMSTAR 2 la cabecera marca los críticos (`2*`); en NOS cada celda es `★` repetida `int(juicio)` veces o `—` con `0`, y `Global` es `{total}/{máximo}` (máximo = suma del último valor de cada escala, 9).
   - QUADAS-2: segunda tabla `## Aplicabilidad` con `| Estudio | <id>… |`.
-  - Fallidas: línea `Evaluaciones fallidas (D9), pendientes de decisión humana: id1, id2.` y fuera de la tabla.
+  - Sin dominios (`domains == []`): línea `Evaluaciones fallidas (D9), pendientes de decisión humana: id1, id2.` y fuera de la tabla. Es el único caso de «pendiente».
   - `†` explicado en una línea si alguna celda lo lleva: `† juicio corregido por el revisor humano (edit_domain).`
   - Con `robvis_note(spec)` no nula, esa nota en una línea final.
   - Los `study_id` en la tabla escapan `|` (`\|`) y sustituyen saltos de línea por espacios.
@@ -1164,12 +1165,23 @@ def test_vacio_fallidas_y_ids_que_rompen_la_tabla() -> None:
     assert "| x\\|y z | low | low | low | low | low | low |" in md.splitlines()
     assert "Evaluaciones fallidas (D9), pendientes de decisión humana: f." in md
     assert "| f |" not in md
+
+
+def test_rob_fallido_con_dominios_humanos_tiene_fila_marcada() -> None:
+    spec = load_tool_spec("RoB2")
+    humanos = {d: "low" for d in spec.domain_ids}
+    decidida = evaluacion_rob("RoB2", study_id="g", humanos=humanos)
+    decidida = decidida.model_copy(update={"status": "failed"})
+    md = render_rob_markdown(spec, {"g": decidida})
+    fila = "| g (la IA falló, D9) | low† | low† | low† | low† | low† | low |"
+    assert fila in md.splitlines()
+    assert "pendientes de decisión humana" not in md
 ```
 
 - [ ] **Step 2: Run para verificar que falla**
 
 Run: `uv run pytest -p no:cacheprovider tests/test_rob_report.py -v`
-Expected: FAIL (`ModuleNotFoundError: No module named 'revisia.exports.rob_report'`).
+Expected: ERROR de colección (`ModuleNotFoundError: No module named 'revisia.exports.rob_report'`).
 
 - [ ] **Step 3: Implementar** `render_rob_markdown` según Interfaces (texto plano determinista, sin dependencias nuevas).
 
@@ -1189,7 +1201,7 @@ git commit -m "feat(exports): tabla de riesgo de sesgo por herramienta con escal
 
 ### Supuestos revocables de E₁ (filas propuestas para §19)
 
-Dos grupos. Las filas **a registrar ya** son contratos que otras pistas consumen antes de E₂ (PR-C escribe `find_quote`; quien use el guion de RoB de `ScriptedProvider` necesita la forma por id): las registra el coordinador en §19 en cuanto se acepte este plan, a continuación de la última fila existente. Las filas **de integración** las añade la tarea de integración que escribe el redactor de E₂, también a continuación de la última fila, con numeración consecutiva; aquí van con `m`… porque C, D y otros planes registran las suyas antes.
+Dos grupos. Las filas **a registrar ya** son contratos que otras pistas consumen antes de E₂ (PR-C escribe `find_quote`; quien use el guion de RoB de `ScriptedProvider` necesita la forma por id): las registra el coordinador en §19 en cuanto se acepte este plan, a continuación de la última fila existente. Las filas **de integración** las añade la Tarea E2.6, también a continuación de la última fila, con numeración consecutiva; aquí van con `m`… porque C, D y otros planes registran las suyas antes.
 
 **A registrar ya:**
 
@@ -1198,7 +1210,7 @@ Dos grupos. Las filas **a registrar ya** son contratos que otras pistas consumen
 | n+1 | §4.4 `tests/fakes.py` | El guion `rob` de `ScriptedProvider` se indexa por **id de dominio** (`"D1"`, `"2"`, `"index_test"`), no por nombre como en PR-0; claves admitidas: ids de dominio del esquema pedido, `"overall"`, `"cita:<id>"` (cita de apoyo) y `"aplicabilidad:<id>"`; cualquier otra clave → `ValueError` que la nombra. Un dominio sin guion vuelve `null`; sin guion (`rob=None`), lo fabricado (primer valor de cada escala) | Plan PR-E (E₁), revisión independiente |
 ```
 
-**De integración (las registra la tarea de integración de E₂):**
+**De integración (las registra la Tarea E2.6):**
 
 ```
 | m | §9 `rob2`, D5 | **Pendiente de OK del arquitecto (toca D5).** Varios *some concerns* sin ningún *high* ⇒ el algoritmo da `some_concerns` y `aggregation_notes` lo lleva a `attention`; subir a `high` es una edición humana de `overall` con razón (Sterne et al. 2019, tabla 2: ese camino es un juicio, no una regla), y la relación 27 sigue siendo determinista. Si el arquitecto la rechaza, rige la literal de §9: ≥ 2 *some concerns* ⇒ `high` (Tarea E1.2, Step 0) | Plan PR-E (E₁) |
@@ -1230,87 +1242,1012 @@ Dos grupos. Las filas **a registrar ya** son contratos que otras pistas consumen
 
 ## Fase E₂ (sobre PR-D)
 
-Pendiente: la escribe el redactor de E₂ partiendo del plan de PR-D.
+**Estado de partida:** PR-0 + H + A + B + C + D, con E₁ rebasada encima (Tarea E2.0). Lo que E₂ consume de esas pistas, por su nombre en sus planes:
 
-**Interfaces que E₁ deja para E₂** (y para PR-G, relación 27):
+- **PR-A** (`2026-10-19-ola2-pra-procedencia.md`): `load_template(agent, version=None) -> PromptTemplate(text, template, sha256)`; `load_prompt` sigue devolviendo `str`; `PROMPT_VERSIONS` (cada pista edita su clave; ningún test fija sus valores); el sink de metas (`journaled` registra cada intento en el acto); `RecordFailedError(JournalError)` con `stage`, `record_id` y `failure`.
+- **PR-C** (`2026-10-19-ola2-prc-texto-completo-extraccion.md`, «Estado en que C deja el pipeline»):
+  - el patrón `FieldPolicy` (`FieldHint`, `StudyHint`) y `review_gate(..., fields=)`;
+  - `_validate`, que hoy rechaza `DomainEdits` con «… la corrección por dominio llega con PR-E₂»;
+  - `_register`, que escribe las ediciones en orden y antes del `approve`;
+  - `_from_ledger`, que rehace ediciones y rescates;
+  - `GateResult.edits: dict[str, FieldEdits | DomainEdits]`;
+  - `rob_payload(*, tool, included, assessments)` con `failed: [ids]` y el gate `rob` con `failed=` interino;
+  - `_assess_rob` que atrapa `RecordFailedError` y escribe `RoBAssessment(status="failed")`;
+  - `_rob_one(...)`, que ya pasa `text=`;
+  - las extracciones **finales** (con ediciones) hacia RoB;
+  - `revisia/text/quotes.py` (`find_quote`) y `revisia/text/delimit.py` (`document_block`, `neutralize`);
+  - **la decisión efectiva del ledger manda**: `labels`, `flag_reviews`, `edits` y `rescues` de `GateResult` salen siempre del ledger de la decisión efectiva, y `decision.yml` es solo el canal de entrada.
+- **PR-D** (`2026-10-19-ola2-prd-verificador.md`, «Estado en que D deja el pipeline»):
+  - `_verify_one(run, narrative, included, sources, abstracts, *, embedder)`;
+  - `_synthesize_and_verify(run, included, extractions, fulltexts, embedder) -> tuple[str, VerificationReport]`;
+  - `_write_deliverables(run, *, ..., retrieval, failed, verification, ...)`;
+  - `report_payload(*, included, verification, documento, forced_human)`;
+  - `PROMPT_VERSIONS` con `reporte: v2` y `verificador: v1`.
+  - D no toca `hitl.py` ni `_Run.gate`. Si la revisión independiente de D cambia una de estas firmas, E₂ solo las **consume** (no las cambia), así que basta con actualizar las llamadas en E2.4.
+
+| Tarea | Fichero(s) | Depende de |
+|---|---|---|
+| E2.0 | rebase sobre D, conflictos y reconciliación de E₁ con A y C (controlador) | D lista |
+| E2.1 | `revisia/config.py` (`GRADE` → mensaje) | E2.0 |
+| E2.2 | `revisia/orchestration/gates.py` (RoB), `revisia/orchestration/hitl.py` (solo dataclases) | E2.0 |
+| E2.3 | `revisia/orchestration/hitl.py` (`review_gate(..., domains=)`) | E2.2 |
+| E2.4 | `revisia/orchestration/pipeline.py`, `revisia/agents/rob.py` (sin adaptador), `revisia/exports/methods.py`, `tests/hitl_helpers.py` | E2.1, E2.3 |
+| E2.5 | `tests/conftest.py`, `tests/test_pipeline_fake.py` (fixtures y frontera para G₂) | E2.4 |
+| E2.6 | integración (controlador) | todas |
+
+### Tarea E2.0: Rebase sobre D y reconciliación de E₁ con A y C (controlador)
+
+**Files:**
+- Rebase de `feat/ola2-rob-por-herramienta` sobre `feat/ola2-verificador`.
+- Modify: `revisia/agents/rob.py` (`build_prompt`; `PROMPT_TEMPLATE`), `revisia/prompts/__init__.py` (clave `rob` de `PROMPT_VERSIONS`).
+- Delete: la copia provisional de `revisia/text/quotes.py` (se queda la de C).
+
+**Interfaces:**
+- Consumes: `load_template`, `PROMPT_VERSIONS` (A); `document_block` (`revisia/text/delimit.py`, C); `find_quote` (C).
+- Produces:
+  - `build_prompt(spec, record, *, extraction, text) -> str`, con la misma firma. Ahora usa `load_template("rob", "v2").text` y `document_block(record.record_id, cuerpo)`. Desaparecen el delimitador privado de E1.5 y la constante `PROMPT_TEMPLATE`. El nombre de la plantilla que viaja en `LLMRequest.prompt_template` sale de `load_template("rob", "v2").template` (relación 19).
+  - `PROMPT_VERSIONS["rob"] = "v2"`.
+
+- [ ] **Step 1: Rebase y conflictos.** Aplicar la tabla «Conflictos previsibles al rebasar E₁ sobre D», con dos precisiones:
+  - En `tests/test_snapshot.py` se conserva la **forma derivada de A** (`PROMPT_VERSIONS` + `rob/<tool>.yml`) y se descarta la línea `"rob/v2.md"` de E1.5: con `PROMPT_VERSIONS["rob"] = "v2"` queda cubierta.
+  - El test «`PROMPT_VERSIONS["rob"] == "v1"`» **no existe**: los tests de A derivan los valores del diccionario, así que no hay nada que cambiar.
+
+```bash
+cd C:/revisia-wt/e
+git fetch origin && git rebase origin/feat/ola2-verificador
+# En el conflicto add/add de E1.3 (durante un rebase, «ours» es la base: D, con C dentro):
+git checkout --ours revisia/text/__init__.py revisia/text/quotes.py
+git add revisia/text && git rebase --continue
+```
+
+Expected: rebase terminado. `revisia/text/` es el de C (con `delimit.py`) y `tests/test_quotes_contrato_rob.py` sigue en el árbol.
+
+- [ ] **Step 2: Test que falla.** Añadir a `tests/test_rob_agent.py` y sustituir `assert PROMPT_TEMPLATE == "rob/v2.md"` de `test_la_extraccion_entra_con_el_valor_final` por la primera línea de abajo (imports: `from revisia.prompts import load_template`; `from revisia.text.delimit import document_block`):
 
 ```python
-# revisia/rob/aggregate.py
-def rob2(judgments: Iterable[str]) -> str: ...
-def robins_i(judgments: Iterable[str]) -> str: ...
-def amstar2(items: Mapping[str, str], critical: Collection[str]) -> str: ...
-def nos_stars(items: Mapping[str, str]) -> int: ...
-# Relación 27 (PR-G la recalcula con estas dos):
-def aggregate(spec: RoBToolSpec, judgments: Mapping[str, str]) -> str | None: ...
-def final_judgments(assessment: RoBAssessment) -> dict[str, str]: ...  # humano o modelo
-# Avisos para attention:
-def aggregation_notes(spec: RoBToolSpec, judgments: Mapping[str, str]) -> list[str]: ...
-
-# revisia/agents/rob.py
-PROMPT_TEMPLATE: str = "rob/v2.md"  # E₂: se deriva de load_template("rob", "v2") o desaparece
-class RoBOutput(BaseModel): ...
-def response_model(spec: RoBToolSpec) -> type[RoBOutput]: ...
-def build_prompt(
-    spec: RoBToolSpec,
-    record: SearchRecord,
-    *,
-    extraction: ExtractionRecord | None,
-    text: str | None,
-) -> str: ...
-# Único sitio con load_prompt("rob", "v2") (str). E₂ lo cambia por
-# load_template("rob", "v2") -> PromptTemplate(text, template, sha256) de PR-A;
-# load_prompt sigue devolviendo str (decisión tras la revisión de PR-A).
-def assess_rob(
-    provider: LLMProvider,
-    *,
-    spec: RoBToolSpec,
-    record: SearchRecord,
-    extraction: ExtractionRecord | None = None,
-    text: str | None = None,
-    temperature: float = 0.0,
-    seed: int | None = None,
-) -> tuple[RoBAssessment, list[RunMeta]]: ...
-# Adaptador temporal que E₂ borra, con
-# tests/test_rob_agent.py::test_firma_heredada_con_tool_hasta_e2, al cambiar
-# pipeline._rob_one (pipeline.py:819-837) a spec= y devolver la lista de metas:
-#   assess_rob(provider, *, tool: RoBTool, record, ...) -> tuple[RoBAssessment, RunMeta]
-def failed_assessment(
-    spec: RoBToolSpec, study_id: str, *, source_text: SourceText
-) -> RoBAssessment: ...
-
-# revisia/exports/interop.py
-def render_robvis_csv(
-    assessments: Mapping[str, RoBAssessment], spec: RoBToolSpec | None = None
-) -> str: ...  # E₂ pasa spec (pipeline.py:1190) y lo hace obligatorio
-def robvis_note(spec: RoBToolSpec) -> str | None: ...  # → metodologia.md
-
-# revisia/exports/rob_report.py
-def render_rob_markdown(
-    spec: RoBToolSpec, assessments: Mapping[str, RoBAssessment]
-) -> str: ...  # sustituye a pipeline._rob_table_md (pipeline.py:210-220; escrita en 1117-1119)
-
-# revisia/text/quotes.py (dueña PR-C; E₁ trae copia provisional; §19 «a registrar ya»)
-def find_quote(quote: str | None, text: str | None) -> tuple[QuoteStatus, int | None]: ...
-
-# tests/fakes.py (§19 «a registrar ya»): guion por id; otra clave → ValueError
-#   ScriptedProvider(rob={"D1": "high", "cita:D1": "…", "overall": "high"})
-#   ScriptedProvider(rob={"index_test": "high", "aplicabilidad:index_test": "low", …})
-def evaluacion_rob(
-    tool: RoBTool,
-    juicios: Mapping[str, str] | None = None,
-    *,
-    study_id: str = "s",
-    humanos: Mapping[str, str] | None = None,
-    overall_humano: str | None = None,
-    status: RecordStatus = "ok",
-) -> RoBAssessment: ...
-
-# Reglas que E₁ deja fijadas para el gate de E₂:
-#   overall editable ⇔ spec.overall_scale is not None (NOS y QUADAS-2: no)
-#   apply_domain_edits: overall_algorithm = aggregate(spec, final_judgments(a));
-#                       overall = overall_human or overall_algorithm
-#   attention ⊇ aggregation_notes(...), dominios con quote_status == "not_found",
-#               evaluaciones con status == "failed"
-#   quote_status se recalcula sobre el texto crudo (caché o resumen), como en E1.6
-#   PROMPT_VERSIONS["rob"] = "v2" y el test de A que fija "v1" pasa a "v2"
+def test_rob_v2_es_la_plantilla_vigente_y_usa_el_bloque_de_c() -> None:
+    plantilla = load_template("rob")  # versión vigente: la de PROMPT_VERSIONS
+    assert plantilla.template == "rob/v2.md" and "RIESGO DE SESGO" in plantilla.text
+    prompt = build_prompt(load_tool_spec("RoB2"), REC, extraction=None, text=ATAQUE)
+    assert document_block("rec-1", ATAQUE) in prompt
+    proveedor = _Respuestas(_completo("RoB2"))
+    assess_rob(proveedor, spec=load_tool_spec("RoB2"), record=REC)
+    assert proveedor.requests[0].prompt_template == plantilla.template
 ```
+
+`test_la_peticion_lleva_la_plantilla_versionada` (E1.6) se queda tal cual. La marca `RIESGO DE SESGO` la usan `tests/test_reanudacion.py:836` y los tests D9 de C.
+
+- [ ] **Step 3: Run para verificar que falla.**
+
+Run: `uv run pytest -p no:cacheprovider tests/test_rob_agent.py -v -k "vigente"`
+Expected: FAIL (`load_template("rob").template == "rob/v1.md"`).
+
+- [ ] **Step 4: Implementar** según Interfaces. En `revisia/agents/rob.py` se borran `PROMPT_TEMPLATE` y el delimitador privado. Ningún import de `PROMPT_TEMPLATE` debe quedar: compruébalo con `grep -rn PROMPT_TEMPLATE revisia tests`, que no debe devolver nada.
+
+- [ ] **Step 5: Run para verificar que pasa.**
+
+Run: `uv run pytest -p no:cacheprovider -n auto -m "not cronometrado" && uv run pytest -p no:cacheprovider -m cronometrado`, luego `uv run black . && uv run ruff check --fix .` y `uv run ruff check . && uv run ruff format --check . && uv run black --check .`
+Expected: PASS, con los `xfail` estrictos de A, C y D. Lint limpio. Anota el recuento: es la línea base de E₂.
+
+- [ ] **Step 6: Commit.**
+
+```bash
+git add -A revisia tests
+git commit -m "refactor(rob): rob/v2 vigente con load_template y el bloque delimitado de C (D10, A7)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Tarea E2.1: `GRADE` con el mensaje de §9 (`revisia/config.py`)
+
+**Files:**
+- Modify: `revisia/config.py` (`ReviewProtocol.rob_tool`, hoy en la línea 117; validador nuevo).
+- Test: `tests/test_rob_pipeline.py` (nuevo).
+
+**Interfaces:**
+- Consumes: `RoBTool` (PR-0, sin `GRADE`).
+- Produces: `GRADE_MESSAGE: str = "GRADE no es una herramienta de riesgo de sesgo por estudio; queda fuera hasta la etapa de certeza por desenlace"` (texto exacto de §9), más un `field_validator("rob_tool", mode="before")` que, con el valor `"GRADE"` (sin distinguir mayúsculas), lanza `ValueError(GRADE_MESSAGE + " (D5). Elige una de: " + ", ".join(get_args(RoBTool)) + ".")` (la lista se deriva del `Literal`, no se escribe a mano).
+  - El error se da en la carga del protocolo, que es lo primero que hacen `validate` y `run`: rc 2 sin crear carpetas (`cli.py:760-770`).
+  - Un validador de modelo es aquí lo correcto. PR-0 ya sacó `GRADE` del `Literal`, así que una instantánea 0.8 con `GRADE` ya no cargaba. El validador solo cambia el mensaje genérico de pydantic por el de §9.
+
+- [ ] **Step 1: Test que falla.** Crear `tests/test_rob_pipeline.py`:
+
+```python
+"""RoB por herramienta en el pipeline (spec 2026-10-18 §9; D5, D9; relaciones 22 y 27)."""
+
+from __future__ import annotations
+
+import shutil
+from pathlib import Path
+
+import pytest
+import yaml
+
+from revisia.cli import main
+
+EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "demo-mini-review"
+
+
+def _protocolo_con(tmp_path: Path, rob_tool: str) -> Path:
+    destino = tmp_path / "protocolo"
+    shutil.copytree(EXAMPLE, destino)
+    raw = yaml.safe_load((destino / "protocol.yml").read_text(encoding="utf-8"))
+    raw["rob_tool"] = rob_tool
+    (destino / "protocol.yml").write_text(yaml.safe_dump(raw, allow_unicode=True), "utf-8")
+    return destino
+
+
+@pytest.mark.parametrize("valor", ["GRADE", "grade"])
+def test_grade_es_rc_2_con_el_mensaje_de_la_etapa_de_certeza(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], valor: str
+) -> None:
+    protocolo = _protocolo_con(tmp_path, valor)
+    raiz = str(tmp_path / "runs")
+    for orden in (["validate", str(protocolo)], ["run", str(protocolo), "--runs-root", raiz]):
+        assert main(orden) == 2
+        salida = capsys.readouterr()
+        texto = salida.out + salida.err
+        assert "GRADE no es una herramienta de riesgo de sesgo por estudio" in texto
+        assert "certeza por desenlace" in texto
+    assert not (tmp_path / "runs").exists()
+```
+
+- [ ] **Step 2: Run para verificar que falla.**
+
+Run: `uv run pytest -p no:cacheprovider tests/test_rob_pipeline.py -v`
+Expected: FAIL: el mensaje es el genérico de pydantic («Input should be 'RoB2', …»).
+
+- [ ] **Step 3: Implementar** según Interfaces. La docstring cita D5 y §9.
+
+- [ ] **Step 4: Run para verificar que pasa.**
+
+Run: `uv run pytest -p no:cacheprovider tests/test_rob_pipeline.py tests/test_config.py tests/test_cli_validate.py -v`, luego `uv run black . && uv run ruff check --fix .` y `uv run ruff check . && uv run black --check .`
+Expected: PASS y lint limpio.
+
+- [ ] **Step 5: Commit.**
+
+```bash
+git add revisia/config.py tests/test_rob_pipeline.py
+git commit -m "feat(config): rob_tool GRADE es rc 2 con el mensaje de la etapa de certeza (D5)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Tarea E2.2: Solicitud, atención, política y aplicación de las ediciones del gate `rob` (`gates.py`)
+
+**Files:**
+- Modify: `revisia/orchestration/gates.py`: `rob_payload` (hoy en `:381-415`, con el `failed` de C); funciones nuevas tras ella.
+- Modify: `revisia/orchestration/hitl.py`: solo dataclases nuevas, tras las de C (`FieldHint`, `StudyHint`, `FieldPolicy`).
+- Modify (cambios de expectativa; la firma de `rob_payload` pasa de `tool=` a `spec=`):
+  - `tests/test_hitl_pipeline.py::test_artifact_sha256_de_extraccion_y_rob_es_el_hash_de_dump_artifact` (hoy en `:1811-1827`): `rob_payload(spec=load_tool_spec("RoB2"), …)`, con `evaluacion_rob("RoB2", study_id="rec-1")` en lugar del `RoBAssessment` hecho a mano.
+  - `::test_extraction_y_rob_payload_sin_incluidos_no_rompen` (`:1860-1867`): `rob_payload(spec=load_tool_spec("RoB2"), included=[], assessments={})`. Debe seguir dando `n_studies == 0`, y además `editable == {}` y `attention == []`.
+  - `:1703-1721` (la fila de `rec-2` en la solicitud, que fijó E1.6): cada dominio gana `"id"`, `"quote_status"` y `"answers"`, y la fila gana `"status"`, `"source_text"`, `"overall_llm"`, `"overall_algorithm"` y `"applicability": []`. Ver la forma en Interfaces.
+- Test: `tests/test_correccion_por_dominio.py` (nuevo).
+
+**Interfaces:**
+- Consumes: `aggregate`, `final_judgments`, `aggregation_notes` (E1.2); `failed_assessment`, `evaluacion_rob` (E1.6, E1.7); `RoBToolSpec`; `DomainEdits`, `DomainEdit` (PR-0); `dump_artifact`, `canonical_sha256`.
+- Produces (§4.2 «`review_request.yml` · rob», D5, D9; **E₂ copia el patrón de C**):
+  - En `hitl.py`, cuatro `@dataclass(frozen=True, slots=True)`:
+    - `DomainHint`: `domain_id: str`, `name: str`, `judgment: str | None` (el del modelo; `None` en un estudio fallido), `quote_status: str`, `attention: tuple[str, ...] = ()`.
+    - `RoBStudyHint`: `study_id: str`, `title: str`, `domains: tuple[DomainHint, ...]`, `overall_algorithm: str | None`, `failed: bool = False`, `overall_attention: tuple[str, ...] = ()` (las notas de `aggregation_notes`, que la plantilla muestra en la línea `overall`).
+    - `DomainEditable`: `domains: frozenset[str]`, `overall: bool`.
+    - `DomainPolicy`: `editable: Mapping[str, DomainEditable]`, `scales: Mapping[str, tuple[str, ...]]` (escala por id de dominio, en el orden de la especificación: el orden de las ediciones en el ledger), `overall_scale: tuple[str, ...] | None`, `required: Mapping[str, frozenset[str]] = field(default_factory=dict)`, `hints: tuple[RoBStudyHint, ...] = ()`.
+    - C sugería `scales` por estudio. Aquí va por dominio porque la herramienta es una sola por corrida (`protocol.rob_tool`); queda como supuesto en §19.
+  - `rob_payload(*, spec: RoBToolSpec, included: Iterable[SearchRecord], assessments: Mapping[str, RoBAssessment]) -> dict` produce:
+    - `tool` (`spec.id`), `tool_version` (`spec.version`) y `n_studies`;
+    - `studies`: por incluido, `{record_id, title, status, source_text, overall_llm, overall_algorithm, overall, domains: [{id, domain, judgment, rationale, support_quote, quote_status, answers}], applicability: [{id, judgment, rationale}]}`;
+    - `failed: [ids]` (como en C);
+    - `attention` y `editable: {study_id: {"domains": [ids en orden], "overall": bool}}`;
+    - `artifact_sha256` como hoy: el hash de las evaluaciones del diario, antes de las ediciones.
+  - `rob_attention(*, spec, included, assessments) -> list[dict]` va en el orden de `included`. Por estudio:
+    - estudio `failed`: `{study_id, domain: <id>, reason: "failed"}` por cada dominio de la especificación;
+    - si no, `{study_id, domain, reason: "quote_not_found"}` para cada dominio con `support_quote` y `quote_status == "not_found"`;
+    - después, `{study_id, domain: "overall", reason: "aggregation", note: <texto>}` por cada nota de `aggregation_notes(spec, final_judgments(a))`.
+  - `rob_policy(*, spec, included, assessments) -> DomainPolicy`:
+    - `editable`: todos los dominios de cada incluido, con `overall = spec.overall_scale is not None` (NOS y QUADAS-2 no; §19 «NOS»);
+    - `required`: todos los dominios de los estudios `failed` (el global no: lo calcula la regla);
+    - `scales = {id: spec.scale_for(id)}` y `overall_scale = tuple(spec.overall_scale) if … else None`;
+    - `hints` con el juicio del modelo, `quote_status`, las razones de `attention` y `overall_algorithm`.
+  - `apply_domain_edits(assessments: Mapping[str, RoBAssessment], edits: Mapping[str, DomainEdits], actor: str, *, spec: RoBToolSpec) -> dict[str, RoBAssessment]`:
+    - Trabaja sobre copias profundas.
+    - Por cada dominio editado: `human_judgment`, `human_reason` y `human_actor=actor`.
+    - En un estudio `failed` (sin dominios), crea los dominios de la especificación en orden, con `judgment = human_judgment = <el editado>`, `rationale=""` y `quote_status="none"`. `status` sigue `failed`, como la extracción de C (relación 22). Como `RoBDomain.judgment` es obligatorio, se copia el humano; §19 lo recoge como supuesto.
+    - `overall` editado → `overall_human` y `overall_reason`.
+    - Después recalcula `overall_algorithm = aggregate(spec, final_judgments(a))` cuando el estudio tiene todos sus dominios, y fija `overall = overall_human or overall_algorithm`.
+    - Sin ediciones devuelve un dict igual (mismo `dump_artifact`).
+    - Estudio o dominio inexistente → `KeyError`.
+    - Un estudio `failed` sin dominios cuyas ediciones no cubren todos los dominios de la especificación → `ValueError` que nombra los que faltan (`_validate` ya lo impide en el gate; aquí protege a G₂ y a quien llame a la función a mano).
+    - Es pura: G₂ la usa para recalcular las relaciones 13 y 27 desde el diario y el ledger.
+
+- [ ] **Step 1: Tests que fallan.** Crear `tests/test_correccion_por_dominio.py`:
+
+```python
+"""Corrección por dominio del gate `rob` (spec 2026-10-18 §9, §4.2; D5, D9; relación 27)."""
+
+from __future__ import annotations
+
+import pytest
+from fakes import evaluacion_rob
+
+from revisia.agents.rob import failed_assessment
+from revisia.orchestration.gates import (
+    apply_domain_edits,
+    dump_artifact,
+    rob_attention,
+    rob_payload,
+    rob_policy,
+)
+from revisia.orchestration.hitl import DomainEdit, DomainEditable, DomainEdits
+from revisia.provenance.runmeta import canonical_sha256
+from revisia.schemas.records import SearchRecord
+from revisia.schemas.rob_tools import load_tool_spec
+
+ROB2 = load_tool_spec("RoB2")
+IDS = list(ROB2.domain_ids)
+INCLUIDOS = [
+    SearchRecord(record_id="rec-1", title="Uno"),
+    SearchRecord(record_id="rec-2", title="Dos"),
+]
+
+
+def _evaluaciones() -> dict:
+    uno = evaluacion_rob("RoB2", {"D2": "some_concerns"}, study_id="rec-1")
+    uno.domains[0] = uno.domains[0].model_copy(
+        update={"support_quote": "inventada", "quote_status": "not_found"}
+    )
+    dos = failed_assessment(ROB2, "rec-2", source_text="abstract")
+    return {"rec-1": uno, "rec-2": dos}
+
+
+def test_rob_payload_por_herramienta() -> None:
+    evaluaciones = _evaluaciones()
+    sol = rob_payload(spec=ROB2, included=INCLUIDOS, assessments=evaluaciones)
+    assert (sol["tool"], sol["tool_version"], sol["n_studies"]) == ("RoB2", ROB2.version, 2)
+    uno, dos = sol["studies"]
+    assert uno["overall_algorithm"] == "some_concerns" == uno["overall"]
+    assert [d["id"] for d in uno["domains"]] == IDS
+    claves = {"id", "domain", "judgment", "rationale", "support_quote", "quote_status", "answers"}
+    assert set(uno["domains"][0]) == claves
+    assert (dos["status"], dos["domains"], sol["failed"]) == ("failed", [], ["rec-2"])
+    editable = {"domains": IDS, "overall": True}
+    assert sol["editable"] == {"rec-1": editable, "rec-2": editable}
+    assert sol["artifact_sha256"] == canonical_sha256(dump_artifact(evaluaciones))
+
+
+def test_rob_attention_cita_no_encontrada_nota_de_agregacion_y_fallidos() -> None:
+    atencion = rob_attention(spec=ROB2, included=INCLUIDOS, assessments=_evaluaciones())
+    assert {"study_id": "rec-1", "domain": "D1", "reason": "quote_not_found"} in atencion
+    assert [a for a in atencion if a["reason"] == "aggregation"] == []  # un solo SC
+    fallidos = [a for a in atencion if a["study_id"] == "rec-2"]
+    assert [a["domain"] for a in fallidos] == IDS
+    assert {a["reason"] for a in fallidos} == {"failed"}
+
+
+def test_rob_attention_lleva_la_nota_de_la_regla_al_global() -> None:
+    robins = load_tool_spec("ROBINS-I")
+    una = {"rec-1": evaluacion_rob("ROBINS-I", {"D3": "no_information"}, study_id="rec-1")}
+    atencion = rob_attention(spec=robins, included=INCLUIDOS[:1], assessments=una)
+    nota = next(a for a in atencion if a["reason"] == "aggregation")
+    assert (nota["study_id"], nota["domain"]) == ("rec-1", "overall") and "D3" in nota["note"]
+    politica = rob_policy(spec=robins, included=INCLUIDOS[:1], assessments=una)
+    assert politica.hints[0].overall_attention == (nota["note"],)
+
+
+def test_rob_policy_editable_requeridos_y_escalas() -> None:
+    politica = rob_policy(spec=ROB2, included=INCLUIDOS, assessments=_evaluaciones())
+    assert politica.editable["rec-1"] == DomainEditable(domains=frozenset(IDS), overall=True)
+    assert politica.required == {"rec-2": frozenset(IDS)}
+    assert politica.scales["D1"] == ("low", "some_concerns", "high")
+    assert list(politica.scales) == IDS and politica.overall_scale == ROB2.scale_for("D1")
+    nos = load_tool_spec("NewcastleOttawa")
+    una = {"rec-1": evaluacion_rob("NewcastleOttawa", study_id="rec-1")}
+    politica_nos = rob_policy(spec=nos, included=INCLUIDOS[:1], assessments=una)
+    assert politica_nos.editable["rec-1"].overall is False
+    assert politica_nos.overall_scale is None
+
+
+def test_apply_domain_edits_recalcula_el_global_con_los_juicios_finales() -> None:
+    evaluaciones = _evaluaciones()
+    alta = DomainEdit(judgment="high", reason="sin ocultación")
+    ediciones = {
+        "rec-1": DomainEdits(domains={"D2": alta}),
+        "rec-2": DomainEdits(domains={d: DomainEdit(judgment="low", reason="PDF") for d in IDS}),
+    }
+    finales = apply_domain_edits(evaluaciones, ediciones, "human:revisora", spec=ROB2)
+    uno = finales["rec-1"]
+    d2 = uno.domains[1]
+    humano = (d2.judgment, d2.human_judgment, d2.human_reason, d2.human_actor)
+    assert humano == ("some_concerns", "high", "sin ocultación", "human:revisora")
+    assert uno.overall_algorithm == "high" == uno.overall
+    assert evaluaciones["rec-1"].domains[1].human_judgment is None  # pura
+    dos = finales["rec-2"]
+    assert dos.status == "failed" and [d.id for d in dos.domains] == IDS
+    assert {d.human_judgment for d in dos.domains} == {"low"} and dos.overall == "low"
+
+
+def test_apply_domain_edits_overall_humano_manda_y_sin_ediciones_es_identico() -> None:
+    razon = "varios some concerns bajan la confianza"
+    ediciones = {"rec-1": DomainEdits(overall=DomainEdit(judgment="high", reason=razon))}
+    uno = apply_domain_edits(_evaluaciones(), ediciones, "human:r", spec=ROB2)["rec-1"]
+    globales = (uno.overall_algorithm, uno.overall_human, uno.overall_reason, uno.overall)
+    assert globales == ("some_concerns", "high", razon, "high")
+    evaluaciones = _evaluaciones()
+    igual = apply_domain_edits(evaluaciones, {}, "human:r", spec=ROB2)
+    assert dump_artifact(igual) == dump_artifact(evaluaciones)
+
+
+@pytest.mark.parametrize(
+    "ediciones",
+    [
+        {"rec-9": DomainEdits(domains={"D1": DomainEdit(judgment="low", reason="r")})},
+        {"rec-1": DomainEdits(domains={"D9": DomainEdit(judgment="low", reason="r")})},
+    ],
+)
+def test_apply_domain_edits_desconocido_es_key_error(ediciones: dict) -> None:
+    with pytest.raises(KeyError):
+        apply_domain_edits(_evaluaciones(), ediciones, "human:r", spec=ROB2)
+
+
+def test_apply_domain_edits_incompletas_en_un_fallido_es_value_error() -> None:
+    parcial = {"rec-2": DomainEdits(domains={"D1": DomainEdit(judgment="low", reason="r")})}
+    with pytest.raises(ValueError, match="D2"):
+        apply_domain_edits(_evaluaciones(), parcial, "human:r", spec=ROB2)
+```
+
+Los tests de E₂ no dependen de la regla `rob2` (E1.2, Step 0): `rec-1` lleva un solo `some_concerns` y la nota de la regla se prueba con ROBINS-I `no_information`.
+
+- [ ] **Step 2: Run para verificar que falla.**
+
+Run: `uv run pytest -p no:cacheprovider tests/test_correccion_por_dominio.py -v`
+Expected: ERROR de colección (`ImportError: cannot import name 'apply_domain_edits'`).
+
+- [ ] **Step 3: Implementar** según Interfaces, con los cambios de expectativa de `tests/test_hitl_pipeline.py`. Hasta E2.4, el pipeline llama `rob_payload(tool=…)`: en este mismo paso esa llamada (`_run_stages`, gate `rob`) pasa a `rob_payload(spec=load_tool_spec(protocol.rob_tool), …)`. Es la única línea del pipeline que toca esta tarea.
+
+- [ ] **Step 4: Run para verificar que pasa.**
+
+Run: `uv run pytest -p no:cacheprovider -n auto -m "not cronometrado"`, luego `uv run black . && uv run ruff check --fix .` y `uv run ruff check . && uv run black --check .`
+Expected: PASS y lint limpio.
+
+- [ ] **Step 5: Commit.**
+
+```bash
+git add revisia/orchestration/gates.py revisia/orchestration/hitl.py revisia/orchestration/pipeline.py tests/test_correccion_por_dominio.py tests/test_hitl_pipeline.py
+git commit -m "feat(gates): solicitud, atención y política del gate rob por herramienta; apply_domain_edits (D5, D9)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Tarea E2.3: `review_gate(..., domains=)`: validación, `edit_domain` en el ledger y relectura (`hitl.py`)
+
+**Files:**
+- Modify: `revisia/orchestration/hitl.py`, sobre lo que dejó C: `render_decision_template`, `_validate` (la rama que hoy rechaza `DomainEdits`), `_register`, `_from_ledger`, `_motivos_humano` y `review_gate` (se retira el kwarg `failed=`).
+- Modify: `revisia/orchestration/pipeline.py`. Solo `_Run.gate`, que gana `domains=` y pierde `failed=`; la llamada del gate `rob` sigue con `failed=` hasta E2.4, así que en este paso pasa a `domains=rob_policy(...)`.
+- Modify: los tests de C que pasan `failed=` a `review_gate` o a `_Run.gate`. Se localizan con `grep -rn "failed=frozenset" tests` y pasan a una `DomainPolicy` con `required`.
+- Test: `tests/test_correccion_por_dominio.py` (añadir).
+
+**Interfaces:**
+- Consumes: `DomainPolicy`, `DomainEditable`, `RoBStudyHint`, `DomainHint` (E2.2); `DomainEdits`/`DomainEdit` (PR-0); el `_validate`/`_register`/`_from_ledger` de C.
+- Produces (§4.2 «decision.yml» y «Ledger», D5, D9):
+  - `review_gate(*, stage, autonomy, run_ctx, review_payload, auto_approve, records=None, flags=None, force_human=False, fields: FieldPolicy | None = None, domains: DomainPolicy | None = None) -> GateResult`. Sin `failed=`: su función la hace `domains.required`.
+  - **Las ediciones salen del ledger**, como en C: `GateResult.edits[sid]` es un `DomainEdits` rehecho con `_from_ledger` sobre la decisión efectiva.
+  - `_validate(path, decision, *, records, flags, fields=None, domains=None)`. La guarda de C (`if decision.records and records is None and fields is None:`) gana `and domains is None`. Un `DomainEdits` en `records` solo vale con `domains`; sin él, sigue el rechazo de C. Al aprobar con `domains`, cada problema es un `DecisionFileError`:
+    - id fuera de `editable`: ``f"{path}: `records` con estudios que no son editables: {_listed(ids)}."``;
+    - dominio fuera de `editable[sid].domains`: lista los `"<id>#<dominio>"`;
+    - `judgment` fuera de `scales[dominio]`: lista `"<id>#<dominio>: '<valor>' no está en la escala (<v1> | …)"`;
+    - `overall` con `editable[sid].overall` falso: ``"<id>#overall: esta herramienta no tiene juicio global editable"``;
+    - `overall` fuera de `overall_scale`: igual que un juicio fuera de escala;
+    - un `RecordLabel` o un `FieldEdits` con `domains`: ``"… en este gate cada estudio lleva `domains:`"``;
+    - dominios de `required` sin editar: van a `pending` como `"<id>#<dominio>"`, y el mensaje añade «cada dominio de un estudio en el que la IA falló necesita `judgment` y `reason` (D9)».
+    - La `reason` vacía ya la rechaza el modelo (`DomainEdit`, PR-0).
+  - `_register(..., edits, fields, domains)` escribe, antes del `approve`, una `edit_domain` por dominio editado. El orden es: estudios en `sorted(id)` y, dentro de cada uno, dominios en el orden de `domains.scales` (el de la especificación) con `overall` al final.
+    - `target`: `f"{sid}#{dominio}"` o `f"{sid}#overall"`.
+    - `detail`: `{"from": <juicio del modelo, de hints; None si el estudio falló>, "to": judgment, "reason": reason, **hashes}`; para `overall`, `from` es el `overall_algorithm` de hints.
+    - Nunca con un `reject`. Es idempotente, en el mismo bucle que `edit_field`.
+  - `_from_ledger` agrupa también las `edit_domain` de la decisión efectiva por `target.rsplit("#", 1)` (el último `#`: un `study_id` puede contener `#`): `overall` → `DomainEdits.overall`; el resto → `DomainEdits.domains[dominio]`.
+  - `render_decision_template(..., domains: DomainPolicy | None = None)`:
+    - cabecera: «# Dominios: para corregir un juicio escribe en `records.<id>.domains` `<dominio>: {judgment: <valor de su escala>, reason: <por qué>}`; el global, en `records.<id>.overall` si la herramienta lo tiene. Un estudio en el que la IA falló exige todos sus dominios (D9).»;
+    - por estudio, el comentario `«<título>»` (+ ` · la IA falló de forma determinista (D9): edita todos sus dominios`);
+    - por dominio, `f"{id}: propuesto «{juicio o '—'}» · cita {quote_status}"` + `f" · ⚠ {razón}"` por razón;
+    - la línea `f"overall: algoritmo «{overall_algorithm o '—'}»"` + `f" · ⚠ {nota}"` por cada nota de `overall_attention`, si es editable;
+    - la entrada `"<id>": {domains: {}}`.
+  - `_motivos_humano(records, flags, force_human, fields=None, domains=None)`: con `domains.required`, ``f"{n} estudio(s) en los que la IA falló de forma determinista (D9): rellena todos sus dominios en `records.<id>.domains`"``. Con él, `--auto-approve` pausa. Contiene «falló de forma determinista (D9)», que es lo que comprueba `test_fallo_determinista_en_rob_exige_decision_humana` de C.
+
+- [ ] **Step 1: Tests que fallan.** Añadir a `tests/test_correccion_por_dominio.py`. Imports en sus bloques: `import json`, `from pathlib import Path`, `from hitl_helpers import responder_gate`, `from revisia.orchestration.hitl import DecisionFileError, review_gate`, `from revisia.orchestration.run_context import RunContext`.
+
+```python
+TODOS = {d: {"judgment": "low", "reason": "PDF, Métodos"} for d in IDS}
+
+
+def _gate(ctx: RunContext, *, auto: bool = False, spec=ROB2, evaluaciones=None):
+    evaluaciones = evaluaciones or _evaluaciones()
+    incluidos = [r for r in INCLUIDOS if r.record_id in evaluaciones]
+    return review_gate(
+        stage="rob",
+        autonomy="A0",
+        run_ctx=ctx,
+        review_payload=rob_payload(spec=spec, included=incluidos, assessments=evaluaciones),
+        auto_approve=auto,
+        domains=rob_policy(spec=spec, included=incluidos, assessments=evaluaciones),
+    )
+
+
+@pytest.mark.parametrize(
+    ("uno", "mensaje"),
+    [
+        ({"domains": {"D9": {"judgment": "low", "reason": "r"}}}, "rec-1#D9"),
+        ({"domains": {"D1": {"judgment": "unclear", "reason": "r"}}}, "unclear"),
+        ({"domains": {"D1": {"judgment": "low", "reason": "   "}}}, "reason"),
+        ({"fields": {"n": {"value": 1, "reason": "r"}}}, "domains"),
+    ],
+)
+def test_edicion_de_dominio_invalida_es_error(tmp_path: Path, uno: dict, mensaje: str) -> None:
+    ctx = RunContext("demo", tmp_path, "T")
+    assert _gate(ctx).status == "paused"
+    dos = {"domains": TODOS}
+    responder_gate(ctx.run_dir, "rob", records={"rec-1": uno, "rec-2": dos})
+    with pytest.raises(DecisionFileError, match=mensaje):
+        _gate(ctx)
+
+
+def test_global_de_nos_no_es_editable(tmp_path: Path) -> None:
+    nos = load_tool_spec("NewcastleOttawa")
+    una = {"rec-1": evaluacion_rob("NewcastleOttawa", study_id="rec-1")}
+    ctx = RunContext("demo", tmp_path, "T")
+    _gate(ctx, spec=nos, evaluaciones=una)
+    global_ = {"overall": {"judgment": "7", "reason": "r"}}
+    responder_gate(ctx.run_dir, "rob", records={"rec-1": global_})
+    with pytest.raises(DecisionFileError, match="rec-1#overall"):
+        _gate(ctx, spec=nos, evaluaciones=una)
+
+
+def test_un_rob_fallido_exige_todos_sus_dominios(tmp_path: Path) -> None:
+    ctx = RunContext("demo", tmp_path, "T")
+    pausa = _gate(ctx, auto=True)
+    assert pausa.status == "paused" and "falló de forma determinista (D9)" in pausa.message
+    parcial = {"domains": {"D1": {"judgment": "low", "reason": "r"}}}
+    responder_gate(ctx.run_dir, "rob", records={"rec-2": parcial})
+    with pytest.raises(DecisionFileError, match="rec-2#D2"):
+        _gate(ctx)
+
+
+def test_edit_domain_queda_en_el_ledger_antes_del_approve_y_se_relee(tmp_path: Path) -> None:
+    ctx = RunContext("demo", tmp_path, "T")
+    _gate(ctx)
+    uno = {
+        "domains": {"D2": {"judgment": "high", "reason": "sin ocultación"}},
+        "overall": {"judgment": "high", "reason": "varios some concerns"},
+    }
+    responder_gate(ctx.run_dir, "rob", records={"rec-1": uno, "rec-2": {"domains": TODOS}})
+    resultado = _gate(ctx)
+    assert resultado.status == "approved"
+    assert resultado.edits["rec-1"].domains["D2"].judgment == "high"
+    assert resultado.edits["rec-1"].overall.judgment == "high"
+    lineas = (ctx.run_dir / "decisions_ledger.jsonl").read_text("utf-8").splitlines()
+    rob = [e for e in map(json.loads, lineas) if e["stage"] == "rob"]
+    objetivos = [e["target"] for e in rob if e["action"] == "edit_domain"]
+    assert objetivos == ["rec-1#D2", "rec-1#overall", *(f"rec-2#{d}" for d in IDS)]
+    assert rob[-1]["action"] == "approve"
+    d2 = next(e for e in rob if e["target"] == "rec-1#D2")["detail"]
+    assert (d2["from"], d2["to"], d2["reason"]) == ("some_concerns", "high", "sin ocultación")
+    fallido = next(e for e in rob if e["target"] == "rec-2#D1")["detail"]
+    assert fallido["from"] is None
+    (ctx.run_dir / "rob" / "decision.yml").unlink()  # el ledger manda
+    assert _gate(ctx).edits == resultado.edits
+
+
+def test_plantilla_de_decision_por_estudio_y_dominio(tmp_path: Path) -> None:
+    ctx = RunContext("demo", tmp_path, "T")
+    _gate(ctx)
+    plantilla = (ctx.run_dir / "rob" / "decision.template.yml").read_text("utf-8")
+    assert "records.<id>.domains" in plantilla
+    assert "D1: propuesto «low» · cita not_found · ⚠ quote_not_found" in plantilla
+    assert "overall: algoritmo «some_concerns»" in plantilla
+    assert "la IA falló de forma determinista (D9): edita todos sus dominios" in plantilla
+    assert "domains: {}" in plantilla
+    robins = load_tool_spec("ROBINS-I")
+    una = {"rec-1": evaluacion_rob("ROBINS-I", {"D3": "no_information"}, study_id="rec-1")}
+    otro = RunContext("demo", tmp_path / "robins", "T")
+    _gate(otro, spec=robins, evaluaciones=una)
+    plantilla = (otro.run_dir / "rob" / "decision.template.yml").read_text("utf-8")
+    linea = next(x for x in plantilla.splitlines() if "overall: algoritmo" in x)
+    assert "«no_information» · ⚠ " in linea and "D3" in linea
+```
+
+Si `responder_gate` y la ruta de la plantilla (`rob/decision.template.yml`) no se llaman así en el árbol, se usan los nombres que fijó C en `tests/test_correccion_por_campo.py`.
+
+- [ ] **Step 2: Run para verificar que falla.**
+
+Run: `uv run pytest -p no:cacheprovider tests/test_correccion_por_dominio.py -v`
+Expected: FAIL (`TypeError: review_gate() got an unexpected keyword argument 'domains'`).
+
+- [ ] **Step 3: Implementar** según Interfaces.
+
+- [ ] **Step 4: Run para verificar que pasa.**
+
+Run: `uv run pytest -p no:cacheprovider -n auto -m "not cronometrado"`, luego `uv run black . && uv run ruff check --fix .` y `uv run ruff check . && uv run black --check .`
+Expected: PASS, incluidos los tests D9 de C (`test_fallo_determinista_en_rob_exige_decision_humana`, `test_dos_reanudaciones_no_repiten_la_llamada_fallida[rob]`), y lint limpio.
+
+- [ ] **Step 5: Commit.**
+
+```bash
+git add revisia/orchestration/hitl.py revisia/orchestration/pipeline.py tests
+git commit -m "feat(hitl): corrección por dominio con escala, razón y edit_domain en el ledger (D5, D9)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Tarea E2.4: El pipeline evalúa con la especificación, aplica las ediciones y escribe los entregables por herramienta
+
+**Files:**
+- Modify: `revisia/orchestration/pipeline.py`:
+  - `_rob_one` y `_assess_rob` (hoy en `:819-882`, con el D9 de C);
+  - el gate `rob` en `_run_stages`;
+  - `_write_deliverables` (la escritura de `risk_of_bias.md` y de `robvis.csv`, hoy en `:1117-1119` y `:1190`);
+  - `manifest_extra` (`:1480-1490`);
+  - se borra `_rob_table_md` (`:210-220`).
+- Modify: `revisia/agents/rob.py`: se borra el adaptador `tool=` y su `@overload`.
+- Modify: `revisia/exports/methods.py` («### Evaluación de calidad», hoy en `:229-232`).
+- Modify: `tests/hitl_helpers.py` (`editar_dominio`, nuevo); `tests/test_rob_agent.py` (se borra `test_firma_heredada_con_tool_hasta_e2`).
+- Test: `tests/test_rob_pipeline.py` (añadir).
+
+**Interfaces:**
+- Consumes: `assess_rob(spec=…)`, `failed_assessment` (E₁); `render_rob_markdown`, `render_robvis_csv(assessments, spec)`, `robvis_note` (E₁); `rob_payload`/`rob_policy`/`apply_domain_edits` (E2.2); `review_gate(..., domains=)` (E2.3); `RecordFailedError` (A); `load_tool_spec`.
+- Produces (estado del pipeline para F₂ y G₂):
+  - `_rob_one(run, provider, cfg, spec: RoBToolSpec, record, extraction, text) -> tuple[RoBAssessment, list[RunMeta]]` = `assess_rob(provider, spec=spec, record=…, extraction=…, text=…, temperature=cfg.temperature, seed=cfg.seed)`.
+  - `_assess_rob(run, included, extractions, fulltexts) -> dict[str, RoBAssessment]`, con la misma firma.
+    - Carga `spec = load_tool_spec(run.protocol.rob_tool)` una vez.
+    - Las `inputs` del diario **no** cambian: un cambio de especificación ya lo cubre la huella de A (`environment.prompt_templates["rob/<tool>.yml"]`), y una corrida no cambia de especificación a mitad.
+    - `RecordFailedError` → `failed_assessment(spec, rid, source_text="fulltext" if texto else "abstract")`, que sustituye el `RoBAssessment(status="failed")` de C.
+  - `_run_stages`, gate `rob`:
+    - `rob_gate = run.gate("rob", rob_payload(spec=…), domains=rob_policy(spec=…))`.
+    - Si aprueba: `assessments = apply_domain_edits(assessments, {k: e for k, e in rob_gate.edits.items() if isinstance(e, DomainEdits)}, rob_gate.actor, spec=spec)` y `run.ctx.write_json("07_rob/assessments.json", dump_artifact(assessments))`. Se reescribe también sin ediciones (contenido idéntico), como `extractions.json` en C.
+    - Síntesis, entregables y manifiesto reciben las evaluaciones finales.
+  - `_Run.gate(self, stage, payload, *, records=None, flags=None, force_human=False, fields: FieldPolicy | None = None, domains: DomainPolicy | None = None) -> GateResult` (de E2.3).
+  - `_write_deliverables(run, *, …)` mantiene la firma de D.
+    - `deliverable/risk_of_bias.md` = `render_rob_markdown(spec, assessments)` (§19 «`risk_of_bias.md`»).
+    - `interop/robvis.csv` = `render_robvis_csv(assessments, spec)` cuando hay evaluaciones.
+    - Criterio de fila en los dos (B1): la evaluación **tiene dominios**, no `status == "ok"`. Un RoB fallido decidido por el humano sale con `†` y la marca «la IA falló, D9»; «pendiente de decisión humana» solo si `domains == []` (E1.7, E1.8).
+  - `manifest_extra["rob"] = {"tool": spec.id, "tool_version": spec.version}` (§4.1 «manifest.yml: + `rob.tool_version`»). `risk_of_bias` sigue igual: las evaluaciones finales.
+  - `render_methods` sin kwargs nuevos: carga la especificación desde `protocol.rob_tool`. La sección «### Evaluación de calidad» queda así:
+    - ``f"Herramienta: {spec.name} ({spec.version}), con sus dominios y escalas oficiales. {regla} "`` + la frase de hoy, intacta: «No excluye estudios automáticamente; su juicio se informa en el Anexo I sin ponderar la síntesis.» (la fija `tests/test_hitl_pipeline.py:2815`) + ``f" Correcciones humanas por dominio registradas (edit_domain): {n}. Decisión: {decision('rob')}."``;
+    - `regla`, por `spec.aggregation`: con `rob2`/`robins_i`/`amstar2`, «El juicio global lo calcula la regla oficial de la herramienta sobre los juicios finales; el que propone el modelo es solo informativo.»; con `nos_stars`, «Se informa el total de estrellas (sin umbrales de calidad).»; con `none`, «La herramienta no define un juicio global.»;
+    - con `robvis_note(spec)`, esa nota en una línea aparte;
+    - `n` = `gates["rob"].n_edits` (PR-0, `GateSummary.n_edits`), o «gate pendiente» sin gate.
+  - `hitl_helpers.editar_dominio(study_id: str, target: str, judgment: str, reason: str, *, base: Callable[[str, dict], dict | None] = aceptar_lo_obligatorio) -> Callable[[str, dict], dict | None]`:
+    - en `rob`, devuelve `{"records": {study_id: {"domains": {target: {"judgment": judgment, "reason": reason}}}}}`, o `{"records": {study_id: {"overall": {…}}}}` con `target == "overall"`;
+    - en el resto de gates delega en `base`.
+
+- [ ] **Step 1: Tests que fallan.** Añadir a `tests/test_rob_pipeline.py`. Imports en sus bloques: `import inspect`, `import json`; `from fakes import ScriptedProvider, fetch_disponible`; `from hitl_helpers import correr_hasta, editar_dominio, leer_solicitud, responder_gate`; `from revisia.agents.rob import assess_rob`; `from revisia.config import load_protocol`; `from revisia.llm.base import DeterministicCallError`; `from revisia.orchestration import pipeline as pipeline_mod`; `from revisia.orchestration.run_context import RunContext`; `from revisia.schemas.records import SearchRecord`; `from revisia.schemas.rob_tools import load_tool_spec`.
+
+```python
+ROB2 = load_tool_spec("RoB2")
+
+
+def _busqueda(_q: str, _n: int) -> list[SearchRecord]:
+    return [
+        SearchRecord(record_id="rec-1", title="LLM screening", abstract="Se asignó al azar."),
+        SearchRecord(record_id="rec-2", title="Active learning", abstract="Cohorte."),
+    ]
+
+
+def _correr(tmp_path: Path, monkeypatch, *, etiquetar=None, proveedor=None) -> RunContext:
+    doble = proveedor or (lambda cfg: ScriptedProvider(model=cfg.model))
+    monkeypatch.setattr(pipeline_mod, "build_provider", doble)
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    resultado = correr_hasta(
+        protocol, EXAMPLE, ctx, search_fn=_busqueda, fetch_fn=fetch_disponible,
+        etiquetar=etiquetar,
+    )
+    assert resultado.status == "completed"
+    return ctx
+
+
+def _json(ctx: RunContext, rel: str):
+    return json.loads((ctx.run_dir / rel).read_text("utf-8"))
+
+
+def test_edicion_por_dominio_queda_en_ledger_y_recalcula_el_global(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    revisora = editar_dominio("rec-1", "D2", "high", "Sin ocultación de la asignación")
+    ctx = _correr(tmp_path, monkeypatch, etiquetar=revisora)
+    uno = _json(ctx, "07_rob/assessments.json")["rec-1"]
+    d2 = next(d for d in uno["domains"] if d["id"] == "D2")
+    assert (d2["judgment"], d2["human_judgment"]) == ("low", "high")
+    assert uno["overall_algorithm"] == "high" == uno["overall"]
+    lineas = (ctx.run_dir / "decisions_ledger.jsonl").read_text("utf-8").splitlines()
+    rob = [e for e in map(json.loads, lineas) if e["stage"] == "rob"]
+    assert [e["action"] for e in rob] == ["edit_domain", "approve"]
+    assert rob[0]["target"] == "rec-1#D2"
+    tabla = (ctx.run_dir / "deliverable" / "risk_of_bias.md").read_text("utf-8")
+    assert "| rec-1 | low | high† | low | low | low | high |" in tabla
+    robvis = (ctx.run_dir / "deliverable" / "interop" / "robvis.csv").read_text("utf-8")
+    assert "rec-1,Low,High,Low,Low,Low,High,1" in robvis.splitlines()
+    manifiesto = yaml.safe_load((ctx.run_dir / "manifest.yml").read_text("utf-8"))
+    assert manifiesto["rob"] == {"tool": "RoB2", "tool_version": ROB2.version}
+    metodos = (ctx.run_dir / "deliverable" / "metodologia.md").read_text("utf-8")
+    assert ROB2.version in metodos and "(edit_domain): 1" in metodos
+
+
+def test_sin_ediciones_assessments_es_el_del_diario_y_reanudar_no_repite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _correr(tmp_path, monkeypatch)
+    evaluaciones = _json(ctx, "07_rob/assessments.json")
+    diario = (ctx.run_dir / "07_rob" / "journal.jsonl").read_text("utf-8").splitlines()
+    salidas = {e["record_id"]: e["output"] for e in map(json.loads, diario)}
+    assert evaluaciones == salidas
+    assert {e["tool_version"] for e in evaluaciones.values()} == {ROB2.version}
+    llamadas = (ctx.run_dir / "llm_calls.jsonl").read_text("utf-8")
+    otra = correr_hasta(
+        load_protocol(EXAMPLE), EXAMPLE, RunContext.open(ctx.run_dir), search_fn=_busqueda,
+        fetch_fn=fetch_disponible,
+    )
+    assert otra.status == "completed"
+    assert (ctx.run_dir / "llm_calls.jsonl").read_text("utf-8") == llamadas
+    assert _json(ctx, "07_rob/assessments.json") == evaluaciones
+
+
+class _FallaEnRoB(ScriptedProvider):
+    def structured(self, req, schema):
+        if "RIESGO DE SESGO" in req.prompt and "LLM screening" in req.prompt:
+            self._llamar(req)
+            raise DeterministicCallError("400 Bad Request: contenido bloqueado", attempts=1)
+        return super().structured(req, schema)
+
+
+def test_rob_fallido_se_decide_dominio_a_dominio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pipeline_mod, "build_provider", lambda cfg: _FallaEnRoB(model=cfg.model))
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    pausa = correr_hasta(
+        protocol, EXAMPLE, ctx, search_fn=_busqueda, fetch_fn=fetch_disponible, parar_en="rob"
+    )
+    assert (pausa.status, pausa.stage) == ("paused", "rob")
+    solicitud = leer_solicitud(ctx.run_dir, "rob")
+    assert solicitud["failed"] == ["rec-1"]
+    assert solicitud["editable"]["rec-1"] == {"domains": list(ROB2.domain_ids), "overall": True}
+    todos = {d: {"judgment": "low", "reason": "PDF"} for d in ROB2.domain_ids}
+    responder_gate(ctx.run_dir, "rob", records={"rec-1": {"domains": todos}})
+    reanudada = correr_hasta(
+        protocol, EXAMPLE, RunContext.open(ctx.run_dir), search_fn=_busqueda,
+        fetch_fn=fetch_disponible,
+    )
+    assert reanudada.status == "completed"
+    uno = _json(ctx, "07_rob/assessments.json")["rec-1"]
+    assert uno["status"] == "failed"  # relación 22
+    assert {d["human_judgment"] for d in uno["domains"]} == {"low"} and uno["overall"] == "low"
+    tabla = (ctx.run_dir / "deliverable" / "risk_of_bias.md").read_text("utf-8")
+    fila = "| rec-1 (la IA falló, D9) | low† | low† | low† | low† | low† | low |"
+    assert fila in tabla.splitlines() and "pendientes de decisión humana" not in tabla
+    robvis = (ctx.run_dir / "deliverable" / "interop" / "robvis.csv").read_text("utf-8")
+    assert "rec-1,Low,Low,Low,Low,Low,Low,1" in robvis.splitlines()
+
+
+def test_el_agente_ya_no_acepta_tool() -> None:
+    assert "tool" not in inspect.signature(assess_rob).parameters
+```
+
+Notas para el implementador:
+- Un único camino para reanudar: `correr_hasta(...)` sobre `RunContext.open(ctx.run_dir)` (responde los gates que quedan como la revisora por defecto), como los tests D9 de C; sin `resume_review(auto_approve=True)`.
+- La ruta de `robvis.csv` es la que escribe `_write_deliverables` (`deliverable/interop/`).
+
+- [ ] **Step 2: Run para verificar que falla.**
+
+Run: `uv run pytest -p no:cacheprovider tests/test_rob_pipeline.py -v`
+Expected: ERROR de colección (`ImportError: cannot import name 'editar_dominio'`).
+
+- [ ] **Step 3: Implementar** según Interfaces. Se borran `_rob_table_md`, el adaptador `tool=` y `test_firma_heredada_con_tool_hasta_e2`. El `_ProveedorConTablas` de `tests/test_hitl_pipeline.py` sigue funcionando: devuelve los cinco dominios (E1.6).
+
+- [ ] **Step 4: Run para verificar que pasa.**
+
+Run: `uv run pytest -p no:cacheprovider -n auto -m "not cronometrado" && uv run pytest -p no:cacheprovider -m cronometrado`, luego `uv run black . && uv run ruff check --fix .` y `uv run ruff check . && uv run ruff format --check . && uv run black --check .`
+Expected: PASS y lint limpio. Además, `grep -rn "_rob_table_md\|tool=run.protocol.rob_tool" revisia` no devuelve nada.
+
+Si algún test de auditoría **existente** falla: si es por un check distinto de `request_hash` o `arithmetic` (relación 13 de `07_rob`), es un fallo de E₂ y se corrige aquí. Sin ediciones de dominio no debe fallar ninguno.
+
+- [ ] **Step 5: Commit.**
+
+```bash
+git add revisia tests
+git commit -m "feat(pipeline): RoB con la especificación, ediciones por dominio aplicadas y entregables por herramienta (D5, D9, A12)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Tarea E2.5: Fixtures de edición de dominio para G₂ y frontera
+
+**Files:**
+- Modify: `tests/conftest.py`, de forma aditiva: constante y fixtures al final, más una línea en la docstring del módulo («Fixtures de la Ola 2 (PR-E) para el auditor de PR-G₂: corrida con edición de dominio»).
+- Modify: `tests/test_pipeline_fake.py` (dos tests al final).
+
+**Interfaces:**
+- Consumes: `editar_dominio` (E2.4); `etiquetar_auditoria`, `_correr`, `_copia` (`conftest.py`); `run_audit`.
+- Produces (para G₂, §15 «aditivo»):
+  - `EDICION_DE_DOMINIO = ("10.1000/asreview", "D2", "high", "Métodos: sin ocultación de la secuencia de asignación")`. Es el mismo estudio incluido que usa `EDICION_DE_CAMPO` (C).
+  - La fixture de sesión `_corrida_con_edicion_de_dominio`, con la revisora `editar_dominio(*EDICION_DE_DOMINIO, base=etiquetar_auditoria)`, completada; y su copia por test, `corrida_con_edicion_de_dominio`.
+  - La frontera: `test_pipeline_fake_con_edicion_de_dominio_audita_sin_fail`, marcado `xfail(strict=True)`, y `test_pipeline_fake_con_edicion_de_dominio_solo_falla_lo_que_adapta_g2`, sin marcador (lo borra G₂).
+
+- [ ] **Step 1: Tests que fallan.** Añadir al final de `tests/test_pipeline_fake.py`:
+
+```python
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "PR-G₂: el auditor de la Ola 1 compara 07_rob/assessments.json con el diario y con "
+        "artifact_sha256 sin los juicios humanos (relaciones 13 y 27, check rob)"
+    ),
+)
+def test_pipeline_fake_con_edicion_de_dominio_audita_sin_fail(
+    corrida_con_edicion_de_dominio,
+) -> None:
+    report = run_audit(corrida_con_edicion_de_dominio)
+    assert {c.check_id: c.detail for c in report.checks if c.status == "FAIL"} == {}
+    assert report.publishable
+
+
+def test_pipeline_fake_con_edicion_de_dominio_solo_falla_lo_que_adapta_g2(
+    corrida_con_edicion_de_dominio,
+) -> None:
+    # Lo borra PR-G₂ cuando el test de arriba pase: fija qué rompe hoy una edición de dominio.
+    report = run_audit(corrida_con_edicion_de_dominio)
+    fallos = {c.check_id: c.detail for c in report.checks if c.status == "FAIL"}
+    assert set(fallos) == {"request_hash", "arithmetic"}
+    assert "`rob`: 07_rob/assessments.json no es el artefacto aprobado" in fallos["request_hash"]
+    assert (
+        "13 · 07_rob/assessments.json == una línea de 07_rob/journal.jsonl"
+        in fallos["arithmetic"]
+    )
+    assert "10.1000/asreview" in fallos["arithmetic"]
+    assert [c.check_id for c in report.checks if "error interno" in c.detail] == []
+```
+
+- [ ] **Step 2: Run para verificar que falla.**
+
+Run: `uv run pytest -p no:cacheprovider tests/test_pipeline_fake.py -v -k edicion_de_dominio`
+Expected: ERROR (`fixture 'corrida_con_edicion_de_dominio' not found`).
+
+- [ ] **Step 3: Implementar** las fixtures. Si un detalle del segundo test no coincide **palabra por palabra** con el texto del auditor (que no se toca), se copia el texto real en la aserción y se anota para §19. Si falla un check **distinto** de `request_hash` y `arithmetic`, el fallo es de E₂ y se corrige en E₂.
+
+- [ ] **Step 4: Run para verificar que pasa.**
+
+Run: `uv run pytest -p no:cacheprovider tests/test_pipeline_fake.py -v -rxX`, luego `uv run black . && uv run ruff check --fix .` y `uv run ruff check . && uv run black --check .`
+Expected: PASS, con `test_pipeline_fake_con_edicion_de_dominio_audita_sin_fail` como XFAIL, y lint limpio.
+
+- [ ] **Step 5: Commit.**
+
+```bash
+git add tests/conftest.py tests/test_pipeline_fake.py
+git commit -m "test(rob): corrida con edición de dominio para PR-G₂ y frontera xfail (relación 27)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Tarea E2.6: Integración de PR-E (controlador)
+
+**Files:**
+- Modify: `CHANGELOG.md` (`## [Unreleased]`: `### Added`, `### Changed`, `### Cambios incompatibles`).
+- Modify: `AGENTS.md`, fila `rob` (hoy `AGENTS.md:35`):
+  - etapa: `Riesgo de sesgo por herramienta (RoB 2, ROBINS-I, NOS cohortes y casos-controles, AMSTAR 2, QUADAS-2), con dominios, escalas y reglas oficiales`;
+  - verificación: `El humano corrige dominio a dominio y el global (edit_domain); el global lo calcula la regla oficial sobre los juicios finales; export robvis por plantilla`.
+  - El resto de la documentación de RoB es de PR-I (§13).
+- Modify: `docs/superpowers/specs/2026-10-18-ola-2-remediacion-design.md` (§19).
+- Modify: `revisia/provenance/ledger.py`, solo la docstring de `DecisionEntry` (PR-0): las ediciones (`edit_field`, `edit_domain`) van antes de su `approve`, por estudio en orden de id y, dentro, **con las claves en el orden de la política** (el del formulario o el de la especificación, `overall` al final).
+
+**Interfaces:** ninguna de código. Deja PR-E abierta sobre `feat/ola2-verificador`.
+
+- [ ] **Step 1: CHANGELOG.** En `### Added`:
+
+```
+- **Riesgo de sesgo por herramienta** (spec Ola 2 §9; auditoría 2026-09-03, A12; D5, D9, D22):
+  seis especificaciones oficiales como datos (RoB 2, ROBINS-I, NOS cohortes y casos-controles,
+  AMSTAR 2, QUADAS-2) con sus dominios, preguntas señalizadoras (parafraseadas, con id oficial),
+  escalas y reglas de agregación; el agente responde con un esquema construido desde la
+  especificación, sobre el documento delimitado (`rob/v2`), con un reintento si deja dominios
+  sin juicio y fallo determinista al humano si persiste; la cita de apoyo de cada dominio se busca
+  en la fuente (`quote_status`). El global que cuenta lo calcula la regla oficial sobre los
+  juicios finales (`overall_algorithm`); el del modelo queda como `overall_llm`. El humano corrige
+  dominio a dominio y el global en `rob/decision.yml` con razón (`edit_domain` en el ledger).
+  `risk_of_bias.md` y `robvis.csv` salen con la escala y la plantilla de cada herramienta.
+```
+
+En `### Changed`:
+- `07_rob/assessments.json` es `RoBAssessment` v2: dominios con `id`, escala propia, `overall_llm`/`overall_algorithm`/`overall`; se reescribe tras el gate con las correcciones humanas.
+- `manifest.yml` gana `rob.tool` y `rob.tool_version`.
+
+En `### Cambios incompatibles`:
+- `rob_tool: GRADE` es rc 2: «GRADE no es una herramienta de riesgo de sesgo por estudio; queda fuera hasta la etapa de certeza por desenlace».
+- La escala única `low/some_concerns/high/unclear` desaparece: cada herramienta usa la suya (ROBINS-I `no_information`, QUADAS-2 `unclear`, AMSTAR 2 por ítem).
+- `robvis.csv` lleva columnas `D1…Dn`, `Overall` y `Weight`.
+
+- [ ] **Step 2: §19 del spec.** Añadir **a continuación de la última fila existente**, con numeración consecutiva:
+  - las filas «de integración» de E₁ (`m`…`m+12`, sección «Supuestos revocables de E₁»), con la fila «rob2» según lo que haya decidido el arquitecto;
+  - las de E₂ que siguen;
+  - las que haya producido la revisión por tarea.
+  - Las dos «a registrar ya» de E₁ las registró el coordinador: comprobar que están y no repetirlas.
+
+```
+| e | §4.2 `review_request.yml` · rob | Forma de la solicitud: `tool`, `tool_version`, `studies[]` con `status`, `source_text`, `overall_llm`, `overall_algorithm`, `overall`, `domains[]` (`id`, `domain`, `judgment`, `rationale`, `support_quote`, `quote_status`, `answers`) y `applicability[]`; `failed`; `attention[]` con `{study_id, domain, reason: failed \| quote_not_found \| aggregation, note?}` (`domain = "overall"` para las notas de la regla); `editable: {id: {domains, overall}}`; `artifact_sha256` del diario, antes de las ediciones | Plan PR-E (E₂) |
+| e+1 | §4.2 `DomainPolicy` | `DomainPolicy(editable, scales, overall_scale, required, hints)` con `scales` por **dominio** (no por estudio, como sugería C): la herramienta es una por corrida. El global es editable ⇔ `overall_scale` | Plan PR-E (E₂) |
+| e+2 | §4.2 Ledger | Orden de las ediciones **según la política**: estudios por id y, dentro, las claves en el orden de la política (formulario en `edit_field`; especificación en `edit_domain`, con `overall` al final, no alfabético: AMSTAR 2 tiene ids `1…16`). `detail.from` es el juicio del modelo, `None` en un estudio fallido, y `overall_algorithm` para `#overall`. La docstring de `DecisionEntry` lo dice | Plan PR-E (E₂), revisión |
+| e+3 | D9, relación 22 | Un RoB fallido: todos sus dominios son `required` (el global no: lo calcula la regla); al aplicar, sus dominios se crean con `judgment = human_judgment` (el modelo no dijo nada y el campo es obligatorio) y `status` sigue `failed`. `review_gate(failed=)` de C desaparece | Plan PR-E (E₂) |
+| e+4 | §9 GRADE | El mensaje de §9 lo da un `field_validator` de `ReviewProtocol.rob_tool` (rc 2 en la carga, antes que el preflight): PR-0 ya sacó `GRADE` del `Literal`, así que ninguna instantánea con `GRADE` cargaba | Plan PR-E (E₂) |
+| e+5 | §9, D9 | Fila de un RoB fallido: `risk_of_bias.md` y `robvis.csv` dan fila a toda evaluación **con dominios** (también `failed`, con `†` y «la IA falló, D9»); «pendiente de decisión humana» solo con `domains == []` | Revisión de E₂ (B1) |
+| e+6 | §16, PR-G | `xfail(strict=True)` que G₂ vuelve verde: `test_pipeline_fake_con_edicion_de_dominio_audita_sin_fail`; y `test_pipeline_fake_con_edicion_de_dominio_solo_falla_lo_que_adapta_g2`, que G₂ borra (relación 13 de `07_rob` y `artifact_sha256` de `rob` en `request_hash`) | Plan PR-E (E₂) |
+| e+7 | §8 `metodologia.md` | «Evaluación de calidad» declara herramienta y versión, la regla de agregación y cuántas correcciones por dominio hubo, y conserva la frase «sin ponderar la síntesis» | Plan PR-E (E₂) |
+| e+8 | §4.2 Ledger | `target` se parte por el **último** `#` (`rsplit("#", 1)`): un `study_id` puede contener `#`, un id de dominio o de campo no | Revisión de E₂ |
+| e+9 | D9 | `apply_domain_edits` con ediciones que no cubren todos los dominios de un estudio fallido → `ValueError` (el gate ya lo impide; protege a G₂) | Revisión de E₂ |
+| e+10 | D9, relación 22 | Una línea `failed` de `07_rob/journal.jsonl` equivale a `failed_assessment(spec, rid, source_text)`, con `source_text = "fulltext"` si `retrieval.json` tiene el estudio `available`, si no `"abstract"` | Revisión de E₂ |
+```
+
+- [ ] **Step 3: Commit de documentación.**
+
+```bash
+git add CHANGELOG.md AGENTS.md docs/superpowers/specs/2026-10-18-ola-2-remediacion-design.md revisia/provenance/ledger.py
+git commit -m "docs: CHANGELOG, AGENTS (rob por herramienta), docstring de DecisionEntry y desviaciones (§19) de PR-E" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+- [ ] **Step 4: Verificación completa, en las tres versiones.**
+
+```bash
+uv run black . && uv run ruff check --fix .
+for PY in 3.11 3.12 3.13; do
+  uv run --python "$PY" --extra dev --extra search --extra meta \
+    pytest -p no:cacheprovider -q -n auto -m "not cronometrado" -rxX || exit 1
+  uv run --python "$PY" --extra dev --extra search --extra meta \
+    pytest -p no:cacheprovider -q -m cronometrado || exit 1
+done
+uv run --extra dev --extra search --extra meta \
+  pytest -p no:cacheprovider -q -n auto --cov --cov-report=term -m "not cronometrado"
+uv run ruff check . && uv run ruff format --check . && uv run black --check . && uv lock --check
+git diff --stat origin/feat/ola2-verificador -- revisia/audit | tail -1
+grep -rn "TOOL_DOMAINS\|RoBJudgment\|_rob_table_md\|PROMPT_TEMPLATE" revisia tests
+git status --porcelain
+```
+
+Expected:
+- Verde en las tres versiones, con los XFAIL estrictos de A, C y D más el de §19 `e+6`.
+- Cobertura ≥ 90 %.
+- Lint limpio.
+- **Ningún cambio en `revisia/audit/`**: la penúltima orden no imprime nada.
+- El `grep` no devuelve nada.
+- **Sin cambios en el árbol**: `git status --porcelain` no imprime nada (el `black`/`ruff --fix` del principio no tocó nada que no estuviera ya commiteado).
+- Anota el recuento.
+
+- [ ] **Step 5: Publicar y abrir la PR** (base `feat/ola2-verificador`, §15).
+
+```bash
+git push -u origin feat/ola2-rob-por-herramienta
+gh pr create --base feat/ola2-verificador --head feat/ola2-rob-por-herramienta --title "Ola 2 · PR-E: riesgo de sesgo por herramienta, corrección por dominio" --body "$(cat <<'EOF'
+## Qué cierra
+A12 y D5 (spec Ola 2 §9), con D9 y D22 en RoB.
+
+## Qué cambia
+- Seis especificaciones oficiales de RoB como datos; reglas de agregación oficiales
+  (`revisia/rob/aggregate.py`); el global que cuenta es el del algoritmo sobre los juicios
+  finales.
+- Agente `rob/v2` por herramienta: esquema construido desde la especificación, documento
+  delimitado, un reintento con lo que falta y fallo determinista al humano; `quote_status`.
+- Gate `rob` por dominio: `editable`, `attention`, `tool_version`; `edit_domain` en el ledger;
+  `assessments.json` reescrito tras el gate con las correcciones.
+- `risk_of_bias.md` y `robvis.csv` por herramienta; `manifest.yml` con `rob.tool_version`.
+
+## Cambios incompatibles
+`rob_tool: GRADE` es rc 2; escala única retirada; columnas de `robvis.csv`.
+
+## Para PR-G₂
+Relación 27: `revisia.rob.aggregate.aggregate(spec, final_judgments(a))`,
+`gates.apply_domain_edits` (pura) y la fixture `corrida_con_edicion_de_dominio`.
+
+## Verificación
+Suite en 3.11/3.12/3.13 (recuento en el commit de integración), cobertura ≥ 90 %, lint limpio,
+sin cambios en `revisia/audit/`.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+EOF
+)"
+```
+
+Expected: la PR abierta con base `feat/ola2-verificador`. **Sin merge**: lo decide el arquitecto. Con PRs apiladas, nunca `--delete-branch`.
+
+---
+
+## Estado en que E deja el pipeline (para F₂ y G₂)
+
+```python
+# revisia/orchestration/pipeline.py
+class _Run:
+    def gate(self, stage, payload, *, records=None, flags=None, force_human=False,
+             fields: FieldPolicy | None = None, domains: DomainPolicy | None = None
+             ) -> GateResult: ...                      # sin failed= (E₂)
+def _rob_one(run, provider, cfg, spec: RoBToolSpec, record, extraction, text
+             ) -> tuple[RoBAssessment, list[RunMeta]]: ...
+def _assess_rob(run, included, extractions, fulltexts) -> dict[str, RoBAssessment]: ...
+# _rob_table_md: borrada (render_rob_markdown)
+def _write_deliverables(run, *, ..., retrieval, failed, verification, ...) -> Path: ...  # = D
+# _run_stages: … gate extraccion → _assess_rob(..., ft.texts) → gate rob (domains=rob_policy)
+#   → apply_domain_edits + reescritura de 07_rob/assessments.json → _meta_analysis(run)
+#   → _synthesize_and_verify → _write_deliverables → gate reporte.
+# manifest_extra gana "rob": {"tool", "tool_version"}.
+
+# revisia/orchestration/gates.py
+def rob_payload(*, spec, included, assessments) -> dict: ...
+def rob_attention(*, spec, included, assessments) -> list[dict]: ...
+def rob_policy(*, spec, included, assessments) -> DomainPolicy: ...
+def apply_domain_edits(assessments, edits, actor, *, spec) -> dict[str, RoBAssessment]: ...
+
+# revisia/orchestration/hitl.py
+class DomainHint: ...; class RoBStudyHint: ...; class DomainEditable: ...; class DomainPolicy: ...
+def review_gate(*, stage, autonomy, run_ctx, review_payload, auto_approve, records=None,
+                flags=None, force_human=False, fields=None, domains=None) -> GateResult: ...
+```
+
+F₂ toca `_meta_analysis(run, included_ids)` y `stop_after`: ninguna de esas firmas cambia aquí. `run_pipeline(..., stop_after="screening_ta")` no pasa por RoB.
+
+## Interfaces para G₂ (relación 27)
+
+- `assessment.tool == protocol.rob_tool` y `tool_version == load_tool_spec(tool).version`.
+- `[d.id for d in a.domains] == list(spec.domain_ids)` cuando `status == "ok"` o cuando es `failed` con el gate aprobado.
+- Cada juicio pertenece a su escala: `d.judgment in spec.scale_for(d.id)`, `d.human_judgment in …`; `overall_human in spec.overall_scale`.
+- `overall_algorithm == aggregate(spec, final_judgments(a))` (`revisia.rob.aggregate`); en NOS, un recuento en texto; en QUADAS-2, `None`.
+- `overall == overall_human or overall_algorithm`.
+- `human_judgment` ⇔ `edit_domain` con `target == f"{id}#{dominio}"` de la decisión efectiva, con `to == human_judgment` y `reason == human_reason`; `overall_human` ⇔ `#overall`.
+- `07_rob/assessments.json == apply_domain_edits(salidas del diario, ediciones del ledger, actor, spec=spec)`; `artifact_sha256` de la solicitud = `canonical_sha256(dump_artifact(salidas del diario))`.
+- `quote_status == find_quote(support_quote, texto crudo)[0]`, donde el texto crudo es el texto en caché o, sin él, el resumen.
+- Relación 22: una línea `failed` en `07_rob/journal.jsonl` ⇒ `status == "failed"` y, con el gate aprobado, una `edit_domain` por cada dominio de la especificación.
+- Una línea `failed` del diario **equivale** a `failed_assessment(spec, rid, source_text=…)` (`revisia.agents.rob`), con `source_text = "fulltext"` si la fila de `retrieval.json` de ese id está `available` (también un `human_rescue`), si no `"abstract"`. Es la «salida del diario» que entra en `apply_domain_edits` para recalcular `assessments.json`.
+- `human_actor == actor` del `approve` del gate `rob` de la decisión efectiva (el que `apply_domain_edits` recibe como `actor`).
+- `d.domain == spec.domains[i].name` (el nombre legible de la especificación, en su orden).
+- `applicability` (solo QUADAS-2): `[a.id for a in a.applicability] == [x.id for x in spec.applicability]` y cada `judgment in spec.judgment_scale`; vacía en las demás herramientas.
+- `target` de `edit_domain` se parte con `rsplit("#", 1)`.
+- **Funciones de la Ola 1 que G₂ adapta** (sin tocarlas en E):
+  - `_decision_del_ledger` (`revisia/audit/checks_hitl.py:820-873`): cuando falta `decision.yml`, rehacer `records.<id>.domains` (y `overall`) como `DomainEdits` desde las `edit_domain` de la decisión efectiva, como C hace con `edit_field` → `fields`.
+  - `_consolidados` / `_contra_diario` (relación 13 de `07_rob`, `revisia/audit/checks_flow.py:1784-1788`): eximir las líneas `failed` (sustituidas por `failed_assessment`) y comparar `assessments.json` con `apply_domain_edits(salidas del diario, ediciones del ledger, actor, spec=spec)`, no con las salidas crudas.
+  - `request_hash` (`ARTEFACTOS_APROBADOS`, `checks_hitl.py:66,1016-1031`): `artifact_sha256` de `rob` se compara con el hash de las salidas del diario, no con el de `assessments.json` reescrito.
+- Fixture: `corrida_con_edicion_de_dominio` (`EDICION_DE_DOMINIO`).
+
+---
+
+## Self-review del plan (E₁ + E₂)
+
+- **Cobertura de §9:**
+  - `aggregate.py` (E1.2).
+  - El agente `assess_rob(spec=…)` con `rob/v2` parametrizada, texto delimitado, validación, un reintento, D9, `quote_status`, `overall_llm`/`overall_algorithm` (E1.4–E1.6, E2.0, E2.4).
+  - El gate: `rob_payload` con `editable`, `attention`, `tool_version`, `overall_algorithm` (E2.2); `rob_policy -> DomainPolicy`, `edit_domain` y `apply_domain_edits` con el recálculo (E2.2, E2.3); `decision.template.yml` por estudio y dominio (E2.3).
+  - Los exports por herramienta (E1.7, E1.8, cableados en E2.4).
+  - `GRADE` → rc 2 (E2.1). `NewcastleOttawaCaseControl` ya viene de PR-0.
+- **Tests de §9:**
+  - vector oficial por herramienta (E1.6);
+  - los ejemplos de los manuales (E1.2);
+  - dominio desconocido rechazado (E1.4);
+  - dominio ausente ⇒ reintento ⇒ fallo determinista (E1.6);
+  - `test_edicion_por_dominio_queda_en_ledger_y_recalcula_el_global` (E2.4);
+  - `test_grade_es_rc_2_con_el_mensaje_de_la_etapa_de_certeza` (E2.1);
+  - robvis por plantilla (E1.7).
+- **D9 y relación 22 en RoB:** `failed_assessment` y `required` (E2.2–E2.4), con `test_rob_fallido_se_decide_dominio_a_dominio`. Los tests D9 de C siguen en verde con el motivo nuevo (contiene «falló de forma determinista (D9)»).
+- **Para G₂:**
+  - funciones puras `aggregate`, `final_judgments`, `apply_domain_edits` y `find_quote`;
+  - la fixture `corrida_con_edicion_de_dominio`;
+  - la frontera `xfail` estricta, con su gemelo que fija qué rompe.
+- **Firmas consumidas, por nombre en sus planes:**
+  - PR-0 (T2, T5, T7, T9, T10, T15);
+  - A (`load_template`, `PROMPT_VERSIONS`, sink, `RecordFailedError`);
+  - C (`FieldPolicy`/`FieldHint`/`StudyHint`, `review_gate(fields=)`, `_validate`/`_register`/`_from_ledger`, `GateResult.edits`, `rob_payload` con `failed`, `failed=` interino, `document_block`, `find_quote`, `editar_campo`, `_correr`/`_copia` de `conftest`);
+  - D (`_write_deliverables(..., verification)`, `PROMPT_VERSIONS` de `reporte`/`verificador`).
+  - Los números de línea son de `main` @ `c1af7c3`; las pistas anteriores los desplazan, así que se localiza por nombre.
+- **Tests existentes que cambian de expectativa:**
+  - `tests/test_rob.py` (los dos), `tests/test_fakes.py::test_rob_por_dominio_y_global` y `tests/test_interop.py::test_robvis_csv_una_fila_por_estudio` (E₁);
+  - `tests/test_hitl_pipeline.py:1617-1662, 1703-1721` (E1.6 y E2.2) y `:1811-1827, 1860-1867` (E2.2);
+  - `tests/test_snapshot.py` (E1.5, absorbido por la forma de A en E2.0);
+  - los tests de C con `failed=` (E2.3).
+  - Se borra uno, `test_firma_heredada_con_tool_hasta_e2` (E2.4), que nació para eso.
+- **Consistencia de tipos:**
+  - `DomainPolicy`/`DomainEditable`/`RoBStudyHint`/`DomainHint` (E2.2) → E2.3 y E2.4;
+  - `rob_payload(spec=…)` (E2.2) → E2.3, E2.4;
+  - `editar_dominio` (E2.4) → E2.5;
+  - `evaluacion_rob` (E1.7) → E2.2, E2.3.
+- **Proporción:** los bloques de código son tests con los valores del spec, la plantilla del prompt, el algoritmo de agregación y los resúmenes de firmas. Ningún cuerpo de función que la firma determine.
+- **Riesgo abierto:** la revisión independiente de D puede cambiar `_write_deliverables` o `report_payload`. E₂ solo los consume (E2.4), así que el ajuste se limita a las llamadas.
