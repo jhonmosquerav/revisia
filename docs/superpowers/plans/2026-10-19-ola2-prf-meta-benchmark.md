@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.13 (suite también en 3.11/3.12 cuando PR-H esté debajo), Pydantic v2, PyYAML, pytest, ruff + black (línea 100), uv. Estadística en Python puro (sin numpy): `scipy` sigue siendo opcional y solo da los p-valores exactos de Q y de Egger, como hoy. `matplotlib` (extra `meta`) solo para los PNG.
 
-**Spec:** `docs/superpowers/specs/2026-10-18-ola-2-remediacion-design.md`. Este plan implementa §10 (PR-F), D6, D16 y D23 en lo que no depende del pipeline, con los contratos de §4.2 («EffectInput v2 / EffectsFile v2 / MetaAnalysisResult v2 / ExcludedEffect», «BenchmarkPanel / BenchmarkResult»), la relación 29 (§4.3) como contrato para G₂, §15 (topología), §16 (método) y **§19 filas 1–8**, que vinculan (sobre todo la fila 3: `outcome` opcional en el modelo y obligatorio en `EffectsFile`; un efecto sin desenlace se agrupa como desenlace único; la forma por desenlace la define este plan). Plan hermano: `2026-10-18-ola2-pr0-contratos.md`, cuyas Tareas 12 y 13 dan los nombres que aquí se consumen tal cual.
+**Spec:** `docs/superpowers/specs/2026-10-18-ola-2-remediacion-design.md`. Este plan implementa §10 (PR-F), D6, D16 y D23 en lo que no depende del pipeline, con los contratos de §4.2 («EffectInput v2 / EffectsFile v2 / MetaAnalysisResult v2 / ExcludedEffect», «BenchmarkPanel / BenchmarkResult»), la relación 29 (§4.3) como contrato para G₂, §15 (topología), §16 (método) y **§19 filas 1–10**, que vinculan (sobre todo la fila 3: `outcome` opcional en el modelo y obligatorio en `EffectsFile`; un efecto sin desenlace se agrupa como desenlace único; la forma por desenlace la define este plan). Plan hermano: `2026-10-18-ola2-pr0-contratos.md`, cuyas Tareas 12 y 13 dan los nombres que aquí se consumen tal cual.
 
 ## Global Constraints
 
@@ -273,7 +273,8 @@ def _dos_desenlaces() -> list[EffectInput]:
 
 def test_sin_desenlace_es_un_desenlace_unico() -> None:
     res = meta_analyze([_e("a", 0.2, 0.04), _e("b", 0.4, 0.04)], "precomputed")
-    assert (res.schema_version, res.random_method, res.excluded, res.not_pooled) == (2, "DL", 0, [])
+    assert (res.schema_version, res.random_method) == (2, "DL")
+    assert (res.excluded, res.not_pooled) == (0, [])
     (o,) = res.outcomes
     assert (o.outcome, o.k, o.measure, o.log_scale) == (None, 2, "precomputed", False)
     assert o.fixed.estimate == pytest.approx(0.3, abs=1e-9)
@@ -311,7 +312,8 @@ def test_egger_solo_desde_k_10() -> None:
     assert EGGER_MIN_K == 10
     nueve = meta_analyze([_e(f"s{i}", 0.1 * i, 0.01 * i) for i in range(1, 10)], "precomputed")
     o9 = nueve.outcomes[0]
-    assert o9.egger is None and o9.egger_note == "Egger no calculado: k = 9 < 10 (Sterne et al. 2011)"
+    assert o9.egger is None
+    assert o9.egger_note == "Egger no calculado: k = 9 < 10 (Sterne et al. 2011)"
     diez = meta_analyze([_e(f"s{i}", 0.1 * i, 0.01 * i) for i in range(1, 11)], "precomputed")
     assert diez.outcomes[0].egger is not None and diez.outcomes[0].egger_note is None
     iguales = meta_analyze([_e(f"s{i}", 0.1 * i, 0.04) for i in range(1, 11)], "precomputed")
@@ -460,7 +462,9 @@ def test_intervalo_de_prediccion_higgins_en_dat_bcg() -> None:
 def test_intervalo_de_prediccion_solo_desde_k_3() -> None:
     dos = meta_analyze([_e("a", 0.2, 0.04), _e("b", 0.4, 0.04)], "precomputed").outcomes[0]
     assert dos.prediction_interval is None
-    tres = meta_analyze([_e("a", 0.2, 0.04), _e("b", 0.4, 0.02), _e("c", 0.6, 0.01)], "precomputed")
+    tres = meta_analyze(
+        [_e("a", 0.2, 0.04), _e("b", 0.4, 0.02), _e("c", 0.6, 0.01)], "precomputed"
+    )
     assert tres.outcomes[0].prediction_interval.df == 1
     md = render_forest_markdown(meta_analyze(_bcg(), "precomputed"))
     assert "- Intervalo de predicción 95 % (t con 11 gl): [-1.999, +0.571]" in md
@@ -575,7 +579,9 @@ def test_sin_scipy_los_numeros_que_compara_el_auditor_no_cambian(monkeypatch) ->
             return {k: _sin_p(v) for k, v in valor.items() if k not in {"p_value", "p_method"}}
         return [_sin_p(v) for v in valor] if isinstance(valor, list) else valor
 
-    efectos = _bcg() + [_e(f"x{i}", 0.1 * i, 0.01 * i, "otro", "g1" if i < 6 else "g2") for i in range(1, 12)]
+    efectos = _bcg() + [
+        _e(f"x{i}", 0.1 * i, 0.01 * i, "otro", "g1" if i < 6 else "g2") for i in range(1, 12)
+    ]
     con = meta_analyze(efectos, "precomputed", random_method="HKSJ").model_dump()
     monkeypatch.setitem(sys.modules, "scipy", None)
     monkeypatch.setitem(sys.modules, "scipy.stats", None)
@@ -639,7 +645,8 @@ def _con_subgrupos() -> list[EffectInput]:
 
 
 def test_subgrupos_con_q_entre_grupos() -> None:
-    # A y B: τ² = 0, θ = 0 y 1, SE = √0.5 → w = 2; θ̄ = 0.5; Q = 2·0.25 + 2·0.25 = 1.0 (df 1).
+    # A y B: τ² = 0, θ = 0 y 1, SE = √0.5 → w = 2; θ̄ = 0.5;
+    # Q = 2·0.25 + 2·0.25 = 1.0 (df 1).
     o = meta_analyze(_con_subgrupos(), "precomputed").outcomes[0]
     assert [(s.subgroup, s.k) for s in o.subgroups] == [("A", 2), ("B", 2), ("C", 1)]
     a, b, c = o.subgroups
@@ -657,7 +664,9 @@ def test_subgrupos_con_q_entre_grupos() -> None:
 def test_sin_subgrupos_no_hay_q_entre() -> None:
     o = meta_analyze(_bcg(), "precomputed").outcomes[0]
     assert (o.subgroups, o.q_between) == ([], None)
-    solo_uno = meta_analyze([_e("a", 0.1, 0.1, "o", "A"), _e("b", 0.2, 0.1, "o", "A")], "precomputed")
+    solo_uno = meta_analyze(
+        [_e("a", 0.1, 0.1, "o", "A"), _e("b", 0.2, 0.1, "o", "A")], "precomputed"
+    )
     assert solo_uno.outcomes[0].q_between is None  # un único subgrupo con random
 
 
@@ -771,7 +780,8 @@ def test_effects_sin_outcome_no_carga_y_explica_la_migracion(tmp_path: Path) -> 
 
 
 def test_effects_de_c3_no_carga_sin_multiple_per_study(tmp_path: Path) -> None:
-    with pytest.raises(ProtocolFilesError, match=r"unidad de análisis: `li-2024` aporta 27 efectos"):
+    patron = r"unidad de análisis: `li-2024` aporta 27 efectos"
+    with pytest.raises(ProtocolFilesError, match=patron):
         load_protocol_files(_escribir(tmp_path, _c3(multiple=False)))
 
 
@@ -784,9 +794,13 @@ def test_effects_de_c3_con_multiple_per_study_carga_y_queda_declarado(tmp_path: 
 
 def test_random_method_outcome_y_k_por_desenlace() -> None:
     base = {"measure": "precomputed"}
-    dos = [{"study_id": s, "outcome": "o", "yi": y, "vi": 0.02} for s, y in (("a", 0.1), ("b", 0.2))]
+    dos = [
+        {"study_id": s, "outcome": "o", "yi": y, "vi": 0.02}
+        for s, y in (("a", 0.1), ("b", 0.2))
+    ]
     assert EffectsFile.model_validate({**base, "effects": dos}).random_method == "DL"
-    assert EffectsFile.model_validate({**base, "effects": dos, "random_method": "HKSJ"}).random_method == "HKSJ"
+    hksj = EffectsFile.model_validate({**base, "effects": dos, "random_method": "HKSJ"})
+    assert hksj.random_method == "HKSJ"
     with pytest.raises(ValidationError):
         EffectsFile.model_validate({**base, "effects": dos, "random_method": "REML"})
     with pytest.raises(ValidationError, match="espacios"):
@@ -898,7 +912,12 @@ def escribir_benchmark(
             replica=r,
             run_dir=f"runs/{nombre}-r{r}",
             metrics=ScreeningMetrics(
-                n=tp + fn + 10, tp=tp, fp=2, fn=fn, tn=8, recall=tp / (tp + fn) if tp + fn else None
+                n=tp + fn + 10,
+                tp=tp,
+                fp=2,
+                fn=fn,
+                tn=8,
+                recall=tp / (tp + fn) if tp + fn else None,
             ),
             recall_ci95=wilson_interval(tp, tp + fn),
             models_used=[f"fake:{nombre}"],
@@ -965,7 +984,8 @@ def test_dos_corpus_promedian_replicas_y_agregan_por_celda(tmp_path: Path) -> No
     assert [c.cell for c in pooled.cells] == ["a", "b"]
     a = pooled.cells[0]
     (o,) = a.meta.outcomes
-    assert (o.outcome, o.k, [s.study_id for s in o.studies], o.subgroups) == ("recall", 2, ["c1", "c2"], [])
+    assert (o.outcome, o.k, o.subgroups) == ("recall", 2, [])
+    assert [s.study_id for s in o.studies] == ["c1", "c2"]
     assert o.random.estimate == pytest.approx(math.log(9), abs=1e-12)  # τ² = 0: mismo logit
     assert a.recall == pytest.approx(0.9, abs=1e-12) and a.n_corpora == 2
     assert any(n.startswith("Unidad de análisis: 2 corpus") for n in pooled.notes)
@@ -1067,7 +1087,8 @@ def test_benchmark_report_escribe_pooled_en_el_primer_benchmark(
     c1 = benchmark(tmp_path, "c1", {"a": [(9, 1)]})
     c2 = benchmark(tmp_path, "c2", {"a": [(18, 2)]})
     assert cli.main(["benchmark-report", str(c1), str(c2)]) == 0
-    assert (c1 / "pooled" / "meta_analysis.json").is_file() and (c1 / "pooled" / "report.md").is_file()
+    assert (c1 / "pooled" / "meta_analysis.json").is_file()
+    assert (c1 / "pooled" / "report.md").is_file()
     salida = capsys.readouterr().out
     assert "a: recall 0.900" in salida and "k = 2" in salida
 
@@ -1076,7 +1097,8 @@ def test_benchmark_report_out_y_replicas_como_efectos(tmp_path: Path, capsys) ->
     c1 = benchmark(tmp_path, "c1", {"a": [(9, 1), (9, 1)]})
     c2 = benchmark(tmp_path, "c2", {"a": [(18, 2), (16, 4)]})
     out = tmp_path / "agregado"
-    assert cli.main(["benchmark-report", str(c1), str(c2), "--out", str(out), "--replicas-as-effects"]) == 0
+    argv = ["benchmark-report", str(c1), str(c2), "--out", str(out), "--replicas-as-effects"]
+    assert cli.main(argv) == 0
     assert "Exploratorio" in (out / "report.md").read_text(encoding="utf-8")
     assert "⚠ Exploratorio" in capsys.readouterr().out
 
@@ -1149,7 +1171,16 @@ El integrador de PR-F las añade **a continuación de la última fila** de §19,
 
 ## Fase F₂ (sobre PR-E)
 
-Pendiente: la escribe el redactor de F₂.
+**Estado de partida:** PR-0 + H + A + B + C + D + E (E₂ incluida) + F₁ rebasada. Lo que F₂ consume de cada pista, con la firma de su plan:
+
+- **A** (`2026-10-19-ola2-pra-procedencia.md`, «ensure_snapshot»): `ensure_snapshot(protocol_dir, run_ctx, *, max_results, mailto) -> tuple[Path, RunInfo]` escribe `RunInfo(..., environment=collect_environment(...))` y lanza `PreOla2RunError` al reanudar una 0.8; `RunInfo.kind: RunKind = "review"` (PR-0 T5) **no lo escribe nadie todavía**; `write_manifest` copia `environment`.
+- **B** (`2026-10-19-ola2-prb-identidad-registros.md`, Tarea 7): `ImportFormat = Literal["ris", "bibtex", "records_json"]` (`schemas/artifacts.py`); `import_format(path) -> ImportFormat | None`; `parse_records_json(text) -> list[SearchRecord]` (ids intactos, `record_id` repetido → `ValueError`); `import_file(path)`; `ignored_files(directory) -> list[str]`; `search_stage._import` pone `SearchLogEntry.format`.
+- **C** (`2026-10-19-ola2-prc-texto-completo-extraccion.md`, «Estado en que C deja el pipeline»): `gates.failed_ids(decisions) -> list[str]` (T/A: sin votos y `ensemble_label is None`); `compute_screening_metrics` deja fuera de la matriz los registros con `ensemble_label` nulo; **contrato** `n_failed_records = len(failed_ids(decisions))` (§19 de C, fila n+9); `_FullTextStage(decisions, texts, retrieval)`; `render_methods(..., failed=...)`; fixtures `corrida_con_edicion_de_campo`, `corrida_con_rescate_con_texto`.
+- **D** (`2026-10-19-ola2-prd-verificador.md`, «Estado en que D deja el pipeline»): `_write_deliverables(run, *, ..., retrieval, failed, verification: VerificationReport, ...) -> Path`; `report_payload(*, included, verification, documento, forced_human)`.
+- **E₂** (`2026-10-19-ola2-pre-rob-por-herramienta.md`, «Estado en que E deja el pipeline»): `_Run.gate(..., fields=, domains=)`; `_rob_one(run, provider, cfg, spec, record, extraction, text)`; `_run_stages: … gate rob → apply_domain_edits → _meta_analysis(run) → _synthesize_and_verify → _write_deliverables → gate reporte`; `manifest_extra["rob"]`. E₂ no cambia `_meta_analysis` ni añade `stop_after`.
+- **F₁** (arriba): el bloque «Interfaces que F₁ deja para F₂ y G₂».
+
+Los números de línea de `pipeline.py` que se citan abajo son los de `c1af7c3` (`_meta_analysis` 885-898, `_write_deliverables` 1073-1201, `run_pipeline` 1234-1319, `_run_stages` 1322-1509); tras A–E se desplazan: el implementador localiza por nombre.
 
 ### Interfaces que F₁ deja para F₂ y G₂
 
@@ -1249,7 +1280,7 @@ def meta_analyze(
 ) -> MetaAnalysisResult: ...
 ```
 
-Para F₂: `meta_analysis.json` existe siempre que haya `effects.yml` (fila n+10); `unit_of_analysis` no se emite (fila n+11); `total_studies_ma` = `study_id` distintos (fila n+9). `meta_analyze` no conoce los incluidos ni las exclusiones. `_meta_analysis(run, included_ids)` filtra, escribe `ExcludedEffectsFile` (PR-0) y fija el recuento con `result.model_copy(update={"excluded": n})`; con todo filtrado, `MetaAnalysisResult(outcomes=[], excluded=n, random_method=…)` es el resultado válido de §10.1. Debe pasar `random_method=effects.random_method` (supuesto n+7). Si F₂ retira el uso de las propiedades `k`/`studies` en `pipeline.py` y `methods.py`, las propiedades se quedan hasta que G₂ confirme que el auditor no las necesita.
+Para F₂: `meta_analysis.json` existe siempre que haya `effects.yml` (fila n+10); `unit_of_analysis` no se emite (fila n+11); `total_studies_ma` = `study_id` distintos (fila n+9). `meta_analyze` no conoce los incluidos ni las exclusiones. `_meta_analysis(run, included_ids)` filtra, escribe `ExcludedEffectsFile` (PR-0) y fija el recuento con `result.model_copy(update={"excluded": n})`; con todo filtrado, `MetaAnalysisResult(outcomes=[], excluded=n, random_method=…)` es el resultado válido de §10.1. Debe pasar `random_method=effects.random_method` (supuesto n+7). F₂ añade `n_studies` (Tarea F2.1) y retira las propiedades `k`/`studies` (Tarea F2.2, fila n+20).
 
 Para G₂ (relación 29): «conjunto agregado» de un desenlace = `[s.study_id for s in o.studies]`; los efectos analizados = esos ∪ `not_pooled[].study_ids`; `prediction_interval is None ⇔ k < PI_MIN_K`; `egger is None ⇔ k < EGGER_MIN_K` salvo `egger_note` de precisión constante (supuesto n+4); el recálculo debe pasar el `random_method` de `00_protocol/effects.yml` (hoy `checks_flow.py:490` llama sin él). `p_value`/`p_method` de `q_between` siguen dependiendo de `scipy` y van en `_META_SEGUN_ENTORNO`.
 
@@ -1295,3 +1326,1122 @@ def write_pooled(pooled: PooledBenchmark, out_dir: str | Path) -> tuple[Path, Pa
 ```
 
 CLI: `revisia benchmark-report <benchmark_dir>… [--out DIR] [--replicas-as-effects]` (rc 0/2). F₂ añade `revisia benchmark` en una función y un subparser propios de `cli.py`; G añade `deposit` en los suyos (§15).
+
+### Topología de F₂
+
+En el mismo worktree `C:\revisia-wt\f`, rama `feat/ola2-meta-benchmark` rebasada sobre `feat/ola2-rob-por-herramienta`. Secuencial.
+
+| Tarea | Fichero(s) | Depende de |
+|---|---|---|
+| F2.0 | rebase y reconciliación (controlador) | PR-E cerrada, F₁ |
+| F2.1 | `orchestration/pipeline.py` (`_meta_analysis`, `meta_k`), `meta_analysis.py` (`n_studies`), `tests/conftest.py` (efectos de la auditoría; corrida sin registros sin efectos), tests | F2.0 |
+| F2.2 | `exports/forest.py`, `exports/methods.py`, `exports/document.py`, `orchestration/pipeline.py` (`_write_deliverables`), `meta_analysis.py` (se retiran `k`/`studies`) | F2.1 |
+| F2.3 | `orchestration/snapshot.py` (`kind`), `orchestration/run_context.py` (`create_at`), `llm/preflight.py` (`until`), `orchestration/pipeline.py` (`stop_after`, `kind`, docstring de `PipelineResult.stage`) | F2.0 |
+| F2.4 | `revisia/benchmark/run.py` (preflight, huellas, protocolo de celda), `tests/conftest.py` (`protocolo_benchmark`) | F2.3 |
+| F2.5 | `revisia/benchmark/run.py` (`run_benchmark`, `source.json`, `benchmark.json`, `benchmark.md`) | F2.4 |
+| F2.6 | `revisia/cli.py` (`benchmark`), frontera | F2.5 |
+| F2.7 | integración (controlador) | todas |
+
+---
+
+### Tarea F2.0: Rebase sobre E y reconciliación (controlador)
+
+**Files:** los que choquen; ningún cambio de comportamiento.
+
+**Interfaces:** ninguna nueva. Deja la rama sobre `feat/ola2-rob-por-herramienta` con la suite en verde.
+
+- [ ] **Step 1: Rebase.** `git fetch && git rebase origin/feat/ola2-rob-por-herramienta`. Resolver por unión los conflictos de la tabla de la Topología de F₁ (`exports/interop.py`, `exports/__init__.py`, `tests/test_interop.py`); `tests/test_auditor_meta_y_estados.py` no choca aquí (lo resuelve G, §15). Si `tests/fakes.py` choca (F₁ añadió `escribir_benchmark` al final; C, D y E añadieron dobles), unión.
+Expected: `git status` limpio tras `git rebase --continue`; `git log --oneline origin/feat/ola2-rob-por-herramienta..HEAD` lista los commits de F₁ (Tareas 2–9) y ninguno más.
+- [ ] **Step 2: Símbolos que F₂ consume.**
+
+Run: `uv run python -c "from revisia.ingest import parse_records_json, import_format, ignored_files; from revisia.schemas.artifacts import ImportFormat, RunKind; from revisia.orchestration.gates import failed_ids, report_payload; from revisia.orchestration.snapshot import collect_environment, protocol_fingerprint; from revisia.benchmark.report import pool_benchmarks; print('ok')"`
+Expected: `ok`.
+
+- [ ] **Step 3: Línea base tras el rebase.**
+
+Run: `uv run black . && uv run ruff check --fix . && uv run pytest -p no:cacheprovider -n auto -m "not cronometrado" -rxX && uv run pytest -p no:cacheprovider -m cronometrado`
+Expected: PASS con los XFAIL estrictos que traen A, C, D y E; anotar el recuento y la lista de XFAIL.
+
+---
+
+### Tarea F2.1: `_meta_analysis(run, included_ids)` y `excluded_effects.json` (D16)
+
+**Files:**
+- Modify: `revisia/orchestration/pipeline.py` (`_meta_analysis`, hoy `:885-898`; su llamada en `_run_stages`, hoy `:1421`; `meta_k=` de `render_prisma2020_flow_csv` **dentro de `_write_deliverables`**, hoy `:1193`).
+- Modify: `revisia/meta_analysis.py` (propiedad `n_studies`; `k` y `studies` siguen hasta F2.2).
+- Modify: `tests/conftest.py`: `protocolo_auditoria` escribe `effects.yml` con los tres incluidos (fila n+21); fixture de sesión nueva `protocolo_auditoria_sin_efectos` (copia sin `effects.yml`) y `_corrida_sin_registros` pasa a usarla (una revisión vacía no tiene efectos que declarar).
+- Test: `tests/test_meta_pipeline.py` (nuevo); cambian los tests del Step 2.
+
+**Interfaces:**
+- Consumes: `ExcludedEffect`, `ExcludedEffectsFile` (PR-0); `meta_analyze(..., random_method=)` (F₁ T5); `EffectsFile.random_method` (F₁ T7).
+- Produces:
+  - `MetaAnalysisResult.n_studies -> int` (`@property`, no serializada): número de `study_id` distintos en `outcomes[].studies` (fila n+9).
+  - `_meta_analysis(run: _Run, included_ids: Sequence[str]) -> tuple[MetaAnalysisResult | None, ExcludedEffectsFile | None, str]`: sin `effects.yml` → `(None, None, "raw")` y no escribe nada. Con él:
+    1. `kept` = efectos con `study_id ∈ included_ids`, en el orden del fichero; cada uno de los demás → `ExcludedEffect(study_id, outcome, reason="not_included")`, en el orden del fichero;
+    2. `included_without_effect` = `sorted(set(included_ids) − {study_id de los efectos})`;
+    3. escribe `08_meta/excluded_effects.json` = `ExcludedEffectsFile(...).model_dump()` **siempre** que haya `effects.yml` (§4.1);
+    4. `result = meta_analyze(kept, effects.measure, random_method=effects.random_method).model_copy(update={"excluded": len(excluded)})` y escribe `08_meta/meta_analysis.json` **siempre** (fila n+10); con k < 2 en todos los desenlaces, `outcomes == []`;
+    5. devuelve `(result, exclusions, effects.display)`.
+    `ExcludedEffect.reason = "unit_of_analysis"` no se produce (fila n+11).
+  - En `_run_stages`: `meta_result, meta_exclusions, meta_display = _meta_analysis(run, [r.record_id for r in included])`; `meta_exclusions` viaja a `_write_deliverables` (kwarg nuevo, que F2.2 usa); `manifest_extra["meta_analysis"]` sigue siendo `meta_result.model_dump()`. En `_write_deliverables`, `render_prisma2020_flow_csv(counts, meta_k=meta_result.n_studies if meta_result is not None else None)`.
+  - `tests/conftest.py`, constante y escritura en `protocolo_auditoria`:
+
+```python
+# Efectos de los tres estudios que incluye la corrida de auditoría (D16: un efecto por
+# estudio incluido y desenlace). `secundario` se excluye en FT: no lleva efecto.
+EFECTOS_AUDITORIA = """measure: precomputed
+effects:
+  - {study_id: "10.1000/llm-1", outcome: carga de cribado, yi: -0.62, vi: 0.05}
+  - {study_id: "10.1000/asreview", outcome: carga de cribado, yi: -0.41, vi: 0.04}
+  - {study_id: "10.1000/ensemble", outcome: carga de cribado, yi: -0.55, vi: 0.06}
+"""
+```
+
+- [ ] **Step 1: Tests que fallan** — crear `tests/test_meta_pipeline.py` (todos los imports en la cabecera; las Tareas F2.2 añaden los suyos ahí, no a mitad de fichero):
+
+```python
+"""El meta-análisis se liga a los incluidos (spec 2026-10-18 §10.1, D16; relación 29)."""
+
+from __future__ import annotations
+
+import csv
+import io
+import shutil
+from collections import Counter
+from pathlib import Path
+
+from conftest import _correr
+
+from revisia.meta_analysis import MetaAnalysisResult
+from revisia.schemas.effects import ExcludedEffectsFile
+
+INCLUIDOS = ["10.1000/llm-1", "10.1000/asreview", "10.1000/ensemble"]
+
+
+def _con_efectos(protocolo_auditoria: Path, tmp_path: Path, filas: list[str]) -> Path:
+    destino = tmp_path / "proto" / protocolo_auditoria.name
+    shutil.copytree(protocolo_auditoria, destino)
+    texto = "measure: precomputed\neffects:\n" + "".join(f"  - {f}\n" for f in filas)
+    (destino / "effects.yml").write_text(texto, encoding="utf-8")
+    return destino
+
+
+def _leer(run: Path) -> tuple[MetaAnalysisResult, ExcludedEffectsFile]:
+    meta = MetaAnalysisResult.model_validate_json(
+        (run / "08_meta" / "meta_analysis.json").read_text(encoding="utf-8")
+    )
+    excl = ExcludedEffectsFile.model_validate_json(
+        (run / "08_meta" / "excluded_effects.json").read_text(encoding="utf-8")
+    )
+    return meta, excl
+
+
+def _total_studies_ma(run: Path) -> str:
+    ruta = run / "deliverable" / "interop" / "prisma2020_flow.csv"
+    filas = list(csv.reader(io.StringIO(ruta.read_text(encoding="utf-8"))))
+    columna = filas[0].index("n")
+    (fila,) = [f for f in filas if f[0] == "total_studies_ma"]
+    return fila[columna]
+
+
+def test_efecto_de_un_no_incluido_va_a_excluded_effects(
+    protocolo_auditoria: Path, tmp_path: Path
+) -> None:
+    filas = [
+        '{study_id: "10.1000/llm-1", outcome: o, yi: -0.6, vi: 0.05}',
+        '{study_id: "10.1000/asreview", outcome: o, yi: -0.4, vi: 0.04}',
+        '{study_id: "10.1000/cocina", outcome: o, yi: 0.9, vi: 0.05}',
+    ]
+    proto = _con_efectos(protocolo_auditoria, tmp_path, filas)
+    run = _correr(tmp_path / "runs", proto, parar_en=None)
+    meta, excl = _leer(run)
+    assert [(e.study_id, e.outcome, e.reason) for e in excl.excluded] == [
+        ("10.1000/cocina", "o", "not_included")
+    ]
+    assert excl.included_without_effect == ["10.1000/ensemble"]
+    assert [s.study_id for s in meta.outcomes[0].studies] == INCLUIDOS[:2]
+    assert (meta.excluded, meta.n_studies) == (1, 2)
+    # Relación 29 sobre el multiconjunto (study_id, outcome): agregados + excluidos == efectos.
+    agregados = Counter((s.study_id, o.outcome) for o in meta.outcomes for s in o.studies)
+    excluidos = Counter((e.study_id, e.outcome) for e in excl.excluded)
+    assert agregados + excluidos == Counter(
+        [("10.1000/llm-1", "o"), ("10.1000/asreview", "o"), ("10.1000/cocina", "o")]
+    )
+    assert _total_studies_ma(run) == "2"
+
+
+def test_k_1_tras_filtrar_no_hay_meta_analisis(protocolo_auditoria: Path, tmp_path: Path) -> None:
+    filas = [
+        '{study_id: "10.1000/llm-1", outcome: o, yi: -0.6, vi: 0.05}',
+        '{study_id: "10.1000/cocina", outcome: o, yi: 0.9, vi: 0.05}',
+    ]
+    run = _correr(tmp_path / "runs", _con_efectos(protocolo_auditoria, tmp_path, filas),
+                  parar_en=None)
+    meta, _ = _leer(run)
+    assert (meta.outcomes, meta.excluded, meta.n_studies) == ([], 1, 0)
+    assert [n.study_ids for n in meta.not_pooled] == [["10.1000/llm-1"]]
+    assert _total_studies_ma(run) == "0"
+
+
+def test_random_method_del_fichero_llega_al_resultado(
+    protocolo_auditoria: Path, tmp_path: Path
+) -> None:
+    proto = _con_efectos(protocolo_auditoria, tmp_path, [])
+    cuerpo = (protocolo_auditoria / "effects.yml").read_text(encoding="utf-8")
+    texto = "random_method: HKSJ\n" + cuerpo
+    (proto / "effects.yml").write_text(texto, encoding="utf-8")
+    meta, _ = _leer(_correr(tmp_path / "runs", proto, parar_en=None))
+    assert meta.random_method == "HKSJ" and meta.outcomes[0].random.test == "t"
+
+
+def test_la_corrida_de_auditoria_agrega_sus_tres_incluidos(corrida: Path) -> None:
+    meta, excl = _leer(corrida)
+    assert [s.study_id for s in meta.outcomes[0].studies] == INCLUIDOS
+    assert (excl.excluded, excl.included_without_effect) == ([], [])
+    assert (meta.excluded, meta.n_studies) == (0, 3)
+    assert _total_studies_ma(corrida) == "3"
+```
+
+- [ ] **Step 2: Cambiar las expectativas que D16 cambia** (exactas). Lista **cerrada** de XFAIL de F₂:
+  - Valores nuevos (no `xfail`): `tests/test_auditor_meta_y_estados.py:112` `"4"` → `"3"`; `tests/test_audit.py:33-34` `deliverable` pasa de `"WARN"` a `"PASS"` con el comentario «sin aviso: los efectos son de los incluidos (D16)»; `tests/test_audit_flujo.py:1041-1048` se renombra `test_deliverable_no_avisa_cuando_los_efectos_son_de_los_incluidos`, afirma `deliverable.status == "PASS"` y conserva `"14 artefactos" in deliverable.detail`.
+  - **Un solo `xfail(strict=True, reason="G₂: relación 29 (el auditor recalcula sin filtrar por incluidos)")`**: `tests/test_pipeline_fake.py::test_pipeline_fake_con_humano_audita_sin_fail`. Corre el demo (`examples/demo-mini-review`), cuyos cuatro efectos no son de sus incluidos, y el auditor de hoy recalcula con todos (`checks_flow.py:490`) y compara `total_studies_ma` con `len(effects)` (`:1244`).
+  - Siguen en verde sin cambios, porque `_corrida_sin_registros` ya no tiene `effects.yml`: `tests/test_audit_aritmetica_ola1.py:905` (`test_arithmetic_pasa_en_la_corrida_sin_registros`), `:1089`, `:1435`; `tests/test_audit_flujo.py:1052` (`test_deliverable_avisa_de_una_revision_vacia`: WARN por «revisión vacía», publicable); `tests/test_audit_instantanea.py:749,807`.
+  - Siguen en verde las corridas derivadas de `protocolo_auditoria` que usan C, D y E para sus fronteras (`corrida_con_juez`, `corrida_con_edicion_de_campo`, `corrida_con_rescate_con_texto`, `corrida_con_edicion_de_dominio`): incluyen los mismos tres estudios. Sus tests `…_solo_falla_lo_que_adapta_g2` no pueden ganar un FAIL nuevo; si lo ganan, es un fallo de F₂ y se corrige.
+  - `tests/test_entregable_honesto.py:69-120` se reescriben en F2.2.
+
+- [ ] **Step 3: Run para verificar que falla**
+
+Run: `uv run pytest -p no:cacheprovider tests/test_meta_pipeline.py -v`
+Expected: FAIL (`08_meta/excluded_effects.json` no existe; `AttributeError: n_studies`).
+
+- [ ] **Step 4: Implementar** según Interfaces.
+
+- [ ] **Step 5: Run para verificar que pasa, con la suite entera**
+
+Run: `uv run black . && uv run ruff check --fix . && uv run pytest -p no:cacheprovider -n auto -m "not cronometrado" -rxX && uv run pytest -p no:cacheprovider -m cronometrado`
+Expected: PASS; XFAIL = los de F2.0 más `test_pipeline_fake_con_humano_audita_sin_fail` (si ya era XFAIL estricto de otra pista, se añade esta razón a la suya, sin duplicar el marcador); ningún XPASS. Los dos tests de `test_entregable_honesto.py` sobre el texto de la Ola 1 pueden fallar aquí solo si leen `metodologia.md` de una corrida: en ese caso se adelanta su reescritura de F2.2.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add revisia/orchestration/pipeline.py revisia/meta_analysis.py tests/conftest.py tests/test_meta_pipeline.py tests/test_auditor_meta_y_estados.py tests/test_audit.py tests/test_audit_flujo.py tests/test_pipeline_fake.py
+git commit -m "feat(meta): el meta-análisis agrega solo los efectos de los incluidos y lista los excluidos (D16)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Tarea F2.2: Declaraciones y figuras por desenlace en el entregable; fuera `k`/`studies`
+
+**Files:**
+- Modify: `revisia/exports/forest.py` (`render_forest_markdown`), `revisia/exports/methods.py` (`_meta_analysis_text`, `render_methods`: sale `included_ids`), `revisia/exports/document.py:208-211,471-478` (`_FIGURAS_META` y su bucle), `revisia/orchestration/pipeline.py` (`_write_deliverables`), `revisia/meta_analysis.py` (se retiran `k` y `studies`).
+- Test: `tests/test_meta_pipeline.py`, `tests/test_export_document.py` (añadir); cambian `tests/test_meta_analysis.py:38` (`res.k == 2` → `res.outcomes[0].k == 2`) y `tests/test_entregable_honesto.py:69-120` (incluida la `:89`, `included_ids=[s.study_id for s in meta.studies]`, que desaparece con el parámetro).
+
+**Interfaces:**
+- Consumes: `ExcludedEffectsFile`, `MultiplePerStudy` (PR-0); `render_outcome_forest_png`, `render_outcome_funnel_png` (F₁ T3).
+- Produces:
+  - `MetaAnalysisResult` sin `k` ni `studies` (fila n+20). Comprobación: `grep -rnE "\.(k|studies)\b" revisia tests` solo devuelve usos sobre `OutcomeMeta`/`SubgroupResult`/`NotPooledOutcome` (`o.k`, `o.studies`, `s.k`, `n.k`) y ninguno sobre un `MetaAnalysisResult` (`res.`, `meta.`, `meta_result.`, `result.`, `calculo.`); el implementador revisa cada línea que devuelva.
+  - `render_forest_markdown(result, *, display="raw", exclusions: ExcludedEffectsFile | None = None) -> str`: con `exclusions` y algo que declarar, tras las líneas de cabecera, la sección `## Efectos excluidos del análisis` con una línea por efecto `` f"- `{study_id}` (desenlace `{outcome or 'único'}`): no está entre los incluidos" `` y, si hay, `` f"- Incluidos sin efecto declarado: {', '.join(ids)}" ``. Sin nada que declarar, el texto es **idéntico** al de F₁ (fila n+22).
+  - `render_methods(*, ..., meta_result=None, meta_exclusions: ExcludedEffectsFile | None = None, multiple_per_study: MultiplePerStudy | None = None, ...)`: **sale `included_ids`** (ya no lo lee nadie); resto de kwargs como los deja E. `_meta_analysis_text(meta_result, meta_exclusions, multiple_per_study) -> str`, con este texto exacto, por partes, ids unidos con `", "` (más de 10: los 10 primeros y `f" (+{n - 10})"`):
+    - base: `` f"cuantitativa: meta-análisis por desenlace ({modelo}) de los efectos de `effects.yml` de los estudios incluidos: {meta_result.n_studies} estudio(s) en {len(meta_result.outcomes)} desenlace(s)" ``, `modelo` = `"DerSimonian-Laird"` o `"DerSimonian-Laird con ajuste HKSJ"`;
+    - con excluidos: `` f"; {n} efecto(s) excluido(s) por no estar entre los incluidos ({ids})" ``;
+    - con incluidos sin efecto: `` f"; incluidos sin efecto declarado: {ids}" ``;
+    - sin desenlaces agregados: `"; ningún desenlace llega a k ≥ 2 tras filtrar: sin meta-análisis"`;
+    - con `multiple_per_study.allowed`: `` f"; varios efectos por estudio admitidos (`multiple_per_study`): {justification}" ``.
+  - `_write_deliverables(run, *, ..., meta_result, meta_exclusions: ExcludedEffectsFile | None, meta_display, ...)`: pasa `meta_exclusions` a `render_forest_markdown` y a `render_methods` (con `multiple_per_study=run.files.effects.multiple_per_study` si hay efectos). Figuras: **antes de escribir**, borra de `deliverable/assets/` todo `forest*.png` y `funnel*.png` (una reanudación con otros desenlaces no deja figuras viejas); para el desenlace agregado `i` (1-based) escribe `forest.png`/`funnel.png` si `i == 1` y `forest-{i}.png`/`funnel-{i}.png` si no (fila n+18); funnel solo con k ≥ 10 (F₁). `effects_metafor.csv` se escribe siempre que haya `meta_result` (con `outcomes == []`, solo cabecera; el auditor de hoy lo exige con efectos, `checks_flow.py:2130`).
+  - `exports/document.py`: `_FIGURAS_META` deja de ser una tupla fija y pasa a una función `_figuras_meta(run_dir: Path) -> list[tuple[str, str]]` que lee `08_meta/meta_analysis.json` (si no existe o no valida, la lista de hoy: `forest.png`, `funnel.png` con sus pies) y devuelve, para cada desenlace agregado `i`, `(forest[-i].png, f"Forest plot · {nombre}: efecto por estudio y combinado.")` y `(funnel[-i].png, f"Funnel plot · {nombre} (asimetría / sesgo de publicación).")`, con `nombre = outcome or "desenlace único"`; el bucle de `:471-478` itera sobre ella (solo añade las que existen, como hoy).
+
+- [ ] **Step 1: Tests que fallan.** Añadir a la cabecera de `tests/test_meta_pipeline.py`: `import pytest` (`protocolo_auditoria` es una fixture: no se importa), `from revisia.config import load_protocol`, `from revisia.exports.forest import render_forest_markdown`, `from revisia.exports.methods import render_methods`, `from revisia.exports.prisma_flow import PrismaCounts`, `from revisia.meta_analysis import meta_analyze`, `from revisia.schemas.effects import EffectInput, ExcludedEffect, MultiplePerStudy` (y en `tests/test_export_document.py`, `import json` si falta). Y estos tests:
+
+```python
+def _resultado() -> MetaAnalysisResult:
+    efectos = [
+        EffectInput(study_id=s, yi=y, vi=0.05, outcome="o") for s, y in (("a", -0.6), ("b", -0.4))
+    ]
+    return meta_analyze(efectos, "precomputed").model_copy(update={"excluded": 1})
+
+
+def _exclusiones() -> ExcludedEffectsFile:
+    return ExcludedEffectsFile(
+        excluded=[ExcludedEffect(study_id="z", outcome="o", reason="not_included")],
+        included_without_effect=["c"],
+    )
+
+
+def test_meta_analisis_md_declara_los_excluidos_y_sin_ellos_no_cambia() -> None:
+    con = render_forest_markdown(_resultado(), exclusions=_exclusiones())
+    assert "## Efectos excluidos del análisis" in con
+    assert "- `z` (desenlace `o`): no está entre los incluidos" in con
+    assert "- Incluidos sin efecto declarado: c" in con
+    vacio = render_forest_markdown(_resultado(), exclusions=ExcludedEffectsFile())
+    assert vacio == render_forest_markdown(_resultado())
+
+
+def test_metodologia_declara_filtrado_multiples_y_modelo(protocolo_auditoria: Path) -> None:
+    md = render_methods(
+        protocol=load_protocol(protocolo_auditoria),
+        counts=PrismaCounts(),
+        meta_result=_resultado(),
+        meta_exclusions=_exclusiones(),
+        multiple_per_study=MultiplePerStudy(allowed=True, justification="dos brazos"),
+    )
+    assert (
+        "cuantitativa: meta-análisis por desenlace (DerSimonian-Laird) de los efectos de "
+        "`effects.yml` de los estudios incluidos: 2 estudio(s) en 1 desenlace(s); 1 efecto(s) "
+        "excluido(s) por no estar entre los incluidos (z); incluidos sin efecto declarado: c; "
+        "varios efectos por estudio admitidos (`multiple_per_study`): dos brazos"
+    ) in md
+
+
+def test_k_1_tras_filtrar_se_declara_en_metodologia(
+    protocolo_auditoria: Path, tmp_path: Path
+) -> None:
+    filas = [
+        '{study_id: "10.1000/llm-1", outcome: o, yi: -0.6, vi: 0.05}',
+        '{study_id: "10.1000/cocina", outcome: o, yi: 0.9, vi: 0.05}',
+    ]
+    run = _correr(tmp_path / "runs", _con_efectos(protocolo_auditoria, tmp_path, filas),
+                  parar_en=None)
+    metodos = (run / "deliverable" / "metodologia.md").read_text(encoding="utf-8")
+    assert "ningún desenlace llega a k ≥ 2 tras filtrar: sin meta-análisis" in metodos
+    assert "1 efecto(s) excluido(s) por no estar entre los incluidos (10.1000/cocina)" in metodos
+
+
+def test_figuras_por_desenlace(protocolo_auditoria: Path, tmp_path: Path) -> None:
+    pytest.importorskip("matplotlib")
+    filas = [
+        '{study_id: "10.1000/llm-1", outcome: o1, yi: -0.6, vi: 0.05}',
+        '{study_id: "10.1000/asreview", outcome: o1, yi: -0.4, vi: 0.04}',
+        '{study_id: "10.1000/llm-1", outcome: o2, yi: 0.2, vi: 0.05}',
+        '{study_id: "10.1000/ensemble", outcome: o2, yi: 0.3, vi: 0.04}',
+    ]
+    proto = _con_efectos(protocolo_auditoria, tmp_path, filas)
+    proto.joinpath("effects.yml").write_text(
+        "multiple_per_study: {allowed: true, justification: dos desenlaces}\n"
+        + proto.joinpath("effects.yml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    run = _correr(tmp_path / "runs", proto, parar_en=None)
+    assets = run / "deliverable" / "assets"
+    assert (assets / "forest.png").is_file() and (assets / "forest-2.png").is_file()
+    assert not (assets / "funnel.png").exists()  # k = 2 < 10
+```
+
+(`multiple_per_study` no hace falta para la unidad de análisis —`llm-1` aparece una vez por desenlace—; está para que `metodologia.md` lo declare. Si estorba al implementador, se quita sin cambiar el test.)
+
+  Y en `tests/test_export_document.py`, con la fixture `run_dir` de ese fichero:
+
+```python
+def test_figuras_meta_por_desenlace_con_el_nombre_del_desenlace(run_dir: Path) -> None:
+    assets = run_dir / "deliverable" / "assets"
+    (assets / "forest-2.png").write_bytes((assets / "forest.png").read_bytes())
+    meta = {"outcomes": [{"outcome": "mortalidad"}, {"outcome": "ingresos"}]}
+    (run_dir / "08_meta").mkdir(exist_ok=True)
+    (run_dir / "08_meta" / "meta_analysis.json").write_text(json.dumps(meta), "utf-8")
+    html = assemble_html(run_dir)
+    assert "Forest plot · mortalidad" in html and "Forest plot · ingresos" in html
+```
+
+  (`meta_analysis.json` incompleto: `_figuras_meta` solo lee `outcomes[].outcome` con un `TypeAdapter` mínimo propio, no `MetaAnalysisResult` entero; si no valida, cae a la lista de hoy. Si el implementador prefiere validar `MetaAnalysisResult`, escribe aquí un resultado real con `meta_analyze(...).model_dump_json()`.)
+
+  Y reescribir `tests/test_entregable_honesto.py:69-120`:
+  - la primera prueba llama a `render_methods(..., meta_result=meta, meta_exclusions=ExcludedEffectsFile(…))` (sin `included_ids`, también en la `:89`) y afirma las partes del texto nuevo y la ausencia de «no derivados de la extracción»;
+  - `test_corrida_demo_declara_…` pasa a `test_corrida_demo_declara_los_efectos_excluidos` y afirma en `metodologia.md` `"4 efecto(s) excluido(s) por no estar entre los incluidos (estudio-bogota-2019, estudio-lima-2020, estudio-santiago-2021, estudio-medellin-2022)"`, `"incluidos sin efecto declarado: rec-1"` y `"ningún desenlace llega a k ≥ 2 tras filtrar: sin meta-análisis"`. `rec-1` **está** entre los incluidos de esa corrida: el test de hoy afirma «4 de los 4 estudios … no están entre los incluidos» y no «la corrida no incluyó ningún estudio», que es la rama de 0 incluidos (`methods.py:57-58`).
+  - `tests/test_meta_analysis.py:38`: `assert res.k == 2` → `assert res.outcomes[0].k == 2`.
+
+- [ ] **Step 2: Run para verificar que falla**
+
+Run: `uv run pytest -p no:cacheprovider tests/test_meta_pipeline.py tests/test_entregable_honesto.py tests/test_export_document.py -v`
+Expected: FAIL (`TypeError: render_forest_markdown() got an unexpected keyword argument 'exclusions'`).
+
+- [ ] **Step 3: Implementar** según Interfaces.
+
+- [ ] **Step 4: Run para verificar que pasa, con la suite**
+
+Run: `uv run black . && uv run ruff check --fix . && uv run pytest -p no:cacheprovider -n auto -m "not cronometrado" -rxX && uv run pytest -p no:cacheprovider -m cronometrado && grep -rnE "\.(k|studies)\b" revisia tests`
+Expected: PASS con los XFAIL de F2.1 y ninguno más; el `grep` solo devuelve usos sobre desenlaces/subgrupos (revisarlos uno a uno).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add revisia/exports/forest.py revisia/exports/methods.py revisia/exports/document.py revisia/orchestration/pipeline.py revisia/meta_analysis.py tests/test_meta_pipeline.py tests/test_export_document.py tests/test_entregable_honesto.py tests/test_meta_analysis.py
+git commit -m "feat(meta): metodologia.md y meta_analisis.md declaran el filtrado; figuras por desenlace con su nombre (D16)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Tarea F2.3: `run_pipeline(..., stop_after=, kind=)`, `run.json.kind` y preflight hasta T/A (D23)
+
+**Files:**
+- Modify: `revisia/orchestration/snapshot.py` (`ensure_snapshot`, tal como la deja A; `RunKindMismatchError`), `revisia/orchestration/run_context.py` (`RunContext.create_at`), `revisia/llm/preflight.py` (`preflight(..., until=)`), `revisia/orchestration/pipeline.py` (`run_pipeline`, `_run_stages`, docstring de `PipelineResult.stage`, hoy `:162-163`).
+- Test: `tests/test_stop_after.py` (nuevo).
+
+`snapshot.py` y `run_context.py` son de A (§15) y `preflight.py` de A y B: F₂ solo añade un parámetro con default y una clase (fila n+23).
+
+**Interfaces:**
+- Consumes: `RunKind` (PR-0), `ProtocolMismatchError` (`snapshot.py`; rc 2 vía `_CONFIG_ERRORS` y `_run_guarded`), `STAGES`.
+- Produces:
+  - `class RunKindMismatchError(ProtocolMismatchError)` en `snapshot.py`, `files=["run.json"]`, mensaje: `` f"{run_dir}: corrida de tipo `{actual}`; se reanuda con la orden con que empezó ({orden})" `` con `orden` = `` "`revisia benchmark <protocolo> --panel <panel.yml>`" `` si `actual == "benchmark"` y `` "`revisia run --resume <run_dir>`" `` si no.
+  - `ensure_snapshot(protocol_dir, run_ctx, *, max_results, mailto, kind: RunKind = "review") -> tuple[Path, RunInfo]`: en una corrida nueva escribe `RunInfo(..., kind=kind)`. La comprobación de tipo **no** está aquí (ver `run_pipeline`).
+  - `RunContext.create_at(run_dir: str | Path, *, slug: str, timestamp: str) -> RunContext` (classmethod): como `__init__` (misma guarda `RunDirExistsError` de carpeta no vacía) pero con la carpeta exacta.
+  - `preflight(..., until: str | None = None)`: con `until`, `stages_in_use` y `check_retired` solo miran las etapas de `STAGES` hasta `until` inclusive (en un benchmark, `busqueda`, `dedup` y `screening_ta`): el proveedor de extracción o de síntesis de un protocolo de benchmark no tiene por qué estar disponible (fila n+24).
+  - `run_pipeline(protocol, protocol_dir, run_ctx, *, …, stop_after: Literal["screening_ta"] | None = None, kind: RunKind = "review") -> PipelineResult`, en este orden, **antes de tocar nada**:
+    1. `(kind == "benchmark") != (stop_after == "screening_ta")` → `ValueError("kind='benchmark' y stop_after='screening_ta' van juntos")` (error de programación: los dos sentidos);
+    2. `before = read_run_info(run_ctx.run_dir)`; `before is not None and before.kind != kind` → `RunKindMismatchError` (sin escribir `run.json`);
+    3. preflight con `until=stop_after`; después `ensure_snapshot(..., kind=kind)`.
+    En `_run_stages`, justo después de `_screen_ta` y **antes** del gate de T/A: con `stop_after == "screening_ta"`, `run.finish("completed", "screening_ta")` y `return PipelineResult("completed", f"Cribado T/A terminado (corrida {kind}): sin gates ni entregable.", metrics=run.metrics, run_dir=run.ctx.run_dir, stage="screening_ta")`. No hay `decisions_ledger.jsonl`, `review_request.yml`, `deliverable/` ni `manifest.yml` (relación 31; fila n+16). Docstring de `PipelineResult.stage`: «Gate en el que se detuvo la corrida (pausa o rechazo), `"screening_ta"` en una corrida de benchmark terminada (`stop_after`), o `None` si se completó».
+
+- [ ] **Step 1: Tests que fallan** — crear `tests/test_stop_after.py`:
+
+```python
+"""`stop_after="screening_ta"` y `kind: benchmark` (spec 2026-10-18 §10.2, D23; relación 31)."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+import yaml
+from conftest import busqueda_auditoria, proveedor_auditoria
+from fakes import fetch_disponible
+
+from revisia.config import load_protocol
+from revisia.llm.preflight import preflight
+from revisia.orchestration import pipeline as pipeline_mod
+from revisia.orchestration.run_context import RunContext, RunDirExistsError
+from revisia.orchestration.snapshot import RunKindMismatchError, read_run_info
+
+
+def _ahora() -> str:
+    return datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+
+
+def _benchmark(protocolo: Path, run_dir: Path, monkeypatch) -> pipeline_mod.PipelineResult:
+    monkeypatch.setattr(pipeline_mod, "build_provider", proveedor_auditoria)
+    protocol = load_protocol(protocolo)
+    if (run_dir / "run.json").exists():
+        ctx = RunContext.open(run_dir)
+    else:
+        ctx = RunContext.create_at(run_dir, slug=protocol.slug, timestamp=_ahora())
+    return pipeline_mod.run_pipeline(
+        protocol, protocolo, ctx, search_fn=busqueda_auditoria, fetch_fn=fetch_disponible,
+        stop_after="screening_ta", kind="benchmark",
+    )
+
+
+def test_benchmark_se_detiene_tras_ta_sin_gates_ni_entregable(
+    protocolo_auditoria: Path, tmp_path: Path, monkeypatch
+) -> None:
+    run_dir = tmp_path / "runs" / "fake-a-r1"
+    resultado = _benchmark(protocolo_auditoria, run_dir, monkeypatch)
+    assert (resultado.status, resultado.stage) == ("completed", "screening_ta")
+    info = read_run_info(run_dir)
+    assert (info.kind, info.status, info.stage) == ("benchmark", "completed", "screening_ta")
+    assert info.slug == load_protocol(protocolo_auditoria).slug
+    assert (run_dir / "03_screening" / "metrics.json").is_file()
+    for ausente in ("decisions_ledger.jsonl", "deliverable", "manifest.yml", "screening_ta"):
+        assert not (run_dir / ausente).exists(), ausente
+    assert resultado.metrics is not None and resultado.metrics.n == 6
+
+
+def test_benchmark_reanudado_no_repite_llamadas(
+    protocolo_auditoria: Path, tmp_path: Path, monkeypatch
+) -> None:
+    run_dir = tmp_path / "runs" / "fake-a-r1"
+    _benchmark(protocolo_auditoria, run_dir, monkeypatch)
+    llamadas = (run_dir / "llm_calls.jsonl").read_bytes()
+    _benchmark(protocolo_auditoria, run_dir, monkeypatch)
+    assert (run_dir / "llm_calls.jsonl").read_bytes() == llamadas
+
+
+def test_reanudar_un_benchmark_como_revision_es_rc_2_sin_tocar_run_json(
+    protocolo_auditoria: Path, tmp_path: Path, monkeypatch
+) -> None:
+    run_dir = tmp_path / "runs" / "fake-a-r1"
+    _benchmark(protocolo_auditoria, run_dir, monkeypatch)
+    antes = (run_dir / "run.json").read_bytes()
+    with pytest.raises(RunKindMismatchError, match="revisia benchmark"):
+        pipeline_mod.run_pipeline(
+            load_protocol(protocolo_auditoria), None, RunContext.open(run_dir),
+            search_fn=busqueda_auditoria, fetch_fn=fetch_disponible,
+        )
+    assert (run_dir / "run.json").read_bytes() == antes
+
+
+@pytest.mark.parametrize(
+    "kwargs", [{"kind": "benchmark"}, {"stop_after": "screening_ta"}], ids=["sin-stop", "sin-kind"]
+)
+def test_kind_y_stop_after_van_juntos(
+    protocolo_auditoria: Path, tmp_path: Path, kwargs: dict
+) -> None:
+    ctx = RunContext.create_at(tmp_path / "x", slug="s", timestamp=_ahora())
+    with pytest.raises(ValueError, match="van juntos"):
+        pipeline_mod.run_pipeline(
+            load_protocol(protocolo_auditoria), protocolo_auditoria, ctx, **kwargs
+        )
+    assert not (tmp_path / "x" / "run.json").exists()
+
+
+def test_preflight_hasta_screening_ta_ignora_las_etapas_posteriores(
+    protocolo_auditoria: Path, tmp_path: Path
+) -> None:
+    raw = yaml.safe_load((protocolo_auditoria / "protocol.yml").read_text(encoding="utf-8"))
+    raw["llm"]["extraccion"] = {"provider": "gemini", "model": "gemini-2.5-pro"}
+    proto = tmp_path / protocolo_auditoria.name
+    proto.mkdir()
+    for f in protocolo_auditoria.iterdir():
+        if f.is_file():
+            (proto / f.name).write_bytes(f.read_bytes())
+    (proto / "protocol.yml").write_text(yaml.safe_dump(raw), encoding="utf-8")
+    entorno = {}  # sin GEMINI_API_KEY
+    completo = preflight(load_protocol(proto), proto, context="run", env=entorno)
+    hasta_ta = preflight(
+        load_protocol(proto), proto, context="run", env=entorno, until="screening_ta"
+    )
+    assert any("extraccion" in i.where for i in completo.errors)
+    assert not any("extraccion" in i.where for i in hasta_ta.errors)
+
+
+def test_create_at_no_reutiliza_una_carpeta_con_contenido(tmp_path: Path) -> None:
+    (tmp_path / "x").mkdir()
+    (tmp_path / "x" / "algo").write_text("1", encoding="utf-8")
+    with pytest.raises(RunDirExistsError):
+        RunContext.create_at(tmp_path / "x", slug="s", timestamp=_ahora())
+```
+
+(`metrics.n == 6`: los seis ids de `GOLD_AUDITORIA` están entre los registros de `busqueda_auditoria`. Si el `where` del preflight para la etapa de extracción no contiene `"extraccion"`, el implementador lo comprueba en `stages_in_use` y ajusta el literal del test, no el criterio.)
+
+- [ ] **Step 2: Run para verificar que falla**
+
+Run: `uv run pytest -p no:cacheprovider tests/test_stop_after.py -v`
+Expected: FAIL (`AttributeError: type object 'RunContext' has no attribute 'create_at'`).
+
+- [ ] **Step 3: Implementar** según Interfaces.
+
+- [ ] **Step 4: Run para verificar que pasa, con la suite entera**
+
+Run: `uv run black . && uv run ruff check --fix . && uv run pytest -p no:cacheprovider -n auto -m "not cronometrado" -rxX && uv run pytest -p no:cacheprovider -m cronometrado`
+Expected: PASS con los XFAIL de F2.1 y ninguno más.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add revisia/orchestration/snapshot.py revisia/orchestration/run_context.py revisia/llm/preflight.py revisia/orchestration/pipeline.py tests/test_stop_after.py
+git commit -m "feat(pipeline): stop_after=screening_ta y run.json.kind=benchmark, preflight hasta T/A (D23)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Tarea F2.4: Preflight del benchmark, huellas y protocolo de celda (`revisia/benchmark/run.py`)
+
+**Files:**
+- Create: `revisia/benchmark/run.py`.
+- Modify: `tests/conftest.py` (`protocolo_benchmark`, junto a `protocolo_auditoria`: lo usan F2.4, F2.5 y F2.6; en `fakes.py` crearía un import circular).
+- Test: `tests/test_benchmark_run.py` (nuevo).
+
+**Interfaces:**
+- Consumes: `BenchmarkPanel`, `BenchmarkCell` (PR-0 T13); `import_format`, `import_file`, `ignored_files` (B); `search_backends.db_key`, `MANUAL_ONLY` (`agents/search_backends.py:210,240`); `load_protocol_files`, `ProtocolFilesError`; `preflight(..., until=)` (F2.3); `PreflightIssue`, `PreflightReport` (`llm/preflight.py:92-115`); `protocol_fingerprint` (`snapshot.py`); `canonical_sha256`; `rechazar_claves_de_fusion`, `load_protocol` (`config.py`).
+- Produces:
+  - `corpus_fingerprint(imported_dir: Path) -> str`: `canonical_sha256([[nombre, sha256(bytes)] …])` de los ficheros con `import_format(p) is not None`, en orden de nombre. Es la huella **de la fuente** (para `source.json`, F2.5); la de `benchmark.json` sale de las corridas (F2.5).
+  - `cell_protocol(protocol: ReviewProtocol, cell: BenchmarkCell) -> ReviewProtocol` = `protocol.model_copy(update={"llm": {**protocol.llm, "screening_ta": cell.to_provider_config()}}, deep=True)` (§10.2).
+  - `benchmark_preflight(protocol: ReviewProtocol, protocol_dir: str | Path, panel: BenchmarkPanel, *, mailto: str | None = None, env: Mapping[str, str] | None = None, find_spec=None, which=None) -> PreflightReport` (sin red, antes de crear nada). Errores (`where` entre corchetes) y textos:
+    1. `[databases]` vacío: `"un benchmark necesita declarar la base de la que sale el corpus (una base de importación manual, p. ej. Scopus)"`;
+    2. `[databases]` por cada base cuya `db_key` no está en `MANUAL_ONLY`: `` f"`{db}` no es una base de importación manual: un benchmark corre sobre un corpus congelado (solo imported/, D23)" ``;
+    3. `[imported/]` sin ningún fichero importable: `"sin corpus congelado: pon el corpus en imported/ (*.records.json nativo, D23, o RIS/BibTeX)"`; un fichero que `import_file` no lee: `` f"imported/{nombre}: {motivo}" ``; **avisos** por cada `ignored_files` y, si hay RIS/BibTeX, `"los registros sin DOI cambian de id al importar RIS/BibTeX: el gold de la exploratoria puede no casar; usa *.records.json (D23)"`;
+    4. `[gold.yml]` sin gold o con una sola clase: `"el benchmark necesita gold.yml con las dos clases (incluir y excluir)"`; ids fuera del corpus importado: `` f"{n} ids del gold no están en el corpus importado ({ids})" `` (hasta 5); un `ProtocolFilesError` con su texto;
+    5. `[ensemble]` si `"screening_ta" in protocol.ensemble`: `"screening_ta en ensemble: en un benchmark el modelo de T/A lo fija cada celda del panel"`;
+    6. por celda, los issues de `preflight(cell_protocol(protocol, cell), protocol_dir, context="run", mailto=mailto, env=env, find_spec=find_spec, which=which, until="screening_ta")` con `where` prefijado `f"panel.cells[{cell.name}] · "` (deduplicados: los que no dependen de la celda se informan una vez).
+  - `materialize_cell_protocol(protocol_dir: str | Path, cell: BenchmarkCell, slug: str, dest: Path) -> tuple[Path, ReviewProtocol]`: copia la carpeta del protocolo entera (con `imported/`) a `dest` y reescribe `protocol.yml` sobre el YAML original (`rechazar_claves_de_fusion`, `yaml.safe_load`) con `slug: <slug>` explícito (`load_protocol` usa el nombre de la carpeta si falta, `config.py:299`, y la carpeta es `protocols/<celda>`) y `llm.screening_ta = cell.to_provider_config().model_dump(mode="json", exclude_none=True)`; lo demás no cambia. Devuelve `(dest, load_protocol(dest))`. Si `dest` existe, no lo reescribe: lo carga y comprueba que `provider_for("screening_ta")` es el de la celda y `slug` el pedido (si no, `ValueError`). Es la forma materializada de `cell_protocol` (fila n+14).
+  - `tests/conftest.py`: `protocolo_benchmark(tmp_path: Path) -> Path` (función, no fixture), con el cuerpo del test de abajo.
+
+- [ ] **Step 1: Tests que fallan.** Añadir a `tests/conftest.py`, junto a `protocolo_auditoria` (con `json` en sus imports si falta):
+
+```python
+def protocolo_benchmark(tmp_path: Path) -> Path:
+    """El demo con corpus nativo congelado, base manual, gold de dos clases y sin ensemble."""
+    destino = tmp_path / "proto" / DEMO.name
+    shutil.copytree(DEMO, destino)
+    raw = yaml.safe_load((destino / "protocol.yml").read_text(encoding="utf-8"))
+    raw.update({"databases": ["Scopus"], "ensemble": []})
+    (destino / "protocol.yml").write_text(yaml.safe_dump(raw, allow_unicode=True), "utf-8")
+    (destino / "imported").mkdir()
+    corpus = [r.model_dump(mode="json") for r in REGISTROS_AUDITORIA]
+    (destino / "imported" / "corpus.records.json").write_text(json.dumps(corpus), "utf-8")
+    (destino / "gold.yml").write_text(yaml.safe_dump({"gold": GOLD_AUDITORIA}), "utf-8")
+    return destino
+```
+
+  Y crear `tests/test_benchmark_run.py`:
+
+```python
+"""Preflight y protocolo de celda de `revisia benchmark` (spec 2026-10-18 §10.2, D23)."""
+
+from __future__ import annotations
+
+import shutil
+from pathlib import Path
+
+import pytest
+import yaml
+from conftest import protocolo_benchmark
+
+from revisia.benchmark.run import (
+    benchmark_preflight,
+    corpus_fingerprint,
+    materialize_cell_protocol,
+)
+from revisia.config import load_protocol
+from revisia.schemas.benchmark import BenchmarkPanel
+
+PANEL = BenchmarkPanel.model_validate(
+    {
+        "name": "panel-demo",
+        "replicas": 2,
+        "cells": [
+            {"name": "fake-a", "provider": "fake", "model": "fake-a"},
+            {"name": "fake-b", "provider": "fake", "model": "fake-b"},
+        ],
+    }
+)
+
+
+def _yaml(proto: Path, **cambios) -> None:
+    raw = yaml.safe_load((proto / "protocol.yml").read_text(encoding="utf-8"))
+    raw.update(cambios)
+    (proto / "protocol.yml").write_text(yaml.safe_dump(raw, allow_unicode=True), "utf-8")
+
+
+def _errores(proto: Path) -> list[str]:
+    informe = benchmark_preflight(load_protocol(proto), proto, PANEL)
+    return [f"[{i.where}] {i.message}" for i in informe.errors]
+
+
+def test_protocolo_de_benchmark_valido_pasa(tmp_path: Path) -> None:
+    assert _errores(protocolo_benchmark(tmp_path)) == []
+
+
+def _gold(proto: Path, texto: str) -> None:
+    (proto / "gold.yml").write_text(texto, encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("cambio", "fragmento"),
+    [
+        (lambda p: _yaml(p, databases=[]), "necesita declarar la base"),
+        (lambda p: _yaml(p, databases=["OpenAlex"]), "no es una base de importación manual"),
+        (lambda p: shutil.rmtree(p / "imported"), "sin corpus congelado"),
+        (lambda p: _gold(p, "gold:\n  '10.1000/llm-1': true\n"), "las dos clases"),
+        (
+            lambda p: _gold(p, "gold:\n  '10.1000/llm-1': true\n  'otro:1': false\n"),
+            "1 ids del gold no están en el corpus importado (otro:1)",
+        ),
+        (lambda p: _yaml(p, ensemble=["screening_ta"]), "screening_ta en ensemble"),
+    ],
+    ids=["sin-bases", "base-con-api", "sin-imported", "una-clase", "gold-fuera", "ensemble"],
+)
+def test_preflight_de_benchmark_rechaza(tmp_path: Path, cambio, fragmento: str) -> None:
+    proto = protocolo_benchmark(tmp_path)
+    cambio(proto)
+    errores = _errores(proto)
+    assert any(fragmento in e for e in errores), errores
+
+
+def test_huella_del_corpus_cambia_con_el_contenido(tmp_path: Path) -> None:
+    proto = protocolo_benchmark(tmp_path)
+    antes = corpus_fingerprint(proto / "imported")
+    assert antes == corpus_fingerprint(proto / "imported")
+    (proto / "imported" / "corpus.records.json").write_text("[]", "utf-8")
+    assert corpus_fingerprint(proto / "imported") != antes
+
+
+def test_protocolo_de_celda_cambia_solo_screening_ta_y_conserva_el_slug(tmp_path: Path) -> None:
+    proto = protocolo_benchmark(tmp_path)
+    original = load_protocol(proto)
+    destino = tmp_path / "protocols" / "fake-b"
+    _, celda = materialize_cell_protocol(proto, PANEL.cells[1], original.slug, destino)
+    assert celda.slug == original.slug != destino.name
+    assert celda.provider_for("screening_ta") == PANEL.cells[1].to_provider_config()
+    assert celda.provider_for("extraccion") == original.provider_for("extraccion")
+    assert (destino / "imported" / "corpus.records.json").is_file()
+    otra_vez = materialize_cell_protocol(proto, PANEL.cells[1], original.slug, destino)[1]
+    assert otra_vez == celda
+    with pytest.raises(ValueError):
+        materialize_cell_protocol(proto, PANEL.cells[0], original.slug, destino)
+```
+
+- [ ] **Step 2: Run para verificar que falla**
+
+Run: `uv run pytest -p no:cacheprovider tests/test_benchmark_run.py -v`
+Expected: FAIL (`ModuleNotFoundError: revisia.benchmark.run`).
+
+- [ ] **Step 3: Implementar** según Interfaces (docstring del módulo: D6, D23, §10.2; el estudio vive fuera del motor).
+
+- [ ] **Step 4: Run para verificar que pasa**
+
+Run: `uv run black . && uv run ruff check --fix . && uv run pytest -p no:cacheprovider tests/test_benchmark_run.py tests/test_preflight.py tests/test_stop_after.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add revisia/benchmark/run.py tests/conftest.py tests/test_benchmark_run.py
+git commit -m "feat(benchmark): preflight de corpus congelado y gold, huella del corpus y protocolo por celda (D23)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Tarea F2.5: `run_benchmark`, `source.json`, `benchmark.json` y `benchmark.md`
+
+**Files:**
+- Modify: `revisia/benchmark/run.py`.
+- Test: `tests/test_benchmark_run.py` (añadir; imports en la cabecera).
+
+**Interfaces:**
+- Consumes (importados por nombre en `run.py`, `from revisia.orchestration.pipeline import run_pipeline`, para que el test de la CLI pueda sustituirlo): `run_pipeline(..., stop_after="screening_ta", kind="benchmark")`, `RunContext.create_at`, `RunContext.open` (F2.3); `read_run_info`; `failed_ids` (C); `wilson_interval` (`metrics.py:121`); `BenchmarkResult`, `BenchmarkCellResult`, `BenchmarkProtocolInfo` (PR-0); `read_search_log` y `SearchLogEntry.file_sha256` (`schemas/artifacts.py:201`); `collect_environment`, `prompt_fingerprint`, `protocol_fingerprint` (A, `snapshot.py`); `PreflightError`.
+- Produces:
+  - `DEFAULT_MAX_RESULTS_BENCHMARK: Final[int] = 50`, el mismo valor que `cli.DEFAULT_MAX_RESULTS` (`cli.py:165`; `run.py` no importa `cli`); un test fija que coinciden.
+  - `benchmark_dir(out_root: str | Path, protocol: ReviewProtocol, panel: BenchmarkPanel) -> Path` = `Path(out_root) / f"{protocol.slug}-{panel.name}"` (fila n+13).
+  - `class BenchmarkSource(BaseModel)` (`B/source.json`): `panel_sha256: str` (`canonical_sha256(panel.model_dump(mode="json"))`), `protocol_sha256: dict[str, str]` (`protocol_fingerprint(protocol_dir)`), `corpus_sha256: str` (`corpus_fingerprint`), `created_utc: str`.
+  - `run_benchmark(protocol: ReviewProtocol, protocol_dir: str | Path, panel: BenchmarkPanel, *, out_root: str | Path = "benchmarks", replicas: int | None = None, max_results: int = DEFAULT_MAX_RESULTS_BENCHMARK, mailto: str | None = None) -> tuple[Path, BenchmarkResult]`:
+    1. `benchmark_preflight(protocol, protocol_dir, panel, mailto=mailto)`; con errores, `PreflightError(report)` **antes de crear nada**;
+    2. `B = benchmark_dir(...)`; la huella de la fuente es `BenchmarkSource` sin `created_utc`. Si existe `B/source.json` y su huella difiere → `ValueError(f"{B}: ya existe con otro panel, protocolo o corpus ({campos distintos}); usa otro --out o otro name en el panel")` (rc 2; fila n+25). Si no existe, crea `B`, escribe `B/source.json` y `B/panel.yml` (`yaml.safe_dump(panel.model_dump(mode="json"), sort_keys=False, allow_unicode=True)`);
+    3. `n = replicas or panel.replicas`; por celda (en orden) y réplica `k = 1..n`: `materialize_cell_protocol(protocol_dir, cell, protocol.slug, B/"protocols"/cell.name)`; `run_dir = B/"runs"/f"{cell.name}-r{k}"`. La corrida se **salta** solo si `read_run_info(run_dir)` existe con `status == "completed"` y `stage == "screening_ta"`; si existe con otro estado, `RunContext.open(run_dir)` y `run_pipeline` reanuda; si no, `RunContext.create_at(run_dir, slug=protocol.slug, timestamp=datetime.now(UTC).strftime("%Y%m%d-%H%M%S"))` (hora UTC real; la carpeta la fija `create_at`). Siempre `run_pipeline(protocolo_de_celda, dir_de_celda, ctx, max_results=max_results, mailto=mailto, stop_after="screening_ta", kind="benchmark")`. `RunInterrupted` y `RunCancelled` se propagan (la CLI responde);
+    4. por corrida, con `ctx = RunContext.open(run_dir)`: `BenchmarkCellResult(cell, replica, run_dir="runs/<celda>-r<k>", metrics=ScreeningMetrics de 03_screening/metrics.json tal cual, recall_ci95=wilson_interval(tp, tp + fn), models_used=sorted({f"{m.provider}:{m.model}" for m in ctx.metas if m.outcome == "ok"}), n_calls=len(ctx.metas), n_failed_records=len(failed_ids(decisiones de 03_screening/decisions.json)))`. `n_calls` cuenta **todos los intentos**, también los fallidos (`llm_calls.jsonl` tiene una línea por intento, D14); `benchmark.md` lo dice;
+    5. `BenchmarkProtocolInfo` **desde las corridas** (fila n+17): `corpus_sha256 = canonical_sha256(sorted([e.database, e.file_sha256] for e in read_search_log(run_dir).entries if e.db_key == "imported"))` y `gold_sha256 = sha256(bytes de run_dir/00_protocol/gold.yml)`, ambos iguales en todas las corridas (si no, `ValueError` nombrando la primera que difiere); `n_records = len(02_dedup/records.json)` de la primera corrida; `n_gold_positives = sum(gold.values())`; `environment=collect_environment(prompt_templates=prompt_fingerprint())`;
+    6. escribe `B/benchmark.json` (`model_dump_json(indent=2)`) y `B/benchmark.md` (`render_benchmark_md`); devuelve `(B, resultado)`.
+  - `render_benchmark_md(result: BenchmarkResult, panel_name: str) -> str`: `# Benchmark de cribado · {panel_name}`; `` f"- Protocolo `{slug}` · corpus `{corpus_sha256[:12]}` · {n_records} registros · {n_gold_positives} positivos en el gold" ``; línea fija `"- Corridas `kind: benchmark`: se detienen tras el cribado T/A, sin gates ni entregable; no son revisiones (D23)."`; tabla `| Celda | Réplica | Recall | IC95% Wilson | Lost-evidence | MCC | WMCC | κ | Llamadas | Fallidos |` (`{:.3f}`, `—` si `None`); `## Resumen por celda` con `| Celda | Réplicas | Recall medio | Rango | IC95% Wilson (réplicas agregadas) |`, donde el IC agregado es `wilson_interval(Σtp, Σ(tp + fn))`, seguido de la nota fija `"El IC agregado trata las réplicas como observaciones independientes; repiten el mismo corpus, así que es optimista. La agregación entre corpus está en `revisia benchmark-report`."` (fila n+28); y las notas `"«Llamadas» cuenta todos los intentos, también los fallidos (D14)."` y, si algún `n_failed_records > 0`, `"Los registros en los que la IA falló de forma determinista quedan fuera de la matriz (D9)."`.
+
+- [ ] **Step 1: Tests que fallan.** Añadir a la cabecera de `tests/test_benchmark_run.py`: `import json`, `from conftest import proveedor_auditoria`, `from revisia import cli`, `from revisia.benchmark.run import DEFAULT_MAX_RESULTS_BENCHMARK, benchmark_dir, run_benchmark`, `from revisia.orchestration import pipeline as pipeline_mod`, `from revisia.schemas.benchmark import BenchmarkResult`. Y estos tests:
+
+```python
+def test_max_results_por_defecto_es_el_de_la_cli() -> None:
+    assert DEFAULT_MAX_RESULTS_BENCHMARK == cli.DEFAULT_MAX_RESULTS
+
+
+def test_benchmark_demo_dos_celdas_por_dos_replicas(tmp_path: Path, monkeypatch) -> None:
+    # Frontera de §10.2: demo importado, ScriptedProvider, 2 celdas × 2 réplicas.
+    monkeypatch.setattr(pipeline_mod, "build_provider", proveedor_auditoria)
+    proto = protocolo_benchmark(tmp_path)
+    protocol = load_protocol(proto)
+    carpeta, resultado = run_benchmark(protocol, proto, PANEL, out_root=tmp_path / "b")
+    assert carpeta == benchmark_dir(tmp_path / "b", protocol, PANEL)
+    leido = BenchmarkResult.model_validate_json((carpeta / "benchmark.json").read_text("utf-8"))
+    assert leido == resultado
+    assert [(c.cell, c.replica, c.run_dir) for c in leido.cells] == [
+        ("fake-a", 1, "runs/fake-a-r1"),
+        ("fake-a", 2, "runs/fake-a-r2"),
+        ("fake-b", 1, "runs/fake-b-r1"),
+        ("fake-b", 2, "runs/fake-b-r2"),
+    ]
+    # Siete registros importados, uno duplicado por DOI: seis tras el dedup.
+    assert (leido.protocol.n_records, leido.protocol.n_gold_positives) == (6, 4)
+    for celda in leido.cells:  # relación 31, lado productor
+        run = carpeta / celda.run_dir
+        info = json.loads((run / "run.json").read_text("utf-8"))
+        assert (info["kind"], info["slug"]) == ("benchmark", protocol.slug)
+        assert not (run / "decisions_ledger.jsonl").exists()
+        assert not (run / "deliverable").exists()
+        metricas = json.loads((run / "03_screening" / "metrics.json").read_text("utf-8"))
+        assert celda.metrics.model_dump() == metricas
+        assert celda.models_used == [f"fake:{celda.cell}"] and celda.n_failed_records == 0
+        assert celda.n_calls == len((run / "llm_calls.jsonl").read_text("utf-8").splitlines())
+    md = (carpeta / "benchmark.md").read_text(encoding="utf-8")
+    assert md.startswith("# Benchmark de cribado · panel-demo")
+    assert "## Resumen por celda" in md and "no son revisiones (D23)" in md
+    assert "trata las réplicas como observaciones independientes" in md
+
+
+def test_benchmark_reanudable_solo_salta_las_corridas_completadas(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(pipeline_mod, "build_provider", proveedor_auditoria)
+    proto = protocolo_benchmark(tmp_path)
+    carpeta, _ = run_benchmark(load_protocol(proto), proto, PANEL, out_root=tmp_path / "b")
+    # Una corrida interrumpida (run.json no completado) se reanuda aunque tenga métricas.
+    run_json = carpeta / "runs" / "fake-b-r2" / "run.json"
+    info = json.loads(run_json.read_text("utf-8"))
+    run_json.write_text(json.dumps({**info, "status": "interrupted"}), "utf-8")
+    llamadas_a = (carpeta / "runs" / "fake-a-r1" / "llm_calls.jsonl").read_bytes()
+    run_benchmark(load_protocol(proto), proto, PANEL, out_root=tmp_path / "b")
+    assert (carpeta / "runs" / "fake-a-r1" / "llm_calls.jsonl").read_bytes() == llamadas_a
+    assert json.loads(run_json.read_text("utf-8"))["status"] == "completed"
+
+
+@pytest.mark.parametrize("que_cambia", ["panel", "corpus", "gold"])
+def test_benchmark_con_otra_fuente_en_la_misma_carpeta_falla(
+    tmp_path: Path, monkeypatch, que_cambia: str
+) -> None:
+    monkeypatch.setattr(pipeline_mod, "build_provider", proveedor_auditoria)
+    proto = protocolo_benchmark(tmp_path)
+    run_benchmark(load_protocol(proto), proto, PANEL, out_root=tmp_path / "b")
+    panel = PANEL
+    if que_cambia == "panel":
+        panel = PANEL.model_copy(update={"replicas": 3})
+    elif que_cambia == "corpus":
+        corpus = proto / "imported" / "corpus.records.json"
+        registros = json.loads(corpus.read_text("utf-8"))
+        sin_duplicado = [r for r in registros if r["record_id"] != "10.1000/llm-1-crossref"]
+        corpus.write_text(json.dumps(sin_duplicado), "utf-8")
+    else:
+        texto = (proto / "gold.yml").read_text(encoding="utf-8")
+        (proto / "gold.yml").write_text(texto.replace("true", "false", 1), encoding="utf-8")
+    with pytest.raises(ValueError, match="ya existe con otro panel, protocolo o corpus"):
+        run_benchmark(load_protocol(proto), proto, panel, out_root=tmp_path / "b")
+```
+
+(`n_records == 6`: en `REGISTROS_AUDITORIA` (`conftest.py:75-131`) hay siete registros y `10.1000/llm-1-crossref` comparte DOI con `10.1000/llm-1` (`10.1000/LLM-1` normalizado), así que el dedup deja seis. `test_benchmark_con_otra_fuente…[corpus]` quita justo ese duplicado, que no está en el gold: el preflight sigue limpio y lo que salta es la huella de `source.json`.)
+
+- [ ] **Step 2: Run para verificar que falla**
+
+Run: `uv run pytest -p no:cacheprovider tests/test_benchmark_run.py -v -k "demo or reanudable or fuente or max_results"`
+Expected: FAIL (`ImportError: cannot import name 'run_benchmark'`).
+
+- [ ] **Step 3: Implementar** según Interfaces.
+
+- [ ] **Step 4: Run para verificar que pasa**
+
+Run: `uv run black . && uv run ruff check --fix . && uv run pytest -p no:cacheprovider tests/test_benchmark_run.py tests/test_benchmark_report.py tests/test_stop_after.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add revisia/benchmark/run.py tests/test_benchmark_run.py
+git commit -m "feat(benchmark): corridas por celda y réplica, reanudables con huella de la fuente; benchmark.json y benchmark.md (D6, D23)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Tarea F2.6: `revisia benchmark` (`revisia/cli.py`) y frontera por CLI
+
+**Files:**
+- Modify: `revisia/cli.py`: `_cmd_benchmark` justo **tras `_cmd_audit`** (antes que `_cmd_benchmark_report` de F₁); subparser `p_benchmark` justo **tras `p_audit`** (antes que `p_benchmark_report`); despacho justo **tras el de `audit`** en `main` (antes que el de `benchmark-report`). G₁ ancla los suyos en `export`.
+- Test: `tests/test_cli_benchmark.py` (nuevo).
+
+**Interfaces:**
+- Consumes: `load_panel` (PR-0 T13), `run_benchmark` (F2.5), `load_protocol`, `_print_preflight` (`cli.py:81`), `_run_guarded` (`cli.py:268`), `RunInterrupted`, `RunCancelled` (`run_context.py:64,83`).
+- Produces: `revisia benchmark <protocol_dir> --panel PANEL [--replicas N] [--out DIR] [--max N] [--mailto EMAIL]` (`--out` por defecto `benchmarks`; `--max` por defecto `DEFAULT_MAX_RESULTS`). `_cmd_benchmark(args) -> int`, con las excepciones en **este orden** (`PreflightError` es un `ValueError`):
+  1. `PreflightError` → `_print_preflight(exc.report)`, rc 2;
+  2. `RunInterrupted` → en stderr `f"⏸ Benchmark interrumpido en {exc.run_dir} ({exc.error}). {RELANZAR}"`, rc 3;
+  3. `RunCancelled` o `KeyboardInterrupt` → en stderr `f"⏹ Benchmark cancelado. {RELANZAR}"`, rc 130;
+  4. `ValueError` (panel inválido de `load_panel`, `protocol.yml` inválido, fuente distinta en la carpeta) → `f"error: {exc}"` en stderr, rc 2;
+  5. el resto de errores de configuración, delegando en `_run_guarded` (rc 2).
+  `RELANZAR = "Vuelve a lanzar la misma orden: las corridas completadas no se repiten."` (nunca `revisia run --resume`, que en una corrida de benchmark da `RunKindMismatchError`; fila n+19). Al terminar, rc 0 e imprime una línea por corrida (`f"{cell}-r{replica}: recall {recall:.3f} · llamadas {n_calls} · fallidos {n}"`, `—` sin recall), las rutas de `benchmark.json` y `benchmark.md` y la sugerencia `f"Agrega corpus con: revisia benchmark-report {carpeta}"`.
+
+- [ ] **Step 1: Tests que fallan** — crear `tests/test_cli_benchmark.py`:
+
+```python
+"""CLI `revisia benchmark` (spec 2026-10-18 §10.2, §16 criterio de cierre)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+import yaml
+from conftest import protocolo_benchmark, proveedor_auditoria
+
+from revisia import cli
+from revisia.orchestration import pipeline as pipeline_mod
+from revisia.orchestration.run_context import RunCancelled, RunInterrupted
+
+PANEL = {
+    "name": "panel-demo",
+    "replicas": 2,
+    "cells": [
+        {"name": "fake-a", "provider": "fake", "model": "fake-a"},
+        {"name": "fake-b", "provider": "fake", "model": "fake-b"},
+    ],
+}
+
+
+def _panel(tmp_path: Path, **cambios) -> str:
+    ruta = tmp_path / "panel.yml"
+    ruta.write_text(yaml.safe_dump({**PANEL, **cambios}), encoding="utf-8")
+    return str(ruta)
+
+
+def _argv(proto: Path, panel: str, out: Path) -> list[str]:
+    return ["benchmark", str(proto), "--panel", panel, "--out", str(out)]
+
+
+def test_benchmark_y_benchmark_report_de_punta_a_punta(
+    tmp_path: Path, monkeypatch, capsys: pytest.CaptureFixture
+) -> None:
+    monkeypatch.setattr(pipeline_mod, "build_provider", proveedor_auditoria)
+    proto = protocolo_benchmark(tmp_path)
+    out = tmp_path / "benchmarks"
+    assert cli.main(_argv(proto, _panel(tmp_path), out)) == 0
+    carpeta = out / f"{proto.name}-panel-demo"
+    assert (carpeta / "benchmark.json").is_file() and (carpeta / "benchmark.md").is_file()
+    salida = capsys.readouterr().out
+    assert "fake-a-r1: recall" in salida and "revisia benchmark-report" in salida
+    assert cli.main(["benchmark-report", str(carpeta)]) == 0  # §16: … → pooled/
+    assert (carpeta / "pooled" / "meta_analysis.json").is_file()
+
+
+@pytest.mark.parametrize("caso", ["panel-invalido", "base-con-api"])
+def test_benchmark_error_de_configuracion_sale_2(tmp_path: Path, capsys, caso: str) -> None:
+    proto = protocolo_benchmark(tmp_path)
+    panel = _panel(tmp_path, replicas=0) if caso == "panel-invalido" else _panel(tmp_path)
+    if caso == "base-con-api":
+        raw = yaml.safe_load((proto / "protocol.yml").read_text(encoding="utf-8"))
+        raw["databases"] = ["OpenAlex"]
+        (proto / "protocol.yml").write_text(yaml.safe_dump(raw), encoding="utf-8")
+    assert cli.main(_argv(proto, panel, tmp_path / "b")) == 2
+    err = capsys.readouterr().err
+    assert ("panel.yml" if caso == "panel-invalido" else "importación manual") in err
+    assert "Traceback" not in err and not (tmp_path / "b").exists()
+
+
+@pytest.mark.parametrize(
+    ("error", "rc", "marca"),
+    [
+        (RunInterrupted(Path("r"), "screening_ta", "429"), 3, "⏸ Benchmark interrumpido"),
+        (RunCancelled(Path("r"), registered=True), 130, "⏹ Benchmark cancelado"),
+        (KeyboardInterrupt(), 130, "⏹ Benchmark cancelado"),
+    ],
+    ids=["interrumpido", "cancelado", "ctrl-c"],
+)
+def test_benchmark_interrumpido_dice_que_se_relance_la_misma_orden(
+    tmp_path: Path, monkeypatch, capsys, error: BaseException, rc: int, marca: str
+) -> None:
+    def _cae(*_a, **_k):
+        raise error
+
+    monkeypatch.setattr("revisia.benchmark.run.run_pipeline", _cae)
+    proto = protocolo_benchmark(tmp_path)
+    assert cli.main(_argv(proto, _panel(tmp_path), tmp_path / "b")) == rc
+    err = capsys.readouterr().err
+    assert marca in err and "Vuelve a lanzar la misma orden" in err and "--resume" not in err
+```
+
+- [ ] **Step 2: Run para verificar que falla**
+
+Run: `uv run pytest -p no:cacheprovider tests/test_cli_benchmark.py -v`
+Expected: FAIL (`SystemExit: 2`: `invalid choice: 'benchmark'`).
+
+- [ ] **Step 3: Implementar** según Interfaces.
+
+- [ ] **Step 4: Run para verificar que pasa, con la suite**
+
+Run: `uv run black . && uv run ruff check --fix . && uv run pytest -p no:cacheprovider tests/test_cli_benchmark.py tests/test_cli_benchmark_report.py -v && uv run pytest -p no:cacheprovider -n auto -m "not cronometrado" -rxX`
+Expected: PASS; XFAIL = los anotados en F2.1.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add revisia/cli.py tests/test_cli_benchmark.py
+git commit -m "feat(cli): revisia benchmark (preflight rc 2, interrupción y Ctrl+C con la orden de relanzar)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Supuestos revocables de F₂ (filas propuestas para §19)
+
+A continuación de las de F₁ (`n`…`n+12`):
+
+```
+| n+13 | §4.1, §10.2 carpeta del benchmark | `benchmarks/<slug>-<panel.name>/`, sin fecha: volver a lanzar la misma orden la reanuda | Plan PR-F (F₂) |
+| n+14 | §10.2 protocolo de celda | `protocol.model_copy` (`cell_protocol`) se materializa en `benchmarks/…/protocols/<celda>/` con `slug:` explícito y `llm.screening_ta` de la celda: la instantánea `00_protocol/` de cada corrida dice el modelo que de verdad cribó, y `--resume` la verifica | Plan PR-F (F₂) |
+| n+15 | §10.2 `runs/<celda>-r<k>/` | `RunContext.create_at(run_dir, slug, timestamp)` con la hora UTC real: la carpeta lleva celda y réplica, `run.json.slug` sigue siendo el del protocolo | Plan PR-F (F₂) |
+| n+16 | D23, relación 31 | Una corrida `kind: benchmark` termina con `status: completed`, `stage: screening_ta`, sin `decisions_ledger.jsonl`, `review_request.yml`, `deliverable/` ni `manifest.yml`; su entorno está en `run.json` y en `benchmark.json`. Una corrida se salta al relanzar solo si está `completed` en `screening_ta` | Plan PR-F (F₂) |
+| n+17 | §4.2 `BenchmarkResult.protocol` | `corpus_sha256` y `gold_sha256` salen de las corridas: `canonical_sha256` de `[database, file_sha256]` de las entradas `imported` de `01_search/log.json` y sha256 de `00_protocol/gold.yml`, iguales en todas (si no, error); `n_records` = registros tras el dedup de la primera corrida | Plan PR-F (F₂, revisión) |
+| n+18 | §10.1 figuras | El primer desenlace agregado conserva `assets/forest.png`/`funnel.png`; los siguientes, `forest-<i>.png`/`funnel-<i>.png` (índice, nunca el nombre); se borran las figuras viejas antes de escribir; `document.py` pone el nombre del desenlace en el pie, leído de `meta_analysis.json` | Plan PR-F (F₂) |
+| n+19 | §10.2 CLI | `revisia benchmark` interrumpido (rc 3) o cancelado (rc 130) dice «vuelve a lanzar la misma orden», no `revisia run --resume`; reanudar una corrida con otro `kind` es `RunKindMismatchError` (rc 2), lanzado antes de tocar `run.json` | Plan PR-F (F₂) |
+| n+20 | §10.1 | `MetaAnalysisResult.n_studies` (`study_id` distintos agregados) sustituye a las propiedades de compatibilidad `k`/`studies` de F₁, que F2.2 retira; alimenta `total_studies_ma` y `metodologia.md` (fila n+9). `render_methods` pierde `included_ids` | Plan PR-F (F₂) |
+| n+21 | §16, tests | La corrida de auditoría de `conftest.py` declara los efectos de sus tres incluidos (el caso de D16): su `deliverable` pasa de WARN a PASS y `total_studies_ma` de 4 a 3. La corrida sin registros pasa a no tener `effects.yml`. Único `xfail(strict=True)` de F₂ hasta G₂: `test_pipeline_fake_con_humano_audita_sin_fail` (el demo) | Plan PR-F (F₂) |
+| n+22 | §10.1 `meta_analisis.md` | La sección «Efectos excluidos del análisis» solo aparece si hay algo que declarar: sin exclusiones, el Markdown es el que renderiza el auditor de hoy | Plan PR-F (F₂) |
+| n+23 | §15 solapes | F₂ toca ficheros de A y B: `snapshot.py` (`kind` en `ensure_snapshot`, `RunKindMismatchError`), `run_context.py` (`create_at`) y `llm/preflight.py` (`until`); solo añade parámetros con default y clases, sin cambiar lo que esas pistas fijaron | Plan PR-F (F₂, revisión) |
+| n+24 | §10.2 preflight | Con `stop_after`, el preflight general solo mira las etapas hasta `screening_ta` (`preflight(..., until=)`), y en un benchmark corre por celda antes de crear nada. `databases` vacío es error en un benchmark | Plan PR-F (F₂, revisión) |
+| n+25 | §10.2 reanudación | Al crear la carpeta del benchmark se guarda `source.json` (huella del panel, del protocolo con su gold y del corpus de `imported/`); relanzar con otra fuente en la misma carpeta es rc 2 | Plan PR-F (F₂, revisión) |
+| n+26 | relación 31 (G₂) | Propuesta: el auditor busca `../../benchmark.json` desde la corrida y comprueba que la referencia y copia sus métricas; si no existe (corrida suelta), WARN, no FAIL | Revisión de F₂ |
+| n+27 | §11.2 (G₂) | Propuesta: en una corrida `kind: benchmark`, `environment`, `prompts` y `timing` se aplican como en una revisión; `manifest` queda N/A (no hay manifiesto) | Revisión de F₂ |
+| n+28 | §10.2 Wilson | El IC de Wilson de las réplicas agregadas las trata como independientes, y lo declara `benchmark.md` (repiten el mismo corpus: es optimista) | Plan PR-F (F₂, revisión) |
+| n+29 | relación 29 | Se define sobre el **multiconjunto** de pares `(study_id, outcome)`, no sobre el conjunto de `study_id`: agregados + excluidos == efectos de la instantánea, contando repeticiones (con `multiple_per_study` un estudio aparece varias veces). `included_without_effect` va ordenado | Plan PR-F (F₂, revisión) |
+```
+
+---
+
+### Tarea F2.7: Integración de PR-F (controlador)
+
+**Files:**
+- Modify: `CHANGELOG.md` (`## [Unreleased]`: `### Added`, `### Changed`, `### Cambios incompatibles`).
+- Modify: `docs/superpowers/specs/2026-10-18-ola-2-remediacion-design.md` (§19).
+
+**Interfaces:** ninguna de código. Deja PR-F abierta sobre `feat/ola2-rob-por-herramienta`.
+
+- [ ] **Step 1: CHANGELOG.** En `### Added`:
+
+```
+- **Meta-análisis por desenlace, ligado a los incluidos** (spec Ola 2 §10.1; D16): cada efecto
+  de `effects.yml` declara su `outcome` y se agrega por desenlace; solo cuentan los de estudios
+  incluidos tras el texto completo (los demás van a `08_meta/excluded_effects.json` con los
+  incluidos sin efecto); intervalo de predicción (Higgins 2009, t con k − 2 gl, k ≥ 3), Egger solo
+  con k ≥ 10 (Sterne 2011), subgrupos con Q entre grupos, detección de duplicados y
+  `random_method: HKSJ` opcional. Unidad de análisis: dos efectos del mismo estudio en un
+  desenlace son error salvo `multiple_per_study`. Forest y funnel por desenlace (funnel con k ≥ 10).
+- **`revisia benchmark`** (D6, D23): un panel de modelos (`panel.yml`) criba un corpus congelado
+  (`imported/`) contra `gold.yml`; una corrida `kind: benchmark` por celda y réplica, que se
+  detiene tras T/A sin gates ni entregable; `benchmark.json`/`benchmark.md` con recall,
+  lost-evidence, MCC, WMCC, κ e IC de Wilson. Reanudable relanzando la orden.
+- **`revisia benchmark-report`**: agrega uno o más `benchmark.json` en `logit(recall)` por celda,
+  con la unidad de análisis por corpus (`--replicas-as-effects`, exploratorio).
+```
+
+En `### Changed`: `08_meta/meta_analysis.json` es `MetaAnalysisResult` v2 (`outcomes[]`, `not_pooled`, `excluded`, `random_method`) y existe siempre que haya `effects.yml`; `effects_metafor.csv` gana las columnas `outcome` y `subgroup`; `metodologia.md` declara el filtrado por incluidos; `total_studies_ma` cuenta estudios distintos; `run.json` lleva `kind`.
+
+En `### Cambios incompatibles`: un `effects.yml` sin `outcome` es rc 2 con el mensaje de migración; dos efectos del mismo estudio en un desenlace, rc 2 sin `multiple_per_study`; cada desenlace necesita k ≥ 2 al cargar; Egger ya no se calcula con k < 10 y el funnel no se dibuja; el demo deja de producir `funnel.png`; `render_methods` pierde `included_ids`.
+
+- [ ] **Step 2: §19 del spec.** Añadir **a continuación de la última fila existente**, con numeración consecutiva, las filas `n`…`n+12` de «Supuestos revocables de F₁» (la `n+8` según lo que haya decidido el arquitecto en el Step 0 de la Tarea 8), las `n+13`…`n+29` de F₂ y las que haya producido la revisión por tarea. Si el coordinador ya registró alguna, no se repite.
+
+- [ ] **Step 3: Commit de documentación.**
+
+```bash
+git add CHANGELOG.md docs/superpowers/specs/2026-10-18-ola-2-remediacion-design.md
+git commit -m "docs: CHANGELOG y desviaciones (§19) de PR-F" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+- [ ] **Step 4: Verificación completa, en las tres versiones.**
+
+```bash
+uv run black . && uv run ruff check --fix .
+for PY in 3.11 3.12 3.13; do
+  uv run --python "$PY" --extra dev --extra search --extra meta \
+    pytest -p no:cacheprovider -q -n auto -m "not cronometrado" -rxX || exit 1
+  uv run --python "$PY" --extra dev --extra search --extra meta \
+    pytest -p no:cacheprovider -q -m cronometrado || exit 1
+done
+uv run --extra dev --extra search --extra meta \
+  pytest -p no:cacheprovider -q -n auto --cov --cov-report=term -m "not cronometrado"
+uv run ruff check . && uv run ruff format --check . && uv run black --check . && uv lock --check
+git diff --stat origin/feat/ola2-rob-por-herramienta -- revisia/audit | tail -1
+grep -rnE "(meta_result|res|meta|result|calculo)\.(k|studies)\b|from test_" revisia tests
+```
+
+Expected:
+- Verde en las tres versiones; XFAIL = los estrictos de A, C, D y E más `test_pipeline_fake_con_humano_audita_sin_fail`; ningún XPASS.
+- Cobertura ≥ 90 %.
+- Lint limpio.
+- **Ningún cambio en `revisia/audit/`**: la penúltima orden no imprime nada.
+- El último `grep` no devuelve nada (salvo nombres de variable que sean un `OutcomeMeta`; revisarlos).
+- De punta a punta (§16): `revisia benchmark` sobre el demo importado con dos celdas fake → `benchmark.json`; `benchmark-report` → `pooled/` (lo cubre `tests/test_cli_benchmark.py`).
+- Anota el recuento y la lista de XFAIL.
+
+- [ ] **Step 5: Publicar y abrir la PR** (base `feat/ola2-rob-por-herramienta`, §15).
+
+```bash
+git push -u origin feat/ola2-meta-benchmark
+gh pr create --base feat/ola2-rob-por-herramienta --head feat/ola2-meta-benchmark --title "Ola 2 · PR-F: meta-análisis por desenlace ligado a los incluidos, revisia benchmark y benchmark-report" --body "$(cat <<'EOF'
+## Qué cierra
+
+C3 en la parte del benchmark, D6, D16 y D23 (spec `docs/superpowers/specs/2026-10-18-ola-2-remediacion-design.md`, §10).
+
+## Qué cambia
+
+- `meta_analyze` v2 por desenlace: intervalo de predicción, Egger solo con k ≥ 10, subgrupos con Q entre grupos, duplicados y HKSJ opcional, con la t de Student en Python puro (los números no dependen de scipy).
+- `effects.yml` v2: `outcome` obligatorio (rc 2 con mensaje de migración), `multiple_per_study`, `random_method`, unidad de análisis.
+- El pipeline agrega solo los efectos de los incluidos y escribe `08_meta/excluded_effects.json`; `metodologia.md` y `meta_analisis.md` lo declaran; figuras por desenlace con su nombre.
+- `run_pipeline(..., stop_after="screening_ta", kind="benchmark")`, preflight hasta T/A; `revisia benchmark` (con `source.json`) y `revisia benchmark-report`.
+
+## Para PR-G₂
+
+- Relación 29 (multiconjunto `(study_id, outcome)`): `meta_analysis.json` == `meta_analyze(efectos ∩ incluidos, measure, random_method=…)` con `excluded = len(excluded_effects.excluded)`; agregados (`outcomes[].studies` y `not_pooled[].study_ids`, con su desenlace) + excluidos == efectos de la instantánea; `included_without_effect` == `sorted(incluidos − estudios con efecto)`; sin `multiple_per_study.allowed`, `unit_of_analysis_violations == []`; `prediction_interval is None ⇔ k < 3`; `egger is None ⇔ k < 10` o `egger_note` de precisión constante; `total_studies_ma == n_studies`; `reason == "unit_of_analysis"` es FAIL.
+- Relación 31: `run.json.kind == "benchmark"` ⇒ sin `decisions_ledger.jsonl`, `review_request.yml`, `deliverable/` ni `manifest.yml`; con `03_screening/metrics.json`; `../../benchmark.json` (si existe) referencia la corrida y copia su `metrics.json` tal cual.
+- `derive_state`: `kind: benchmark` → `status: benchmark`, `reached` hasta `screening_ta`.
+- Tests del auditor que edita F2.1 (valores nuevos, no `xfail`): `tests/test_auditor_meta_y_estados.py:112`, `tests/test_audit.py:33-34`, `tests/test_audit_flujo.py:1041-1048`. `tests/conftest.py`: `protocolo_auditoria` con `EFECTOS_AUDITORIA`, `protocolo_auditoria_sin_efectos` para la corrida sin registros.
+- XFAIL estricto que G₂ vuelve verde (relación 29): `tests/test_pipeline_fake.py::test_pipeline_fake_con_humano_audita_sin_fail`.
+
+## Cambios incompatibles
+
+Ver CHANGELOG.
+
+## Verificación
+
+<recuento y XFAIL de la Tarea F2.7, Step 4>
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+EOF
+)"
+```
+
+Expected: `gh` imprime la URL de la PR; `gh pr view --json baseRefName -q .baseRefName` da `feat/ola2-rob-por-herramienta`.
+
+---
+
+### Interfaces para G₂ (relaciones 29 y 31)
+
+```python
+# revisia/meta_analysis.py (además del bloque de F₁; k y studies ya no existen)
+class MetaAnalysisResult(BaseModel):
+    ...
+    @property
+    def n_studies(self) -> int: ...        # study_id distintos en outcomes[].studies
+def unit_of_analysis_violations(effects) -> list[UnitViolation]: ...
+def meta_analyze(effects, measure, *, random_method="DL") -> MetaAnalysisResult: ...
+
+# revisia/orchestration/pipeline.py
+def _meta_analysis(run, included_ids: Sequence[str]
+                   ) -> tuple[MetaAnalysisResult | None, ExcludedEffectsFile | None, str]: ...
+def run_pipeline(protocol, protocol_dir, run_ctx, *, ...,
+                 stop_after: Literal["screening_ta"] | None = None,
+                 kind: RunKind = "review") -> PipelineResult: ...
+# _run_stages: … gate rob → apply_domain_edits → _meta_analysis(run, ids de los incluidos)
+#   → _synthesize_and_verify → _write_deliverables(..., meta_exclusions=…) → gate reporte.
+# Con stop_after: tras _screen_ta, finish("completed", "screening_ta") y fin, sin gate.
+
+# revisia/orchestration/snapshot.py
+class RunKindMismatchError(ProtocolMismatchError): ...
+def ensure_snapshot(protocol_dir, run_ctx, *, max_results, mailto, kind: RunKind = "review"): ...
+
+# revisia/orchestration/run_context.py
+class RunContext:
+    @classmethod
+    def create_at(cls, run_dir, *, slug: str, timestamp: str) -> RunContext: ...
+
+# revisia/llm/preflight.py
+def preflight(protocol, protocol_dir, *, context, ...,
+              until: str | None = None) -> PreflightReport: ...
+
+# revisia/exports/forest.py, methods.py
+def render_forest_markdown(result, *, display="raw",
+                           exclusions: ExcludedEffectsFile | None = None) -> str: ...
+def render_methods(*, ..., meta_result=None, meta_exclusions=None, multiple_per_study=None,
+                   ...) -> str: ...                     # sin included_ids
+
+# revisia/benchmark/run.py
+def corpus_fingerprint(imported_dir: Path) -> str: ...
+def cell_protocol(protocol, cell) -> ReviewProtocol: ...
+def benchmark_preflight(protocol, protocol_dir, panel, *, mailto=None, env=None,
+                        find_spec=None, which=None) -> PreflightReport: ...
+def materialize_cell_protocol(protocol_dir, cell, slug, dest) -> tuple[Path, ReviewProtocol]: ...
+def benchmark_dir(out_root, protocol, panel) -> Path: ...
+class BenchmarkSource(BaseModel): ...                  # source.json
+def run_benchmark(protocol, protocol_dir, panel, *, out_root="benchmarks", replicas=None,
+                  max_results=DEFAULT_MAX_RESULTS_BENCHMARK, mailto=None
+                  ) -> tuple[Path, BenchmarkResult]: ...
+def render_benchmark_md(result: BenchmarkResult, panel_name: str) -> str: ...
+```
+
+Para G₂, por relación:
+- **29**: recalcular con un `_meta_analysis`-equivalente sin escribir: `kept`/`excluded`/`included_without_effect` desde `00_protocol/effects.yml` y los incluidos efectivos (`04_fulltext/decisions.json`, `final_label == "include"`); comparar `meta_analysis.json` campo a campo como hoy (`_meta_distinto`, ignorando `p_value`/`p_method`) y `excluded_effects.json` entero; `meta_analisis.md` == `render_forest_markdown(calculo, display=…, exclusions=…)`; `total_studies_ma`/`total_reports_ma` == `n_studies`; el WARN `_meta_sin_incluidos` deja de tener sentido (el pipeline ya filtra) y pasa a WARN de `multiple_per_study.allowed` y de `duplicates` (§11.2).
+- **31**: con `run.json.kind == "benchmark"`, mensaje de D23 en `provenance` y N/A sin cascada en el resto (§11.2), con lo que comprueba la tabla de arriba.
+- **`derive_state`**: `kind: benchmark` → `status: benchmark`, `reached` hasta `screening_ta`; `publishable` es `False`.
+- **Tests**: el XFAIL de F2.1 vuelve a verde; corridas para los checks en `tests/test_benchmark_run.py` (`run_benchmark` con `proveedor_auditoria`) y `tests/test_meta_pipeline.py` (`_con_efectos`).
+
+**CAMBIO tras revisión** (después de que el redactor de G₂ consumiera este bloque):
+1. Relación 29 sobre el **multiconjunto** `(study_id, outcome)`: agregados + excluidos == efectos de la instantánea contando repeticiones, no unión de conjuntos de ids (fila n+29).
+2. `included_without_effect` va **ordenado** (`sorted`), no en el orden de los incluidos.
+3. `k` y `studies` se retiran en F2.2 (antes decía F2.1); `render_methods` pierde `included_ids`.
+4. `BenchmarkResult.protocol.corpus_sha256` y `gold_sha256` salen de las corridas (`01_search/log.json` y `00_protocol/gold.yml`), no de la carpeta del protocolo; la huella de la fuente va aparte, en `benchmarks/…/source.json` (filas n+17 y n+25).
+5. Relación 31: `benchmark.json` se busca en `../../benchmark.json`; sin él, WARN (propuesta, fila n+26). `environment`, `prompts` y `timing` se aplican a una corrida de benchmark y `manifest` es N/A (propuesta, fila n+27).
+6. `preflight(..., until=)` nuevo (fila n+24); `RunKindMismatchError` se lanza en `run_pipeline` antes de tocar `run.json`, no en `ensure_snapshot`.
+7. La corrida de benchmark se salta al relanzar solo con `status == completed` y `stage == screening_ta`; `n_calls` cuenta todos los intentos.
+
+### Self-review del plan (F₁ + F₂)
+
+- **Cobertura de §10:** 10.1 completo: `meta_analyze` v2 (F₁ T3–T6), `_meta_analysis(run, included_ids)` con `excluded_effects.json` e `included_without_effect` (F2.1), declaraciones en `meta_analisis.md` y `metodologia.md` (F2.2), k < 2 tras filtrar con `outcomes: []` (F2.1, F2.2), `EffectsFile` v2 (F₁ T7), CSV de metafor y figuras por desenlace (F₁ T3, F2.2). 10.2 completo: CLI `benchmark` (F2.6) y `benchmark-report` (F₁ T9); preflight de corpus congelado, `databases` no vacío y manual, gold de dos clases con ids en el corpus y `screening_ta` sin ensemble (F2.4); `kind: benchmark`, `stop_after`, preflight hasta T/A, `metrics.json`, reanudable con huella de la fuente, `n_failed_records` (F2.3, F2.5); `benchmark.json`/`benchmark.md` con Wilson (F2.5); `pooled/` con la advertencia de unidad de análisis (F₁ T8). El check del auditor para `kind: benchmark` es de G₂ (contrato arriba). Tests de §10 con su tarea: C3 (F₁ T7), no incluido → `excluded_effects` y k = 1 tras filtrar (F2.1, F2.2), PI de `dat.bcg` (F₁ T4), Egger con k = 9 (F₁ T3), HKSJ (F₁ T5), demo importado 2 × 2 (F2.5 y F2.6), `benchmark-report` sobre dos benchmarks (F₁ T8). Relaciones 29 y 31 desde el lado productor (F2.1, F2.3, F2.5) y su contrato para G₂.
+- **Firmas verificadas:** las de F₁ contra `c1af7c3` (Self-review de F₁). Las de F₂ contra el árbol (`pipeline.py:153-167,224-345,447-505,885-898,1073-1201,1234-1509`; `snapshot.py:106-177`; `run_context.py:64-145`; `llm/preflight.py:92-133,211,304-410,479-522`; `agents/search_backends.py:210-245`; `schemas/artifacts.py:181-201`; `config.py:277-299`; `cli.py:61-93,165,268-304,527-548,609-797`; `exports/document.py:208-211,471-478`; `exports/methods.py:40-63`; `metrics.py:121`; `tests/conftest.py:47,75-152,206-345`; `tests/test_audit_aritmetica_ola1.py:905-908,1089,1435`; `tests/test_audit_flujo.py:1041-1060`; `tests/test_pipeline_fake.py:390-402`; `tests/test_entregable_honesto.py:69-120`; `tests/test_meta_analysis.py:38`) y contra los bloques «Estado en que … deja el pipeline» de C, D y E, las Interfaces de A (`ensure_snapshot`, `collect_environment`, `prompt_fingerprint`) y B (Tarea 7). `RunInfo.kind` existe desde PR-0 y nadie lo escribía antes de F2.3.
+- **Consistencia de tipos:** `MetaAnalysisResult` (F₁ T3) → `n_studies` (F2.1) → sin `k`/`studies` (F2.2); `ExcludedEffectsFile` (PR-0) → F2.1, F2.2; `run_pipeline(stop_after, kind)`, `RunContext.create_at`, `preflight(until=)` (F2.3) → F2.4, F2.5; `benchmark_preflight`/`cell_protocol`/`materialize_cell_protocol` (F2.4) → F2.5; `run_benchmark` (F2.5) → F2.6. Ayudantes de test: `escribir_benchmark` en `tests/fakes.py` (F₁ T8) y `protocolo_benchmark` en `tests/conftest.py` (F2.4); ningún test importa otro test.
+- **Lo que queda abierto a propósito:** la fila n+8 (subgrupos del benchmark) espera el OK del arquitecto (F₁ T8, Step 0); las filas n+26 y n+27 son propuestas para G₂.
+- **Proporción:** los bloques de código son tests con los valores del spec y del `conftest.py` real, más el resumen de firmas para G₂; los cuerpos de función solo se describen donde el spec no los fija (filtrado, materialización, reanudación, huellas).
