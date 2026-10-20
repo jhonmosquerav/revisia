@@ -94,7 +94,7 @@ domains:
         answers: ["Y", "PY", "PN", "N", "NI"]
       - id: "4.2"
         text: Si las hubo, ¿estaban desequilibradas y pudieron afectar el resultado?
-        answers: ["Y", "PY", "PN", "N", "NI"]
+        answers: ["Y", "PY", "PN", "N", "NI", "NA"]
   - id: D5
     name: Sesgo por datos faltantes (bias due to missing data)
     signalling_questions:
