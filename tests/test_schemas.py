@@ -7,6 +7,7 @@ from typing import get_args
 import pytest
 from pydantic import ValidationError
 
+from revisia.meta_analysis import meta_analyze
 from revisia.schemas import (
     ExtractionField,
     ExtractionRecord,
@@ -14,6 +15,15 @@ from revisia.schemas import (
     ResearchQuestion,
     ScreeningVote,
     VerificationReport,
+)
+from revisia.schemas.effects import (
+    DuplicateEffect,
+    EffectInput,
+    ExcludedEffect,
+    ExcludedEffectsFile,
+    MultiplePerStudy,
+    PredictionInterval,
+    RandomMethod,
 )
 from revisia.schemas.rob import RoBAssessment, RoBDomain, RoBTool
 from revisia.schemas.verification import CitationCheck, JudgeInfo, UncitedClaim
@@ -176,3 +186,35 @@ def test_verification_report_v2_coherencia_de_modo_y_cifras_sin_cita() -> None:
     assert ok.judge is not None and ok.judge.model == "glm"
     with pytest.raises(ValidationError):
         CitationCheck(claim="x" * 601, cited_id="r")
+
+
+def test_effect_input_v2_outcome_y_subgrupo_opcionales_en_el_modelo() -> None:
+    e = EffectInput(study_id="s", yi=0.1, vi=0.01)
+    assert (e.outcome, e.subgroup) == (None, None)
+    con = EffectInput(study_id="s", yi=0.1, vi=0.01, outcome="recall", subgroup="c1")
+    assert con.outcome == "recall"
+
+
+def test_modelos_hoja_del_meta_analisis_v2() -> None:
+    assert set(get_args(RandomMethod)) == {"DL", "HKSJ"}
+    with pytest.raises(ValidationError):
+        MultiplePerStudy(allowed=True, justification="")
+    assert MultiplePerStudy(allowed=False, justification="").allowed is False
+    excl = ExcludedEffectsFile(
+        excluded=[ExcludedEffect(study_id="s", outcome="o", reason="not_included")],
+        included_without_effect=["t"],
+    )
+    assert excl.schema_version == 2
+    with pytest.raises(ValidationError):
+        ExcludedEffect(study_id="s", reason="porque")
+    with pytest.raises(ValidationError):
+        PredictionInterval(low=0.0, high=1.0, df=0)
+    with pytest.raises(ValidationError):
+        DuplicateEffect(study_ids=["solo"], yi=0.0, vi=1.0)
+
+
+def test_meta_analysis_result_lleva_schema_version_2() -> None:
+    resultado = meta_analyze(
+        [EffectInput(study_id=f"s{i}", yi=0.1 * i, vi=0.04) for i in range(1, 4)], "precomputed"
+    )
+    assert resultado.schema_version == 2

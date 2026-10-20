@@ -16,6 +16,7 @@ from statistics import NormalDist
 
 from pydantic import BaseModel
 
+from revisia.schemas.artifacts import ARTIFACT_SCHEMA_VERSION
 from revisia.schemas.effects import EffectInput, Measure
 
 _Z = NormalDist()
@@ -96,6 +97,7 @@ class EggerTest(BaseModel):
 class MetaAnalysisResult(BaseModel):
     """Resultado completo del meta-análisis."""
 
+    schema_version: int = ARTIFACT_SCHEMA_VERSION
     k: int
     measure: str
     log_scale: bool

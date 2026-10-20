@@ -15,9 +15,13 @@ from __future__ import annotations
 import math
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
+
+from revisia.schemas.artifacts import ARTIFACT_SCHEMA_VERSION
 
 Measure = Literal["precomputed", "logOR", "MD", "SMD"]
+RandomMethod = Literal["DL", "HKSJ"]
+ExcludedReason = Literal["not_included", "unit_of_analysis", "invalid"]
 
 
 class EffectInput(BaseModel):
@@ -25,6 +29,11 @@ class EffectInput(BaseModel):
 
     study_id: str
     label: str | None = None
+    # v2 (D16): desenlace y subgrupo del efecto. ``outcome`` es opcional en el modelo porque
+    # ``examples/demo-mini-review/effects.yml`` y los tests de ``meta_analyze`` no lo traen;
+    # PR-F lo exige en ``EffectsFile`` v2, que es donde el usuario ve el mensaje de migración.
+    outcome: str | None = None
+    subgroup: str | None = None
 
     # Precomputado.
     yi: float | None = None
@@ -91,3 +100,54 @@ class EffectInput(BaseModel):
         g = j * d
         vi = (n1 + n0) / (n1 * n0) + g**2 / (2 * (n1 + n0))
         return g, vi
+
+
+class MultiplePerStudy(BaseModel):
+    """Declaración del protocolo sobre varios efectos por estudio (D16).
+
+    Dos efectos del mismo estudio y desenlace no son independientes; el Cochrane Handbook
+    (§23.3) pide decidir la unidad de análisis y justificarla. Por eso, si ``allowed``, la
+    justificación no puede ir vacía.
+    """
+
+    allowed: bool
+    justification: str
+
+    @model_validator(mode="after")
+    def _justificacion(self) -> MultiplePerStudy:
+        if self.allowed and not self.justification.strip():
+            raise ValueError("allowed=true exige una justificación (Cochrane Handbook §23.3).")
+        return self
+
+
+class ExcludedEffect(BaseModel):
+    """Efecto que quedó fuera del meta-análisis y por qué (D16)."""
+
+    study_id: str
+    outcome: str | None = None
+    reason: ExcludedReason
+    detail: str | None = None
+
+
+class ExcludedEffectsFile(BaseModel):
+    """``08_meta/excluded_effects.json``: lo que no entró y los incluidos sin efecto (D16)."""
+
+    schema_version: int = ARTIFACT_SCHEMA_VERSION
+    excluded: list[ExcludedEffect] = Field(default_factory=list)
+    included_without_effect: list[str] = Field(default_factory=list)
+
+
+class PredictionInterval(BaseModel):
+    """Intervalo de predicción del efecto aleatorio, con sus grados de libertad."""
+
+    low: float
+    high: float
+    df: int = Field(ge=1)
+
+
+class DuplicateEffect(BaseModel):
+    """Grupo de estudios con el mismo ``(yi, vi)``: posible doble conteo (D16)."""
+
+    study_ids: list[str] = Field(min_length=2)
+    yi: float
+    vi: float
