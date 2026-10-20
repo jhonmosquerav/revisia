@@ -7,6 +7,12 @@ etiqueta según palabras clave del prompt, puede simular un 429 en la llamada
 ``k`` y cuenta las llamadas, para que los tests de reanudación (A9) puedan
 afirmar que nada se llama dos veces.
 
+Ola 2 (spec 2026-10-18 §4.4): ``fail_at`` lanza ``TransientCallError`` y
+``fail_deterministic_at`` lanza ``DeterministicCallError`` (D9); ``judge``
+guioniza el veredicto de grounding por palabra clave de la afirmación;
+``extraccion`` fija el valor de cada campo del formulario; ``rob`` fija el
+juicio por dominio (y el global con ``"overall"``).
+
 Los ``fetch_fn`` de prueba sustituyen la recuperación de texto completo, que
 en la Ola 1 sigue PRISMA estricto (D2): sin ellos, ningún registro de prueba
 tiene texto en abierto y nada llega a extracción.
@@ -26,10 +32,13 @@ from typing import TypeVar, get_args
 
 from pydantic import BaseModel
 
+from revisia.agents.extraccion import _ExtractionOut
 from revisia.agents.fulltext import FullText
-from revisia.llm.base import LLMRequest, LLMResponse
+from revisia.agents.rob import _RoBOut
+from revisia.llm.base import DeterministicCallError, LLMRequest, LLMResponse, TransientCallError
 from revisia.llm.providers.fake import _fabricate_model
 from revisia.provenance.runmeta import RunMeta, sha256_text
+from revisia.rag.grounding import GroundingVerdict
 from revisia.schemas.records import SearchRecord
 from revisia.schemas.screening import ScreeningLabel
 
@@ -55,9 +64,23 @@ class ScriptedProvider:
     Attributes:
         model: modelo que declara en ``RunMeta.model``.
         fail_at: número de llamada (1, 2, …) que lanza
-            ``RuntimeError("429 Too Many Requests")`` en vez de responder; las
-            demás responden con normalidad. ``None`` = nunca falla; un valor
-            menor que 1 es un error (``ValueError``).
+            ``TransientCallError("429 Too Many Requests")`` (subclase de
+            ``RuntimeError``) en vez de responder; las demás responden con
+            normalidad. ``None`` = nunca falla; un valor menor que 1 es un error
+            (``ValueError``).
+        fail_deterministic_at: número de llamada (desde 1) que lanza
+            ``DeterministicCallError`` (400, contexto excedido, ``attempts=1``).
+            Puede convivir con ``fail_at`` en llamadas distintas; si coinciden,
+            gana el determinista.
+        judge: palabra clave → ``grounded`` para ``GroundingVerdict``. Se busca
+            (sin distinguir mayúsculas) en la afirmación del prompt; gana la
+            primera del dict que aparezca; sin coincidencia, ``grounded=False``
+            (fail-closed). ``None`` = veredicto fabricado (``grounded=True``).
+        extraccion: clave del formulario → valor (``None`` = no encontrado), en
+            el orden del dict. ``None`` = salida fabricada.
+        rob: dominio → juicio, más ``"overall"`` para el global (por defecto
+            ``unclear``). Indexado por nombre de dominio: forma interina que E1.6
+            cambiará a id (§19 fila 10). ``None`` = salida fabricada.
         calls: llamadas recibidas (``complete`` + ``structured``), incluida la
             que falla.
         prompts: prompt de cada llamada, en orden (para afirmar qué se cribó).
@@ -73,6 +96,10 @@ class ScriptedProvider:
         model: str = "fake-guion",
         *,
         fail_at: int | None = None,
+        fail_deterministic_at: int | None = None,
+        judge: Mapping[str, bool] | None = None,
+        extraccion: Mapping[str, str | None] | None = None,
+        rob: Mapping[str, str] | None = None,
         palabras: Mapping[str, ScreeningLabel] | None = None,
         criterio_exclusion: str = "fuera de alcance",
         sintesis: str | None = None,
@@ -81,7 +108,15 @@ class ScriptedProvider:
         # se dispararía y el test pasaría sin haber probado la reanudación.
         if fail_at is not None and fail_at < 1:
             raise ValueError(f"fail_at cuenta llamadas desde 1; recibido {fail_at}")
+        if fail_deterministic_at is not None and fail_deterministic_at < 1:
+            raise ValueError(
+                f"fail_deterministic_at cuenta llamadas desde 1; recibido {fail_deterministic_at}"
+            )
         self.model = model
+        self.fail_deterministic_at = fail_deterministic_at
+        self.judge = None if judge is None else dict(judge)
+        self.extraccion = None if extraccion is None else dict(extraccion)
+        self.rob = None if rob is None else dict(rob)
         self.sintesis = sintesis
         self.fail_at = fail_at
         self.palabras: dict[str, ScreeningLabel] = dict(
@@ -102,8 +137,12 @@ class ScriptedProvider:
     def _llamar(self, req: LLMRequest) -> None:
         self.calls += 1
         self.prompts.append(req.prompt)
+        if self.fail_deterministic_at is not None and self.calls == self.fail_deterministic_at:
+            raise DeterministicCallError(
+                "400 Bad Request: el contexto excede el límite del modelo", attempts=1
+            )
         if self.fail_at is not None and self.calls == self.fail_at:
-            raise RuntimeError("429 Too Many Requests")
+            raise TransientCallError("429 Too Many Requests")
 
     def _meta(self, req: LLMRequest, text: str) -> RunMeta:
         return RunMeta(
@@ -123,8 +162,47 @@ class ScriptedProvider:
         text = self.sintesis or "Síntesis de prueba (proveedor con guion · sin contenido real)."
         return LLMResponse(text=text, meta=self._meta(req, text))
 
+    def _veredicto(self, prompt: str) -> dict:
+        """Veredicto de grounding guionizado por palabra clave (fail-closed)."""
+        assert self.judge is not None
+        inicio = prompt.find("AFIRMACIÓN:")
+        fin = prompt.find("TEXTO FUENTE CITADO:")
+        if inicio != -1 and fin > inicio:
+            afirmacion = prompt[inicio + len("AFIRMACIÓN:") : fin]
+            fuente = prompt[fin + len("TEXTO FUENTE CITADO:") :]
+        else:
+            afirmacion, fuente = prompt, prompt
+        texto = afirmacion.lower()
+        for palabra, grounded in self.judge.items():
+            if palabra.lower() in texto:
+                cita = None
+                if grounded:
+                    cita = fuente.strip().split("\n\n")[0].split(". ")[0].strip() or None
+                return {"grounded": grounded, "support_quote": cita, "reason": f"guion: {palabra}"}
+        return {"grounded": False, "support_quote": None, "reason": "guion: sin palabra clave"}
+
     def structured(self, req: LLMRequest, schema: type[SchemaT]) -> tuple[SchemaT, RunMeta]:
         self._llamar(req)
+        if schema is GroundingVerdict and self.judge is not None:
+            obj = schema.model_validate(self._veredicto(req.prompt))
+            return obj, self._meta(req, obj.model_dump_json())
+        if schema is _ExtractionOut and self.extraccion is not None:
+            campos = [
+                {"key": k, "value": v, "source_quote": v, "found": v is not None, "confidence": 0.9}
+                for k, v in self.extraccion.items()
+            ]
+            obj = schema.model_validate({"fields": campos})
+            return obj, self._meta(req, obj.model_dump_json())
+        if schema is _RoBOut and self.rob is not None:
+            dominios = [
+                {"domain": d, "judgment": j, "rationale": f"guion: {j}", "support_quote": None}
+                for d, j in self.rob.items()
+                if d != "overall"
+            ]
+            obj = schema.model_validate(
+                {"domains": dominios, "overall": self.rob.get("overall", "unclear")}
+            )
+            return obj, self._meta(req, obj.model_dump_json())
         data = _fabricate_model(schema).model_dump()
         fields = schema.model_fields
         if "label" in fields and set(get_args(fields["label"].annotation)) >= _ETIQUETAS:
@@ -166,5 +244,35 @@ def fetch_no_disponible(ids: Iterable[str]) -> Callable[[SearchRecord], FullText
         if record.record_id in sin_texto:
             return FullText(text=record.abstract or "", available=False)
         return fetch_disponible(record)
+
+    return _fetch
+
+
+def fetch_disponible_largo(n_chars: int) -> Callable[[SearchRecord], FullText]:
+    """``fetch_fn`` de prueba: texto completo de **exactamente** ``n_chars`` caracteres.
+
+    Párrafos numerados unidos con ``"\n\n"`` y cortados a ``n_chars``. Sirve a los
+    tests de recorte (D20) y de ventana por párrafos (D15).
+    """
+    if n_chars < 1:
+        raise ValueError(f"n_chars debe ser >= 1; recibido {n_chars}")
+
+    def _fetch(record: SearchRecord) -> FullText:
+        partes: list[str] = []
+        total = 0
+        k = 1
+        while total < n_chars:
+            parrafo = (
+                f"Párrafo {k} del texto completo de prueba de «{record.title}»: "
+                f"{k * 7} participantes."
+            )
+            partes.append(parrafo)
+            total += len(parrafo) + 2
+            k += 1
+        return FullText(
+            text="\n\n".join(partes)[:n_chars],
+            available=True,
+            source_url=f"https://example.org/texto/{sha256_text(record.record_id)[:16]}",
+        )
 
     return _fetch
