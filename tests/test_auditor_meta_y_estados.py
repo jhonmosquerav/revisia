@@ -542,3 +542,13 @@ def test_las_relaciones_nuevas_pasan_en_la_corrida_real(corrida) -> None:
             "effects"
         ]
     )
+
+
+def test_meta_analysis_v1_sin_schema_version_no_es_una_diferencia(corrida) -> None:
+    # Un `meta_analysis.json` de una corrida 0.8 (v1) no lleva `schema_version`; el recálculo
+    # del motor actual sí. No es una diferencia del meta-análisis, sino de versión del contrato.
+    edit_json(corrida / META, lambda meta: meta.pop("schema_version", None))
+
+    ok, detalle = _relaciones(corrida)[META_RECALCULADO]
+
+    assert ok is True, detalle
