@@ -27,9 +27,23 @@ if TYPE_CHECKING:
 # Acciones que el motor escribe en el ledger (spec 2026-10-04 §4.3). El auditor
 # rechaza cualquier otra: la reconstrucción de la auditoría 2026-09-03 (C3)
 # traía `propose`, `exclude` y `verify`, que ningún código del motor emite.
+# Ola 2 (spec 2026-10-18 §4.2; D3, D5, D21): `edit_field` (extracción) y `edit_domain`
+# (RoB) las escribirán PR-C y PR-E por cada corrección humana; `rescue_text`
+# (screening_ft), PR-C por cada texto completo aportado por el humano.
 LEDGER_ACTIONS: frozenset[str] = frozenset(
-    {"approve", "reject", "auto-proceed", "label", "flag_review"}
+    {
+        "approve",
+        "reject",
+        "auto-proceed",
+        "label",
+        "flag_review",
+        "edit_field",
+        "edit_domain",
+        "rescue_text",
+    }
 )
+# Ediciones humanas por campo o por dominio: `summarize_gates` las cuenta en `n_edits`.
+EDIT_ACTIONS: frozenset[str] = frozenset({"edit_field", "edit_domain"})
 # Subconjunto que cierra un gate: la última de una etapa es su decisión efectiva.
 GATE_DECISION_ACTIONS: frozenset[str] = frozenset({"approve", "reject", "auto-proceed"})
 # Prefijo de los actores humanos (`human:<nombre>`, el de `decision.yml`).
@@ -78,7 +92,20 @@ class DecisionEntry(BaseModel):
         stage: etapa del pipeline (ej. ``"screening_ta"``).
         actor: ``"human:<nombre>"`` o ``"agent:<nombre>"``.
         autonomy: nivel de autonomía aplicado (``A0``..``A3``).
-        action: acción tomada (ej. ``"approve"``, ``"include"``, ``"edit"``).
+        action: una de ``LEDGER_ACTIONS``:
+
+            * ``approve``/``reject``/``auto-proceed``: cierran el gate.
+            * ``label``/``flag_review``: una etiqueta o marca por registro.
+            * ``edit_field``: etapa ``extraccion``; ``target = "<study_id>#<key>"``;
+              ``detail{from, to, reason, request_sha256, decision_sha256}``.
+            * ``edit_domain``: etapa ``rob``; ``target = "<study_id>#<domain_id>"`` o
+              ``"<study_id>#overall"``; mismo ``detail``.
+            * ``rescue_text``: etapa ``screening_ft``; ``target = record_id``;
+              ``detail{text_file, file_sha256, n_chars, request_sha256,
+              decision_sha256}``.
+
+            Las ediciones se escriben antes de su ``approve``, en orden de id y
+            clave; nunca acompañan a un ``reject``.
         target: id del registro/campo afectado, si aplica.
         detail: payload estructurado adicional.
         timestamp_utc: instante de la decisión.
@@ -147,8 +174,9 @@ def summarize_gates(entries: Iterable[DecisionEntry]) -> dict[str, GateSummary]:
 
     La decisión efectiva de una etapa es su **última** entrada ``approve``,
     ``reject`` o ``auto-proceed`` en el orden del fichero (se puede reanudar
-    tras un rechazo; todas quedan registradas). ``n_labels`` y
-    ``n_flag_reviews`` cuentan las entradas ``label``/``flag_review`` de esa
+    tras un rechazo; todas quedan registradas). ``n_labels``,
+    ``n_flag_reviews`` y ``n_edits`` cuentan las entradas ``label``,
+    ``flag_review`` y ``edit_field``/``edit_domain`` de esa
     etapa que llevan el mismo ``decision_sha256`` que la decisión efectiva; si
     esta no lo tiene (``auto-proceed`` o ledger anterior a la Ola 1), valen 0.
 
@@ -168,7 +196,7 @@ def summarize_gates(entries: Iterable[DecisionEntry]) -> dict[str, GateSummary]:
     summaries: dict[str, GateSummary] = {}
     for stage, decision in effective.items():
         decision_sha = decision.detail.get("decision_sha256")
-        n_labels = n_flags = 0
+        n_labels = n_flags = n_edits = 0
         if decision_sha is not None:
             for entry in entries:
                 if entry.stage != stage or entry.detail.get("decision_sha256") != decision_sha:
@@ -177,6 +205,8 @@ def summarize_gates(entries: Iterable[DecisionEntry]) -> dict[str, GateSummary]:
                     n_labels += 1
                 elif entry.action == "flag_review":
                     n_flags += 1
+                elif entry.action in EDIT_ACTIONS:
+                    n_edits += 1
         summaries[stage] = GateSummary(
             stage=stage,
             action=decision.action,
@@ -186,6 +216,7 @@ def summarize_gates(entries: Iterable[DecisionEntry]) -> dict[str, GateSummary]:
             decision_sha256=decision_sha,
             n_labels=n_labels,
             n_flag_reviews=n_flags,
+            n_edits=n_edits,
             forced_human=bool(decision.detail.get("forced_human", False)),
             timestamp_utc=decision.timestamp_utc,
         )

@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from revisia.provenance.ledger import (
     AUTO_APPROVE_ACTOR,
+    EDIT_ACTIONS,
     GATE_DECISION_ACTIONS,
     HUMAN_ACTOR_PREFIX,
     LEDGER_ACTIONS,
@@ -56,7 +57,18 @@ def test_canonical_json_rechaza_no_finitos(valor: float) -> None:
 
 
 def test_constantes_del_ledger() -> None:
-    assert set(LEDGER_ACTIONS) == {"approve", "reject", "auto-proceed", "label", "flag_review"}
+    assert set(LEDGER_ACTIONS) == {
+        "approve",
+        "reject",
+        "auto-proceed",
+        "label",
+        "flag_review",
+        "edit_field",
+        "edit_domain",
+        "rescue_text",
+    }
+    assert set(EDIT_ACTIONS) == {"edit_field", "edit_domain"}
+    assert EDIT_ACTIONS < LEDGER_ACTIONS and not EDIT_ACTIONS & GATE_DECISION_ACTIONS
     assert set(GATE_DECISION_ACTIONS) == {"approve", "reject", "auto-proceed"}
     assert GATE_DECISION_ACTIONS < LEDGER_ACTIONS
     assert HUMAN_ACTOR_PREFIX == "human:"
@@ -265,3 +277,25 @@ def test_runmeta_v2_un_intento_fallido_se_serializa_completo() -> None:
     volcado = fallido.model_dump(mode="json")
     assert volcado["attempt"] == 2 and volcado["outcome"] == "invalid_output"
     assert RunMeta.model_validate(volcado) == fallido
+
+
+def test_summarize_gates_cuenta_las_ediciones_de_la_decision_efectiva() -> None:
+    resumen = summarize_gates(
+        [
+            _e("extraccion", "edit_field", target="s1#n", decision_sha256="viejo"),
+            _e("extraccion", "reject", decision_sha256="viejo", request_sha256="r"),
+            _e("extraccion", "edit_field", target="s1#n", decision_sha256="d"),
+            _e("extraccion", "edit_field", target="s2#edad", decision_sha256="d"),
+            _e("extraccion", "approve", decision_sha256="d", request_sha256="r"),
+            _e("rob", "edit_domain", target="s1#D1", decision_sha256="x"),
+            _e("rob", "edit_domain", target="s1#overall", decision_sha256="x"),
+            _e("rob", "approve", decision_sha256="x", request_sha256="q"),
+            _e("screening_ft", "rescue_text", target="s3", decision_sha256="y"),
+            _e("screening_ft", "label", target="s3", decision_sha256="y"),
+            _e("screening_ft", "approve", decision_sha256="y", request_sha256="p"),
+        ]
+    )
+    assert (resumen["extraccion"].n_edits, resumen["extraccion"].n_labels) == (2, 0)
+    assert resumen["rob"].n_edits == 2
+    # `rescue_text` no es etiqueta ni edición: va atado a su `label` (relación 23).
+    assert (resumen["screening_ft"].n_edits, resumen["screening_ft"].n_labels) == (0, 1)
