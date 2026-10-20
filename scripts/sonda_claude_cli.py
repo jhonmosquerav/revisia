@@ -114,12 +114,24 @@ def redact(text: str, secrets: Iterable[str | None]) -> str:
         if s:
             text = text.replace(s, "<redacted>")
     text = re.sub(r"sk-[A-Za-z0-9_-]{16,}", "<redacted>", text)
-    return re.sub(r"Bearer \S+", "Bearer <redacted>", text)
+    text = re.sub(r"Bearer \S+", "Bearer <redacted>", text)
+    # El informe se commitea en un repo público: fuera la ruta del usuario y su correo.
+    homes = {str(Path.home()), os.path.expanduser("~")}
+    variantes = set()
+    for h in homes:
+        variantes |= {h, h.replace("\\", "/"), h.replace("\\", "\\\\")}
+    for h in sorted(variantes, key=len, reverse=True):
+        if h and h not in ("~", "/"):
+            text = text.replace(h, "~")
+    return re.sub(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", "<correo>", text)
 
 
 def _fmt_cmd(command: list[str]) -> str:
     partes = []
-    for a in command:
+    # Se muestra el nombre base del ejecutable: la ruta resuelta lleva el usuario del equipo.
+    for i, a in enumerate(command):
+        if i == 0:
+            a = re.split(r"[\\/]", a)[-1]
         if len(a) > 300:
             a = "<schema>"
         partes.append(f'"{a}"' if (a == "" or " " in a) else a)
@@ -191,6 +203,7 @@ def render_report(
         out += ["no se lanzó: el CLI no anuncia --max-turns"]
     else:
         out += _bloque_llamada(second, "###")
+        out += [""]
         out += _donde(_parse(second["stdout"]), second["located"], second["meta"])
     out += ["", "## Para PR-A"]
     if flags["--safe-mode"] and flags["--tools"] and flags["--json-schema"]:
@@ -223,11 +236,17 @@ def _run(command: list[str], *, timeout: int, cwd: str | None, stdin: str | None
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
+        # `TimeoutExpired` repite el comando completo (con la ruta del usuario): no se copia.
+        detalle = (
+            f"tiempo agotado tras {timeout} s"
+            if isinstance(exc, subprocess.TimeoutExpired)
+            else str(exc)
+        )
         return {
             "command": command,
             "returncode": None,
             "stdout": "",
-            "stderr": f"{type(exc).__name__}: {exc}",
+            "stderr": f"{type(exc).__name__}: {detalle}",
         }
     return {
         "command": command,
@@ -302,6 +321,7 @@ def main(argv: list[str] | None = None) -> int:
         second=second,
         date=fecha,
     )
+    informe = informe.replace(cli, re.split(r"[\\/]", cli)[-1])
     informe = redact(informe, [os.environ.get(v, "") for v in SECRET_ENV])
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(informe, encoding="utf-8", newline="\n")

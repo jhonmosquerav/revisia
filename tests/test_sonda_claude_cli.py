@@ -26,6 +26,13 @@ HELP_NPM = (
     "Usage: claude [options]\n  --json-schema <schema>\n  --max-budget-usd <n>\n"
     "  --bare\n  --tools <list>\n"
 )
+HOME = str(Path.home())
+RUTA_CLI = HOME + "/AppData/Roaming/npm/claude.CMD"
+FUGAS = (
+    "tok-secreto-123 sk-ant-0123456789abcdefXYZ Bearer bearer-secreto jhon@example.com "
+    + HOME
+    + "/AppData"
+)
 HELP_COMPLETO = (
     HELP_NPM
     + "  --safe-mode\n  --max-turns <n>\n  --strict-mcp-config\n  --no-session-persistence\n"
@@ -134,15 +141,19 @@ def test_main_escribe_el_informe_y_solo_usa_safe_mode_si_se_anuncia(
     respuestas = {
         "--version": _ok("2.1.126 (Claude Code)"),
         "--help": _ok(help_text),
-        "-p": _ok(
-            json.dumps(
+        "-p": subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps(
                 {
                     "subtype": "success",
                     "result": '{"respuesta": "hola", "numero": 7}',
                     "total_cost_usd": 0.0,
                     "usage": {},
+                    "nota": FUGAS,
                 }
-            )
+            ),
+            stderr=FUGAS,
         ),
     }
     fake = _fake_run(respuestas)
@@ -152,7 +163,7 @@ def test_main_escribe_el_informe_y_solo_usa_safe_mode_si_se_anuncia(
         return fake(cmd, **kwargs)
 
     monkeypatch.setattr(sonda.subprocess, "run", _run)
-    monkeypatch.setattr(sonda.shutil, "which", lambda _c: "C:/npm/claude.CMD")
+    monkeypatch.setattr(sonda.shutil, "which", lambda _c: RUTA_CLI)
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok-secreto-123")
     out = tmp_path / "sondas" / "x.md"
     assert sonda.main(["--out", str(out), "--model", "sonnet"]) == 0
@@ -175,7 +186,16 @@ def test_main_escribe_el_informe_y_solo_usa_safe_mode_si_se_anuncia(
     assert "--tools" in llamada and llamada[llamada.index("--tools") + 1] == ""
     assert "2.1.126" in informe and "## Dónde viene el objeto validado" in informe
     assert "`result`" in informe and "válido: sí" in informe
-    assert "tok-secreto-123" not in informe
+    for fuga in (
+        "tok-secreto-123",
+        "sk-ant-0123456789abcdefXYZ",
+        "bearer-secreto",
+        "jhon@example.com",
+        str(Path.home()),
+        "AppData/Roaming",
+    ):
+        assert fuga not in informe
+    assert "<redacted>" in informe and "<correo>" in informe
     esperado = "MIN_CLI_VERSION candidata: 2.1.126" if "--safe-mode" in help_text else "no sirve"
     assert esperado in informe
 
@@ -215,7 +235,35 @@ def test_main_con_cli_ausente_o_json_invalido_escribe_el_informe_igual(
     out2 = tmp_path / "b.md"
     assert sonda.main(["--out", str(out2)]) == 0
     informe = out2.read_text(encoding="utf-8")
-    assert "```text" in informe and "válido: no" in informe
+    seccion = informe.split("## stdout crudo")[1].split("## stderr")[0]
+    assert "```text" in seccion and "válido: no" in informe
+
+
+def test_el_informe_no_filtra_la_ruta_resuelta_del_cli_ni_en_el_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sonda = _modulo()
+    monkeypatch.setattr(sonda.shutil, "which", lambda _c: RUTA_CLI)
+    timeout = subprocess.TimeoutExpired(cmd=[RUTA_CLI, "-p"], timeout=1)
+    monkeypatch.setattr(
+        sonda.subprocess,
+        "run",
+        _fake_run({"--version": timeout, "--help": _ok(HELP_COMPLETO), "-p": timeout}),
+    )
+    out = tmp_path / "t.md"
+    assert sonda.main(["--out", str(out)]) == 0
+    informe = out.read_text(encoding="utf-8")
+    assert "TimeoutExpired" in informe
+    assert HOME not in informe and "AppData" not in informe
+    assert "claude.CMD" in informe
+
+
+def test_redact_sustituye_el_home_y_los_correos() -> None:
+    sonda = _modulo()
+    home = str(Path.home())
+    salida = sonda.redact(f"{home}/x y {home.replace(chr(92), chr(92) * 2)} a.b@c.org", [])
+    assert home not in salida and "a.b@c.org" not in salida
+    assert "~/x" in salida and "<correo>" in salida
 
 
 def test_main_por_defecto_escribe_en_docs_superpowers_sondas_con_la_fecha(
