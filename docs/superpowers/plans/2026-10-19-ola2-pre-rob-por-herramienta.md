@@ -138,8 +138,8 @@ risk-of-bias judgement»):
   algoritmo devuelve some_concerns y aggregation_notes lo señala cuando hay ≥ 2 dominios
   some_concerns sin ningún high. El revisor sube el global a high con una edición de overall
   (DomainEdits.overall, E₂), que queda en el ledger con su razón.
-  [Supuesto revocable, §19 fila «rob2»: PENDIENTE DE OK DEL ARQUITECTO (toca D5). Si lo
-  rechaza, rige la regla literal de §9 (ver Step 0).]
+  [Decisión firme: §19 fila 11, aprobada 2026-10-20 (toca D5). La lectura literal de §9
+  queda descartada.]
 
 robins_i (Sterne et al., BMJ 2016;355:i4919, tabla de juicios globales):
     algún critical             → critical
@@ -165,14 +165,7 @@ nos_stars: suma de int(valor) de los ocho ítems; el máximo (9) sale de las esc
   ellos y §9 los declara opcionales. [Supuesto revocable, §19 fila «NOS»]
 ```
 
-- [ ] **Step 0: Comprobar la decisión del arquitecto sobre la regla `rob2`** (fila «rob2» de §19, pendiente de su OK porque toca D5). Buscar la fila en el spec:
-
-```bash
-grep -n "rob2" docs/superpowers/specs/2026-10-18-ola-2-remediacion-design.md
-```
-
-- Si la fila está **aceptada** (o sigue sin respuesta: se implementa la propuesta y la fila queda abierta), seguir con este plan tal cual.
-- Si está **rechazada**, rige la regla literal de §9, operada así: `high` si algún dominio es `high` **o** hay ≥ 2 dominios `some_concerns`; `some_concerns` si hay exactamente uno; `low` si todos son `low`. Cambian tres cosas de los tests de abajo: en `test_rob2`, el caso `(["some_concerns", "some_concerns", "low", "low", "low"], …)` espera `"high"`; en `test_aggregation_notes_senala_lo_que_la_regla_deja_a_juicio`, las aserciones de RoB 2 pasan a `aggregation_notes(rob, …) == []` en los tres casos (no queda nada a juicio); y en el Step 3 la docstring de `rob2` cita la regla literal. Anotar el resultado en el cuerpo del commit.
+La regla `rob2` de arriba es firme (§19 fila 11, aprobada 2026-10-20): los tests de abajo la fijan tal cual.
 
 - [ ] **Step 1: Tests que fallan** — crear `tests/test_rob_aggregate.py`:
 
@@ -1213,7 +1206,7 @@ Dos grupos. Las filas **a registrar ya** son contratos que otras pistas consumen
 **De integración (las registra la Tarea E2.6):**
 
 ```
-| m | §9 `rob2`, D5 | **Pendiente de OK del arquitecto (toca D5).** Varios *some concerns* sin ningún *high* ⇒ el algoritmo da `some_concerns` y `aggregation_notes` lo lleva a `attention`; subir a `high` es una edición humana de `overall` con razón (Sterne et al. 2019, tabla 2: ese camino es un juicio, no una regla), y la relación 27 sigue siendo determinista. Si el arquitecto la rechaza, rige la literal de §9: ≥ 2 *some concerns* ⇒ `high` (Tarea E1.2, Step 0) | Plan PR-E (E₁) |
+| m | §9 `rob2`, D5 | Ya registrada como fila 11 de §19 (aprobada 2026-10-20); no se repite | — |
 | m+1 | §9 `robins_i` | Orden `critical > serious > no_information > moderate > low`: «sin información» se propaga solo si nada indica riesgo serio o crítico; todos los dominios cuentan como «clave» y `aggregation_notes` nombra los que no tienen información | Plan PR-E (E₁) |
 | m+2 | §9 `amstar2` | Solo el ítem con `no` cuenta como debilidad; `partial_yes` y `no_meta_analysis` no | Plan PR-E (E₁) |
 | m+3 | §9 `nos_stars`, §4.2 | El `overall` de NOS es un **recuento de estrellas** en texto (`"7"`), no un juicio: G₂ no lo valida contra ninguna escala (NOS no tiene `overall_scale`) y no es editable. **Choca con §4.2** («`overall` … `None` en herramientas sin global»): queda como propuesta. Sin umbrales AHRQ (`RoBToolSpec` de PR-0 tiene `extra="forbid"` y ningún campo para ellos); robvis lleva el global de NOS como `No information` | Plan PR-E (E₁) |
@@ -1594,7 +1587,7 @@ def test_apply_domain_edits_incompletas_en_un_fallido_es_value_error() -> None:
         apply_domain_edits(_evaluaciones(), parcial, "human:r", spec=ROB2)
 ```
 
-Los tests de E₂ no dependen de la regla `rob2` (E1.2, Step 0): `rec-1` lleva un solo `some_concerns` y la nota de la regla se prueba con ROBINS-I `no_information`.
+Los tests de E₂ no dependen del caso de varios *some concerns* de la regla `rob2` (E1.2; §19 fila 11): `rec-1` lleva un solo `some_concerns` y la nota de la regla se prueba con ROBINS-I `no_information`.
 
 - [ ] **Step 2: Run para verificar que falla.**
 
@@ -2065,7 +2058,7 @@ En `### Cambios incompatibles`:
 - `robvis.csv` lleva columnas `D1…Dn`, `Overall` y `Weight`.
 
 - [ ] **Step 2: §19 del spec.** Añadir **a continuación de la última fila existente**, con numeración consecutiva:
-  - las filas «de integración» de E₁ (`m`…`m+12`, sección «Supuestos revocables de E₁»), con la fila «rob2» según lo que haya decidido el arquitecto;
+  - las filas «de integración» de E₁ (`m+1`…`m+12`, sección «Supuestos revocables de E₁»); la `m` (regla `rob2`) ya es la fila 11 de §19 (aprobada 2026-10-20) y no se repite;
   - las de E₂ que siguen;
   - las que haya producido la revisión por tarea.
   - Las dos «a registrar ya» de E₁ las registró el coordinador: comprobar que están y no repetirlas.

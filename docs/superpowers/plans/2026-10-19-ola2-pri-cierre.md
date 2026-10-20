@@ -4,7 +4,7 @@
 
 **Goal:** Dejar el motor de la Ola 2 listo para publicarse como **0.9.0** (D7): quitar la promesa de Qdrant (D27, M16), fijar la versión en todos los sitios, cerrar el criterio de §16 por CLI y poner la documentación pública (README, AGENTS, arquitectura, benchmark, metodología, CHANGELOG, auditoría §11 y RELEASING) a la altura de lo que el motor hace de verdad.
 
-**Architecture:** Dos tipos de trabajo. **Código** (Tareas 1–4, implementador + revisor por tarea, TDD): D27 en `pyproject.toml`, `uv.lock`, `.env.example` y `revisia/rag/`; la cita del doble `fake` en la síntesis (decisión de §16, condicionada al OK del arquitecto); un test de punta a punta que recorre el criterio de cierre de §16 con `revisia.cli.main`; y el bump a 0.9.0 con un test que fija que la versión coincide en todos los sitios. **Documentación** (Tareas 5–10, controlador-integrador): cada documento se reescribe contra un test de `tests/test_documentacion.py` que fija lo que tiene que decir (y lo que ya no puede decir), y el mapa de los checks del auditor en `docs/arquitectura.md` se contrasta con `revisia.audit.CHECKS`, no con una lista copiada. La Tarea 11 verifica §16 punto por punto, pone §19 al día y abre la PR.
+**Architecture:** Dos tipos de trabajo. **Código** (Tareas 1–4, implementador + revisor por tarea, TDD): D27 en `pyproject.toml`, `uv.lock`, `.env.example` y `revisia/rag/`; la cita del doble `fake` en la síntesis (decisión de §16, opción (a): §19 fila 13, aprobada 2026-10-20); un test de punta a punta que recorre el criterio de cierre de §16 con `revisia.cli.main`; y el bump a 0.9.0 con un test que fija que la versión coincide en todos los sitios. **Documentación** (Tareas 5–10, controlador-integrador): cada documento se reescribe contra un test de `tests/test_documentacion.py` que fija lo que tiene que decir (y lo que ya no puede decir), y el mapa de los checks del auditor en `docs/arquitectura.md` se contrasta con `revisia.audit.CHECKS`, no con una lista copiada. La Tarea 11 verifica §16 punto por punto, pone §19 al día y abre la PR.
 
 **Tech Stack:** Python 3.11–3.13, Pydantic v2, PyYAML, pytest + pytest-xdist, ruff + black (línea 100), uv **0.11.26** (la del CI, §19 fila 8), gh.
 
@@ -16,7 +16,7 @@
 - **§15 en esta PR:** solo el integrador toca `CHANGELOG.md`, `README.md`, `AGENTS.md`, `docs/auditoria/` y el spec. En PR-I ese es justo el trabajo, así que **las Tareas 5–11 son del controlador, que actúa como integrador**, y las ejecuta él mismo (sin subagente implementador; un revisor independiente sí revisa cada una). Los implementadores de las Tareas 1–4 **no tocan** esos ficheros.
 - Versión: exactamente **`0.9.0`**. Fecha de `CHANGELOG.md` y de `CITATION.cff` (`date-released`): la del commit del bump (`date +%F`), la misma en los dos.
 - `uv.lock` se regenera y se comprueba **solo** con la versión de uv del CI: `uvx uv@0.11.26 lock` y `uvx uv@0.11.26 lock --check` (§19 fila 8; otra versión podría dar un lock que el CI rechace). Antes de usarla, comprobar que `.github/workflows/ci.yml` sigue diciendo `version: "0.11.26"`; si dice otra, usar esa. En este plan, «`uv lock --check`» significa siempre `uvx uv@0.11.26 lock --check`.
-- **CI en PR apiladas (fila I-17):** los Expected de «CI verde» dependen de la decisión del orquestador de que el plan de H quite el filtro de rama de `pull_request` (así una PR con base `feat/ola2-auditor` también corre el CI). Si el arquitecto la rechaza, la regla pasa a ser: suite local en 3.11, 3.12 y 3.13 (Tarea 11, Step 2) y, cuando le toque el merge, `gh pr edit <n> --base main` y cerrar y reabrir la PR para disparar el CI.
+- **CI en PR apiladas (§19 fila 15, aprobada 2026-10-20):** el plan de H quita el filtro de rama de `pull_request`, así que una PR con base `feat/ola2-auditor` también corre el CI y los Expected de «CI verde» valen.
 - Estilo: `ruff` (`E,F,I,UP,B,SIM`, línea 100) y `black` (línea 100) limpios en cada commit; `from __future__ import annotations` en todo módulo nuevo, también en `tests/`. Los imports de `fakes`, `hitl_helpers` y `conftest` van en el bloque de terceros, tras `import pytest`.
 - Tests offline y deterministas; ninguno invoca `claude`, APIs, la red ni WeasyPrint. El humo por subproceso de la Tarea 11 sí usa la red (OpenAlex, como el demo) y no es un test.
 - Comandos: un test, `uv run pytest -p no:cacheprovider <ruta>::<test> -v`; la suite, `uv run pytest -p no:cacheprovider -n auto -m "not cronometrado" -rxX` y después `uv run pytest -p no:cacheprovider -m cronometrado`; lint, `uv run ruff check . && uv run ruff format --check . && uv run black --check . && uvx uv@0.11.26 lock --check`.
@@ -46,7 +46,7 @@ PR-I se desarrolla desde PR-G y su PR tiene base `feat/ola2-auditor` (§15). Un 
 |---|---|---|---|
 | 0 | controlador | worktree, línea base, comprobaciones de partida | PR-G abierta |
 | 1 | implementador | `pyproject.toml`, `uv.lock`, `.env.example`, `revisia/rag/{store,__init__,embed}.py`, `tests/test_rag.py`, `tests/test_pyproject.py` | 0 |
-| 2 | implementador (puerta: OK del arquitecto) | `revisia/llm/providers/fake.py`, `tests/test_fake_provider.py` | 0 |
+| 2 | implementador (opción (a), §19 fila 13) | `revisia/llm/providers/fake.py`, `tests/test_fake_provider.py` | 0 |
 | 3 | implementador | `tests/test_cierre_motor.py` | 2 |
 | 4 | implementador | `pyproject.toml`, `revisia/__init__.py`, `CITATION.cff`, `uv.lock`, `tests/test_pyproject.py` | 1 |
 | 5 | controlador | `README.md`, `tests/test_documentacion.py` (nuevo) | 2, 4 |
@@ -207,42 +207,29 @@ git commit -m "chore!: Qdrant desaparece como promesa: sin extra rag, QDRANT_* n
 
 ---
 
-## Tarea 2: Cierre de §16 «con una adjudicación» por CLI (decisión del arquitecto)
+## Tarea 2: Cierre de §16 «con una adjudicación» por CLI (opción (a), §19 fila 13)
 
-### La decisión
+### La decisión (§19 fila 13, aprobada 2026-10-20)
 
 §16 pide que el motor se cierre con una corrida **por CLI**, con el demo y el proveedor `fake`, que pase por «etiquetas, una edición de campo, una edición de dominio, un rescate con texto y **una adjudicación**». La adjudicación no es alcanzable hoy: `FakeProvider.complete` (`revisia/llm/providers/fake.py:82-89` en `c1af7c3`) devuelve un texto **sin** `[id]`, así que la síntesis del demo no tiene afirmaciones, el juez no se llama y no hay nada que marcar. D lo propuso como fila n+25 y G₂ lo dejó para I (fila **n+19** de G): G₂ prueba el cierre **en proceso** con `corrida_ola2_completa` (juez, edición de campo y de dominio, rescate con texto y adjudicación; `tests/test_pipeline_fake.py::test_frontera_de_la_ola_2_completa_es_apta`, G2.10), con `ScriptedProvider`, no por CLI.
 
-| | (a) `FakeProvider.complete` cita un id incluido | (b) Reformular §16 |
-|---|---|---|
-| Qué cambia | El borrador del doble cita el primer estudio del bloque `estudios` del prompt. Con `grounding: judge` y un verificador `fake` (fail-closed, D §19 n+11) esa cita sale marcada y el gate final exige adjudicarla | §16 dice que la adjudicación se prueba en proceso (`corrida_ola2_completa`, G2.10); el criterio por CLI se queda sin ella |
-| Coste | Un cambio de ~15 líneas en `fake.py` y sus tests; cambian las salidas del demo (la síntesis cita un estudio). **El `FakeProvider` real corre en muchas corridas de la suite**: todo `run_pipeline`/`correr_hasta`/`cli.main(["run"…])` que no sustituye `build_provider` (inventario de partida abajo). En `existence` la cita sale fundamentada, así que solo rompen los tests que fijan el texto o los hashes de la síntesis, `n_claims == 0` o el aviso «síntesis sin citas»; en `embedder`, la cita sale **marcada** (la similitud léxica entre el borrador del doble y el resumen queda bajo 0,12) y `--auto-approve` **pausa** en el gate final | Una edición del spec y una fila de §19 |
-| Lo que gana un lector | Ve por CLI, con el demo, el camino entero de M5/D8: cita marcada → gate final forzado a humano → adjudicación con razón → auditor WARN | Nada visible: la adjudicación sigue probada, pero solo por quien lea los tests |
+**Opción (a): `FakeProvider.complete` cita un id incluido.**
 
-**El demo se queda en `existence` con las dos opciones** (fila I-8). Pasarlo a `judge` con un verificador `fake` rompería el quickstart: el juez `fake` es *fail-closed* (D §19 n+11), la cita saldría marcada y `--auto-approve` pausaría en el gate final (humano forzado, M5). Por eso la frontera de §16 con `judge` corre sobre una **copia** del demo (Tarea 3), y `test_pipeline_fake_con_humano_audita_sin_fail` sigue como lo deja G₂ (`fallos == {"grounding"}`: el demo es una demostración, no una revisión publicable).
+- **Qué cambia:** el borrador del doble cita el primer estudio del bloque `estudios` del prompt. Con `grounding: judge` y un verificador `fake` (fail-closed, D §19 n+11) esa cita sale marcada y el gate final exige adjudicarla.
+- **Coste:** un cambio de ~15 líneas en `fake.py` y sus tests; cambian las salidas del demo (la síntesis cita un estudio). **El `FakeProvider` real corre en muchas corridas de la suite**: todo `run_pipeline`/`correr_hasta`/`cli.main(["run"…])` que no sustituye `build_provider` (inventario de partida abajo). En `existence` la cita sale fundamentada, así que solo rompen los tests que fijan el texto o los hashes de la síntesis, `n_claims == 0` o el aviso «síntesis sin citas»; en `embedder`, la cita sale **marcada** (la similitud léxica entre el borrador del doble y el resumen queda bajo 0,12) y `--auto-approve` **pausa** en el gate final.
+- **Lo que gana un lector:** ve por CLI, con el demo, el camino entero de M5/D8: cita marcada → gate final forzado a humano → adjudicación con razón → auditor WARN.
 
-**Recomendación: (a).** §16 es el criterio de cierre del **motor** y el demo es la puerta de entrada pública: si la única ruta que demuestra la adjudicación es un doble de tests, el criterio público queda más débil que el escrito, que es lo contrario del título de la ola. El coste es pequeño y acotado: con `grounding: existence` (el default del demo) una cita a un id del corpus sale fundamentada, así que el `--auto-approve` del quickstart no cambia de comportamiento (Review Focus 3). Precedente de alcance: D ya tocó `fake.py` (fail-closed en `structured`, §19 n+11), aunque `llm/providers/*` es de A (fila I-15). **El caso `embedder`:** `protocols/_TEMPLATE/protocol.yml:140` declara hoy `grounding: embedder` (D lo pasa a `existence` explícito, D §19 n+14; la Tarea 0 lo comprueba), y `tests/test_hitl_pipeline.py` corre al menos un caso en `embedder`: con (a), una corrida `embedder` + `fake` + `--auto-approve` pausa en el gate final por la cita marcada. Es honesto (`embedder` es experimental y no publicable, D2), pero cada test así se ajusta para adjudicar o pasa a `existence`, con su razón. **(b)** es la alternativa razonable si el arquitecto prefiere no cambiar ninguna salida del demo a estas alturas, o si el inventario del Step 0a resulta grande.
+**El demo se queda en `existence`** (fila I-8; también lo dice la fila 13 de §19). Pasarlo a `judge` con un verificador `fake` rompería el quickstart: el juez `fake` es *fail-closed* (D §19 n+11), la cita saldría marcada y `--auto-approve` pausaría en el gate final (humano forzado, M5). Por eso la frontera de §16 con `judge` corre sobre una **copia** del demo (Tarea 3), y `test_pipeline_fake_con_humano_audita_sin_fail` sigue como lo deja G₂ (`fallos == {"grounding"}`: el demo es una demostración, no una revisión publicable).
 
-**Inventario de partida** (`c1af7c3`; ficheros con corridas que no sustituyen `build_provider` en todas sus llamadas, `grep -c "build_provider"` frente a llamadas de `run_pipeline`/`correr_hasta`/`cli.main`/`_correr`): `test_cli_reanudacion.py` (40 llamadas, 0 parches), `test_hitl_pipeline.py` (75/7), `test_reanudacion.py` (36/12), `test_errores_deterministas.py` (20/4), `test_audit_hitl_registro.py` (20/1), `test_pipeline_fake.py` (13/4), `test_snapshot.py` (7/0), `test_auditor_meta_y_estados.py` (5/1), `test_search_stage.py` (4/0), `test_audit_aritmetica_ola1.py` (2/1), `test_cli_errores.py` (1/0), `test_dedup.py` (1/0). Las pistas A–G añaden más; el inventario real lo da el Step 0a.
+**Por qué (a).** §16 es el criterio de cierre del **motor** y el demo es la puerta de entrada pública: si la única ruta que demuestra la adjudicación es un doble de tests, el criterio público queda más débil que el escrito, que es lo contrario del título de la ola. El coste es pequeño y acotado: con `grounding: existence` (el default del demo) una cita a un id del corpus sale fundamentada, así que el `--auto-approve` del quickstart no cambia de comportamiento (Review Focus 3). Alcance: PR-I toca `fake.py` aunque `llm/providers/*` es de A (§19 fila 13, D27; fila I-15); D ya lo hizo antes (fail-closed en `structured`, §19 n+11). **El caso `embedder`:** `protocols/_TEMPLATE/protocol.yml:140` declara hoy `grounding: embedder` (D lo pasa a `existence` explícito, D §19 n+14; la Tarea 0 lo comprueba), y `tests/test_hitl_pipeline.py` corre al menos un caso en `embedder`: con (a), una corrida `embedder` + `fake` + `--auto-approve` pausa en el gate final por la cita marcada. Es honesto (`embedder` es experimental y no publicable, D2), pero cada test así se ajusta para adjudicar o pasa a `existence`, con su razón.
 
-- [ ] **Step 0a: Medir el coste de (a) antes de la puerta** (implementador, en una rama desechable `tmp/pri-fake-cita` desde `feat/ola2-cierre`, sin commit en la rama de la PR): aplicar solo el cambio de `FakeProvider.complete` (Interfaces de abajo) y correr la suite.
+**Inventario de partida** (`c1af7c3`; ficheros con corridas que no sustituyen `build_provider` en todas sus llamadas, `grep -c "build_provider"` frente a llamadas de `run_pipeline`/`correr_hasta`/`cli.main`/`_correr`): `test_cli_reanudacion.py` (40 llamadas, 0 parches), `test_hitl_pipeline.py` (75/7), `test_reanudacion.py` (36/12), `test_errores_deterministas.py` (20/4), `test_audit_hitl_registro.py` (20/1), `test_pipeline_fake.py` (13/4), `test_snapshot.py` (7/0), `test_auditor_meta_y_estados.py` (5/1), `test_search_stage.py` (4/0), `test_audit_aritmetica_ola1.py` (2/1), `test_cli_errores.py` (1/0), `test_dedup.py` (1/0). Las pistas A–G añaden más; el inventario es una guía, y la lista real la da la suite en el Step 4.
 
-```bash
-git switch -c tmp/pri-fake-cita
-# … cambio de `complete` …
-uv run pytest -p no:cacheprovider -n auto -m "not cronometrado" -q -rf 2>&1 | tee ../i-inventario-fake.txt | tail -40
-git restore . && git switch feat/ola2-cierre && git branch -D tmp/pri-fake-cita
-```
-
-Expected: la lista de tests que fallan con (a), cada uno con su causa en una línea (texto o hash de la síntesis fijado; `n_claims`; aviso «sin citas»; pausa por `embedder`). Esa lista se adjunta a la pregunta del Step 0.
-
-- [ ] **Step 0: Puerta.** La opción la decide el arquitecto con el inventario del Step 0a delante (fila propuesta I-1 de §19, Tarea 11). Con **(a)**, seguir con los Steps 1–6. Con **(b)**, saltar al Step 7 y no tocar `fake.py`.
-
-**Files (a):**
+**Files:**
 - Modify: `revisia/llm/providers/fake.py` (`complete`; función privada nueva `_first_included_id`).
 - Test: `tests/test_fake_provider.py` (nuevo).
 
-**Interfaces (a):**
+**Interfaces:**
 - Consumes:
   - `synthesize_narrative(provider, *, question, included, extractions, temperature=0.2, seed=None) -> tuple[str, RunMeta]` (`revisia/agents/reporte.py`; desde D, los estudios van en `document_block("estudios", _studies_block(...))`: `<<<DOCUMENTO id=estudios>>>\n- [<id>] <título>\n…\n<<<FIN>>>`; plan D, Tarea 2);
   - `split_claims(narrative, corpus_ids) -> list[Claim]`, `Claim.citations: tuple[tuple[str, bool], ...]` (`revisia/agents/verificador.py`, plan D, Tarea 3);
@@ -337,10 +324,10 @@ Expected: FAIL en `test_fake_cita_el_primer_incluido_del_bloque_de_estudios` y e
 
 - [ ] **Step 3: Implementar** `FakeProvider.complete` y `_first_included_id(prompt: str) -> str | None` según Interfaces.
 
-- [ ] **Step 4: Run del fichero y de la suite.**
+- [ ] **Step 4: Run del fichero y de la suite; actualizar los tests afectados.**
 
 Run: `uv run pytest -p no:cacheprovider tests/test_fake_provider.py -v && uv run pytest -p no:cacheprovider -n auto -m "not cronometrado" -rxX -q`
-Expected: el fichero en verde. En la suite, los tests del inventario del Step 0a se ajustan **uno por uno**, con la expectativa nueva y la razón en el mensaje del commit; ninguno se borra. `test_pipeline_fake_con_humano_audita_sin_fail` (demo en `existence`, `ScriptedProvider`) **no** cambia: sigue con `fallos == {"grounding"}`. Si `AVISOS_DE_LA_DEMO` (`tests/test_pipeline_fake.py`) conserva la entrada `"grounding"  # la síntesis del doble no cita ningún estudio`, se quita (en `existence` `grounding` es FAIL, no WARN, y el comentario ya no es cierto); cualquier otro aviso que cambie por esta cita se ajusta con su comentario.
+Expected: el fichero en verde. La suite da la lista de tests que rompe la cita del doble (el inventario de partida de arriba sirve de guía), cada uno con su causa: texto o hash de la síntesis fijado, `n_claims`, aviso «sin citas» o pausa por `embedder`. Se ajustan **uno por uno**, con la expectativa nueva y la razón en el mensaje del commit; ninguno se borra, y la suite se vuelve a correr hasta quedar en verde. `test_pipeline_fake_con_humano_audita_sin_fail` (demo en `existence`, `ScriptedProvider`) **no** cambia: sigue con `fallos == {"grounding"}`. Si `AVISOS_DE_LA_DEMO` (`tests/test_pipeline_fake.py`) conserva la entrada `"grounding"  # la síntesis del doble no cita ningún estudio`, se quita (en `existence` `grounding` es FAIL, no WARN, y el comentario ya no es cierto); cualquier otro aviso que cambie por esta cita se ajusta con su comentario.
 
 - [ ] **Step 5: Lint.**
 
@@ -353,8 +340,6 @@ Expected: limpio.
 git add revisia/llm/providers/fake.py tests/test_fake_provider.py tests
 git commit -m "feat(fake): la síntesis del doble cita el primer estudio incluido, para cerrar §16 por CLI con una adjudicación" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
-
-- [ ] **Step 7 (solo con (b)): Reformular §16 en el spec** (lo hace el controlador: el spec es del integrador). En el primer punto del criterio de cierre del motor (§16, «`revisia run` (`grounding: judge`, …)»), sustituir «, un rescate con texto y una adjudicación» por «y un rescate con texto (la adjudicación de una cita marcada se prueba en proceso con `corrida_ola2_completa`, `tests/test_pipeline_fake.py::test_frontera_de_la_ola_2_completa_es_apta`: el doble `fake` no cita)». La fila I-1 de §19 registra (b). Commit `docs(spec): §16 sin adjudicación por CLI (decisión del arquitecto)`.
 
 ---
 
@@ -557,8 +542,6 @@ def test_cierre_deposito_de_la_corrida_apta_audita_apto(tmp_path, monkeypatch) -
 
 - La acción del ledger de la adjudicación es `flag_review` (`LEDGER_ACTIONS`, `revisia/provenance/ledger.py:30-31`), con `stage: "reporte"`. Si el ledger de la Ola 2 nombra el campo de etapa de otra forma, manda `DecisionEntry` (PR-0, Tarea 6).
 - `AVISOS_DEL_CIERRE` se rellena en el Step 3 con **un comentario por aviso** que diga de dónde sale (proveedor `fake`, gold sin especificidad porque el doble lo incluye todo, cita adjudicada, búsqueda manual…), como `AVISOS_DE_LA_DEMO` en `tests/test_pipeline_fake.py`. **El revisor de la tarea aprueba cada entrada, una por una**; un aviso que no se explique por cómo se monta el cierre es un desacuerdo entre pipeline y auditor y se investiga (superpowers:systematic-debugging), no se añade.
-- Con **(b)** (Tarea 2, Step 7): `correr_por_cli(..., adjudicar=False)`, sin `("flag_review", "reporte")` en el conjunto esperado y con `hallucination_flagged is False`; el resto igual.
-
 - [ ] **Step 2: Run para ver el rojo.**
 
 Run: `uv run pytest -p no:cacheprovider tests/test_cierre_motor.py -v`
@@ -956,7 +939,7 @@ Expected: FAIL.
 3. **Política de versión de uv** (§19 fila 8, texto a fijar): la versión de uv está fijada en `setup-uv` del CI (`version: "0.11.26"`) para que `uv lock --check` sea reproducible; en local no se fija (`[tool.uv] required-version` no existe a propósito), así que el lock se regenera siempre con `uvx uv@<esa versión> lock`. Subir la versión de uv es **un commit propio** que cambia `ci.yml`, regenera `uv.lock` con la versión nueva y actualiza este documento.
 4. **DOI vía Zenodo**: el webhook archiva el release; añadir el DOI de la versión al bloque `identifiers` de `CITATION.cff` y a «Cómo citar» del README (el DOI concept no cambia).
 5. **Versiones intermedias (D7)**: la 0.9.0 publica el motor de la Ola 2 antes de la corrida real, para que esa corrida registre un `engine_version` liberado; la 1.0.0 llega con la corrida depositada y la re-auditoría y es documental respecto a 0.9.x (§14).
-6. **Checklist** con casillas para todo lo anterior, incluidas `date-released` revisada el día del release y `SECURITY.md` al día. Y una nota: con PR apiladas el CI corre en cada PR si `pull_request` no filtra la rama (fila I-17); si no, suite local en las tres versiones y `gh pr edit --base main` + cerrar y reabrir al mergear.
+6. **Checklist** con casillas para todo lo anterior, incluidas `date-released` revisada el día del release y `SECURITY.md` al día. Y una nota: con PR apiladas el CI corre en cada PR porque `pull_request` no filtra la rama (§19 fila 15).
 
 - [ ] **Step 3: `SECURITY.md`** según Files.
 
@@ -1011,7 +994,7 @@ Expected: FAIL (no hay sección `0.9.0`).
 
 - [ ] **Step 2: Componer la sección.**
 - `## [Unreleased]` queda vacío encima; debajo, `## [0.9.0] · <fecha del bump>` con lo que traía `Unreleased`, en este orden: `### Added`, `### Fixed`, `### Changed`, `### Removed`, `### Documentación`, `### Cambios incompatibles` (el de la 0.8.0 con las dos nuevas antes de la última), y con una sola subsección de cada tipo (las integraciones pudieron dejar varias). **No** van en «Cambios incompatibles»: `load_template` (aditivo; `load_prompt` no cambia, A §19 n+16) ni `risk_of_bias.md` (conserva el nombre, E m+8).
-- Entradas de PR-I: en `### Removed` (nueva, Keep a Changelog): extra `rag`, `QDRANT_*` de `.env.example` e `InMemoryVectorStore` (D27, M16). En `### Changed`: el doble `fake` cita el primer estudio incluido en su síntesis (§16; solo con (a)); `0.9.0` en pyproject, paquete, CITATION y lock. En `### Documentación` (como en la 0.7.0): README, AGENTS, arquitectura con el mapa del auditor, benchmark como método y comando, notas de metodología, `RELEASING.md`, `SECURITY.md` (0.9.x), auditoría §11.
+- Entradas de PR-I: en `### Removed` (nueva, Keep a Changelog): extra `rag`, `QDRANT_*` de `.env.example` e `InMemoryVectorStore` (D27, M16). En `### Changed`: el doble `fake` cita el primer estudio incluido en su síntesis (§16; §19 fila 13); `0.9.0` en pyproject, paquete, CITATION y lock. En `### Documentación` (como en la 0.7.0): README, AGENTS, arquitectura con el mapa del auditor, benchmark como método y comando, notas de metodología, `RELEASING.md`, `SECURITY.md` (0.9.x), auditoría §11.
 - `### Cambios incompatibles` **consolidado** (las de cada integración se funden aquí; §18.4 completo más lo que añadieron los planes). Texto base, que el integrador completa con lo que haya registrado cada integración y no esté abajo:
 
 ```
@@ -1124,12 +1107,12 @@ Se cuenta **por los rangos registrados**, no por el texto del Origen: muchas fil
 SPEC=docs/superpowers/specs/2026-10-18-ola-2-remediacion-design.md
 # plan, primera fila, última fila, filas esperadas (las de su tarea de integración)
 RANGOS="PR-0 a0 z0 7
-PR-H aH zH 4
+PR-H aH zH 3
 PR-A aA zA 20
 PR-B aB zB 9
 PR-C aC zC 22
-PR-D aD zD 26
-PR-E aE zE 24
+PR-D aD zD 25
+PR-E aE zE 23
 PR-F aF zF 30
 PR-G aG zG 23"
 echo "$RANGOS" | while read -r P DESDE HASTA ESPERADO; do
@@ -1139,12 +1122,12 @@ done
 awk -F'|' '/^\| [0-9]+ \|/{n=$2+0; if (prev && n != prev + 1) print "salto en la fila", n; prev = n}' "$SPEC"
 ```
 
-Expected: ninguno de los dos bucles imprime nada. Filas esperadas por plan: PR-0: 7; H: 4; A: 20; B: 9; C: 22 (n a n+21); D: 26 (n a n+25); E: 24 (las trece «de integración» de E₁, m a m+12, y las once de E₂, e a e+10); F: 30 (n a n+29); G: 23 (n a n+22). Si falta alguna, se añade ahora con su origen y se anota en el cuerpo de la PR.
+Expected: ninguno de los dos bucles imprime nada. Filas esperadas por plan: PR-0: 7; H: 3 (n a n+2; «CI en PR apiladas» es la fila 15); A: 20; B: 9; C: 22 (n a n+21); D: 25 (n a n+25 sin la n+5, que es la fila 16); E: 23 (las doce «de integración» de E₁, m+1 a m+12, porque la m es la fila 11, y las once de E₂, e a e+10); F: 30 (n a n+29); G: 23 (n a n+22). Las filas 11–16 (decisiones del arquitecto del 2026-10-20) no son de ningún bloque. Si falta alguna, se añade ahora con su origen y se anota en el cuerpo de la PR.
 
-Después, añadir las filas de PR-I a continuación de la última (`L + 1` de la Tarea 0):
+Después, añadir las filas de PR-I a continuación de la última (`L + 1` de la Tarea 0), salvo I-1 e I-17, que ya son las filas 13 y 15 de §19:
 
 ```
-| I-1 | §16 cierre por CLI | Decisión del arquitecto sobre la propuesta de D (n+25) y de G (n+19): **(a)** `FakeProvider.complete` cita el primer id del bloque `estudios` del prompt de síntesis; con `grounding: judge` y verificador `fake` la cita sale marcada y se adjudica por CLI; en `existence` (el demo) la cita existe y no se marca. **(b)** se descarta / se elige: §16 reformulado (adjudicación en proceso con `corrida_ola2_completa`, `tests/test_pipeline_fake.py::test_frontera_de_la_ola_2_completa_es_apta`, G2.10) | Plan PR-I (decisión del arquitecto) |
+| I-1 | §16 cierre por CLI | Ya registrada como fila 13 de §19 (opción (a), aprobada 2026-10-20); no se repite | — |
 | I-2 | §16 «por CLI» | El criterio se prueba con `revisia.cli.main([...])` en proceso (`tests/test_cierre_motor.py`), como `tests/test_cli_benchmark.py` de F: base manual con corpus congelado (sin red en la búsqueda) y `fetch_fulltext` sustituido (un registro con DOI consultaría NCBI). El humo por subproceso con red es complementario y no es un test. «Los WARN de demo» de §16 son `AVISOS_DEL_CIERRE`, con un comentario por aviso | Plan PR-I |
 | I-3 | §13 badge | El badge de tests muestra el estado del workflow del CI, no un recuento fijo (la auditoría señaló recuentos distintos en cada documento) | Plan PR-I |
 | I-4 | §13 versión | «Los tres sitios» son cuatro: `uv.lock` también lleva la versión del paquete; se regenera con la versión de uv del CI. Un test fija la igualdad de los cuatro, no el número. La línea de «Cómo citar» del README la fija `tests/test_documentacion.py` | Plan PR-I |
@@ -1158,13 +1141,13 @@ Después, añadir las filas de PR-I a continuación de la última (`L + 1` de la
 | I-12 | §19 fila 8 | `RELEASING.md` fija el comando `uvx uv@<versión del CI> lock`; un test comprueba que la versión documentada es la de `ci.yml` | Plan PR-I |
 | I-13 | §13 CHANGELOG | Las subsecciones de 0.9.0 se consolidan (una de cada tipo) y «Cambios incompatibles» reúne §18.4 y lo que registró cada integración; `### Removed` nueva para D27 | Plan PR-I |
 | I-14 | §13 auditoría §11 | El estado de los hallazgos de la Ola 2 es «Cerrado en el motor»: lo confirma o lo reabre la re-auditoría de §14.1 | Plan PR-I |
-| I-15 | §15 dueños de ficheros | PR-I toca `revisia/llm/providers/fake.py` (dueño A; solo `complete`, con (a)) y `revisia/rag/{store,__init__,embed}.py` (dueño D; solo la clase muerta de D27, el `__init__` y docstrings). Precedente: D tocó `fake.py` (D §19 n+11). PR-I es la última de la pila: no hay rebase posterior que choque | Plan PR-I (revisión) |
+| I-15 | §15 dueños de ficheros | PR-I toca `revisia/llm/providers/fake.py` (dueño A; solo `complete`, opción (a) de §19 fila 13) y `revisia/rag/{store,__init__,embed}.py` (dueño D; solo la clase muerta de D27, el `__init__` y docstrings). Precedente: D tocó `fake.py` (D §19 n+11). PR-I es la última de la pila: no hay rebase posterior que choque | Plan PR-I (revisión) |
 | I-16 | §13 versión, RELEASING | Con cada serie cambian cuatro sitios de versión (`pyproject.toml`, `revisia/__init__.py`, `CITATION.cff`, `uv.lock`) **más** la tabla de `SECURITY.md` y la línea de «Cómo citar» del README; `RELEASING.md` los lista y un test fija `SECURITY.md` | Plan PR-I (revisión) |
-| I-17 | §15, D25 · CI en PR apiladas | Decisión del orquestador: el plan de H quita el filtro de rama de `pull_request`, así que las PR apiladas corren el CI y los Expected de «CI verde» valen. Si el arquitecto la rechaza: suite local en 3.11, 3.12 y 3.13 y, al mergear, `gh pr edit <n> --base main` y cerrar y reabrir la PR | Orquestador (revisión de PR-I); **para el arquitecto** |
+| I-17 | §15, D25 · CI en PR apiladas | Ya registrada como fila 15 de §19 (aprobada 2026-10-20); no se repite | — |
 | I-18 | §18.4 | El CHANGELOG 0.9.0 amplía la lista de §18.4 con lo que añadieron los planes: default de `grounding` de `embedder` a `existence`, `[2019]`/`[1]` no son citas, `prisma-ia-origen` rc 2, `MIN_CLI_VERSION` con `--safe-mode`/`--tools`, entorno por allowlist, `--max-budget-usd` 1,00 con API key, 401/403 transitorios y `RecordFailedError`, `render_methods` sin `included_ids`, el demo sin `funnel.png`, `record_id` que cambian, `robvis.csv`, `InMemoryVectorStore`. `load_template` y `risk_of_bias.md` no son incompatibles | Plan PR-I (revisión) |
 ```
 
-Sustituir `I-n` por los números consecutivos desde `L + 1` y completar con lo que hayan producido las revisiones de las Tareas 1–10. En I-1, dejar solo la opción elegida.
+Sustituir `I-n` por los números consecutivos desde `L + 1` y completar con lo que hayan producido las revisiones de las Tareas 1–10. I-1 e I-17 no se copian (§19 filas 13 y 15).
 
 ```bash
 git add "$SPEC"
@@ -1196,7 +1179,7 @@ Expected: lint limpio; verde en las tres versiones, **0 XFAIL y 0 XPASS**; cober
 
 | Punto de §16 | Comando | Expected |
 |---|---|---|
-| `revisia run` con `grounding: judge` y verificador `fake` distinto → pausas en los cinco gates → etiquetas, una edición de campo, una de dominio, un rescate con texto y una adjudicación → `--resume` → `revisia audit` **APTA** | `uv run pytest -p no:cacheprovider tests/test_cierre_motor.py::test_cierre_judge_con_humano_por_cli_es_apto -v` | PASS. Con (b): el mismo test sin adjudicación, y además `uv run pytest -p no:cacheprovider tests/test_pipeline_fake.py::test_frontera_de_la_ola_2_completa_es_apta -v` (adjudicación en proceso, `corrida_ola2_completa`) en PASS |
+| `revisia run` con `grounding: judge` y verificador `fake` distinto → pausas en los cinco gates → etiquetas, una edición de campo, una de dominio, un rescate con texto y una adjudicación → `--resume` → `revisia audit` **APTA** | `uv run pytest -p no:cacheprovider tests/test_cierre_motor.py::test_cierre_judge_con_humano_por_cli_es_apto -v` | PASS |
 | La misma corrida con `grounding: existence` → NO publicable por `grounding` | `uv run pytest -p no:cacheprovider tests/test_cierre_motor.py::test_cierre_existence_por_cli_no_es_publicable_solo_por_grounding -v && uv run pytest -p no:cacheprovider tests/test_pipeline_fake.py -k "existence" -v` | PASS (el segundo, sobre `corrida_existence` de G₂) |
 | `--auto-approve` → NO publicable | `uv run pytest -p no:cacheprovider tests/test_pipeline_fake.py::test_pipeline_auto_approve_no_es_publicable -v` | PASS |
 | La reconstrucción C3 → NO publicable por ≥ 12 checks | `uv run pytest -p no:cacheprovider tests/test_audit_c3.py -v` | PASS, incluido `test_audit_c3_reconstruccion_no_es_publicable_por_al_menos_doce_vias` |
@@ -1272,7 +1255,7 @@ M16, D7, D27 y la documentación de la Ola 2 (spec `docs/superpowers/specs/2026-
 ## Qué cambia
 
 - **D27:** sin extra `rag`, sin `QDRANT_*` en `.env.example` y sin `InMemoryVectorStore`; `semantic_similarity` se queda (modo `embedder`).
-- **§16:** <(a) el doble `fake` cita el primer estudio incluido, para que la adjudicación se vea por CLI | (b) §16 reformulado: la adjudicación se prueba en proceso>; `tests/test_cierre_motor.py` recorre el criterio por CLI.
+- **§16:** el doble `fake` cita el primer estudio incluido, para que la adjudicación se vea por CLI (§19 fila 13); `tests/test_cierre_motor.py` recorre el criterio por CLI.
 - **0.9.0** en `pyproject.toml`, `revisia/__init__.py`, `CITATION.cff` y `uv.lock`, con un test de sincronía.
 - **Documentación:** README (verificador por juez y qué significa `existence`, procedencia aplicada, RoB por herramienta sin GRADE, concordancia IA–IA, `revisia benchmark`, `revisia deposit`, CI multiplataforma, badge del CI), AGENTS, `docs/arquitectura.md` con el mapa de los 26 checks del auditor, `docs/benchmark-cribado.md` reescrito (método y comando), notas de metodología (GRADE, unidad de análisis), CHANGELOG 0.9.0 con «Cambios incompatibles», auditoría §11 «Ola 2 · motor cerrado» y `RELEASING.md` (matriz, `-m cronometrado`, `uv lock --check`, versión de uv).
 - `tests/test_documentacion.py`: lo que cada documento tiene que decir y lo que ya no puede decir.
@@ -1324,7 +1307,7 @@ Expected: la URL de la PR. Esperar `gh pr checks <n> --watch`: `lint`, las seis 
   | Auditoría §11 con la tabla y «pendiente: re-auditoría y corrida real (D1)» | 10 |
   | `RELEASING.md`: matriz, `-m cronometrado`, `uv lock --check`, versión de uv (§19 fila 8) | 8 |
   | `CITATION.cff` 0.9.0 y bump en los tres sitios (cuatro con el lock) | 4 |
-  | Decisión del cierre de §16 (D n+25, G n+19) | 2, 3, 11 |
+  | Cierre de §16 con la opción (a) (D n+25, G n+19; §19 fila 13) | 2, 3, 11 |
   | §16 punto por punto, §19 al día, PR con base `feat/ola2-auditor` | 11 |
 
   Lo que los planes dejaron a I: A, comprobación real del arquitecto (Tarea 0, Step 4, y cuerpo de la PR); C, «doble 20 %» (ya quitado por C del README y AGENTS; I lo quita de la arquitectura y lo fija por test); D, `prisma-ia-origen` en el CHANGELOG y la propuesta del doble (Tareas 2 y 9); E, `risk_of_bias.md` conserva el nombre (Tarea 5, fila 65) y GRADE fuera (Tareas 5 y 6, fijado por test); G₂, el cierre de §16 por CLI y README/AGENTS/arquitectura con la estructura del auditor y `revisia deposit` (Tareas 2, 3, 5 y 6).
@@ -1332,4 +1315,4 @@ Expected: la URL de la PR. Esperar `gh pr checks <n> --watch`: `lint`, las seis 
 - **Consistencia de nombres:** `_texto`/`ROOT` (Tarea 5) los usan las Tareas 6–10; `AVISOS_DEL_CIERRE`, `protocolo_cierre`, `correr_por_cli` (Tarea 3) solo los usa la Tarea 3 y la 11 los ejecuta; `editar_campo`, `editar_dominio`, `rescatar_con_texto`, `EDICION_DE_CAMPO`, `EDICION_DE_DOMINIO`, `protocolo_benchmark`, `write_run_v08` son los nombres de los planes C, E, F y G.
 - **Review Focus:** las cinco líneas tienen test en su tarea (4 y 9; 1 y 9; 2; 2; 6).
 - **Proporción:** los bloques de código son tests, el texto de «Cambios incompatibles», las filas de §19 y comandos de verificación; ninguna función de producción tiene cuerpo (la de la Tarea 2 se describe por su contrato y su texto exacto).
-- **Revisión independiente (2026-10-19) incorporada:** B1 (`protocolo_benchmark` se importa de `conftest`), B2 (CI en PR apiladas condicionado a la decisión del orquestador sobre H; fila I-17), B3 (la vía (b) usa `corrida_ola2_completa` y `test_frontera_de_la_ola_2_completa_es_apta`; fila n+19 de G). I1 (Step 0a con el inventario antes de la puerta; el `FakeProvider` real corre en muchas corridas de la suite; caso `embedder`; fila I-15), I2 (incompatibles ampliados y test con `MIN_CLI_VERSION`, `allowlist`, `funnel.png`, `embedder`; fila I-18), I3 (F 30 filas, G 23), I4 (`benchmarks/<slug>-<panel.name>/` fijado por test), I5 (`grep -rni`, `embed.py:7`), I6 (cobertura en dos pasadas con `--cov-append`), I7 (`SECURITY.md`; fila I-16), I8 (`base=aceptar_lo_obligatorio`, `flag_review`, `screening_ft/rescues/` retenido). Menores: `hitl_helpers.py` de 125 líneas, `uvx uv@0.11.26 lock --check`, `emit_attempt`, tests de documentación menos frágiles (grafía «AMSTAR 2», «Ubuntu y Windows», sin depender de saltos de línea, temas del CHANGELOG precisos), `### Removed` y `### Documentación` ubicadas, `date-released` en el checklist, ayudantes de la Tarea 3 en código, rojo por comportamiento y `AVISOS_DEL_CIERRE` aprobados aviso por aviso.
+- **Revisión independiente (2026-10-19) incorporada:** B1 (`protocolo_benchmark` se importa de `conftest`), B2 (CI en PR apiladas; hoy firme por §19 fila 15, aprobada 2026-10-20), B3 (la vía (b), retirada al aprobarse (a) en §19 fila 13 el 2026-10-20). I1 (inventario de los tests afectados, hoy guía del Step 4 de la Tarea 2; el `FakeProvider` real corre en muchas corridas de la suite; caso `embedder`; fila I-15), I2 (incompatibles ampliados y test con `MIN_CLI_VERSION`, `allowlist`, `funnel.png`, `embedder`; fila I-18), I3 (F 30 filas, G 23), I4 (`benchmarks/<slug>-<panel.name>/` fijado por test), I5 (`grep -rni`, `embed.py:7`), I6 (cobertura en dos pasadas con `--cov-append`), I7 (`SECURITY.md`; fila I-16), I8 (`base=aceptar_lo_obligatorio`, `flag_review`, `screening_ft/rescues/` retenido). Menores: `hitl_helpers.py` de 125 líneas, `uvx uv@0.11.26 lock --check`, `emit_attempt`, tests de documentación menos frágiles (grafía «AMSTAR 2», «Ubuntu y Windows», sin depender de saltos de línea, temas del CHANGELOG precisos), `### Removed` y `### Documentación` ubicadas, `date-released` en el checklist, ayudantes de la Tarea 3 en código, rojo por comportamiento y `AVISOS_DEL_CIERRE` aprobados aviso por aviso.
