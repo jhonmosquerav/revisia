@@ -19,7 +19,23 @@ DOI_RE = re.compile(r"^10\.\d{4,9}/\S+$")
 
 # Se pelan en bucle y sin distinguir mayúsculas: «doi: https://doi.org/…» es real.
 _PREFIJO_RE = re.compile(r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*|info:doi/)", re.IGNORECASE)
-_PUNTUACION_FINAL = ".,;)]"
+_PUNTUACION_FINAL = ".,;"
+_PAREJAS = {")": "(", "]": "["}
+
+
+def _sin_puntuacion_final(texto: str) -> str:
+    """Quita la puntuación final de una frase y los cierres que no abren dentro del DOI.
+
+    ``10.1000/abc(1)`` es un DOI real (el paréntesis abre dentro): solo se quita un ``)`` o un
+    ``]`` final desbalanceado, el que viene de copiar el DOI de una cita entre paréntesis.
+    """
+    while texto:
+        ultimo = texto[-1]
+        desbalanceado = ultimo in _PAREJAS and texto.count(ultimo) > texto.count(_PAREJAS[ultimo])
+        if ultimo not in _PUNTUACION_FINAL and not desbalanceado:
+            return texto
+        texto = texto[:-1]
+    return texto
 
 
 def normalize_doi(value: object) -> str | None:
@@ -34,9 +50,11 @@ def normalize_doi(value: object) -> str | None:
     texto = unquote(value).strip()
     if not texto:
         return None
-    while (sin_prefijo := _PREFIJO_RE.sub("", texto, count=1).strip()) != texto:
-        texto = sin_prefijo
-    texto = texto.lower().rstrip(_PUNTUACION_FINAL)
+    # Un DOI empieza por `10.`: un `(` o `[` inicial es de la frase (`(doi:10.1000/xyz)`).
+    while (sin_prefijo := _PREFIJO_RE.sub("", texto.lstrip("([").strip(), count=1)) != texto:
+        texto = sin_prefijo.strip()
+    texto = _sin_puntuacion_final(texto.lower())
+
     return texto if DOI_RE.match(texto) else None
 
 

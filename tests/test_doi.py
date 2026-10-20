@@ -25,6 +25,12 @@ from revisia.ingest.doi import DOI_RE, doi_url, normalize_doi
         ("10.1000/abc]", "10.1000/abc"),
         ("10.1016/j.jclinepi.2021.03.001", "10.1016/j.jclinepi.2021.03.001"),
         ("10.1000/a(b)c", "10.1000/a(b)c"),  # paréntesis interno se conserva
+        # Un cierre final solo se quita si está desbalanceado: es parte del DOI si abre dentro.
+        ("10.1000/abc(1)", "10.1000/abc(1)"),
+        ("10.1000/abc[2]", "10.1000/abc[2]"),
+        ("10.1000/abc(1)).", "10.1000/abc(1)"),
+        ("(doi:10.1000/xyz)", "10.1000/xyz"),  # copiado de una cita entre paréntesis
+        ("[https://doi.org/10.1000/xyz]", "10.1000/xyz"),
     ],
 )
 def test_normalize_doi_tabla(crudo: str, esperado: str) -> None:
