@@ -421,3 +421,39 @@ def test_validate_rechaza_text_file_mientras_no_haya_rescate_con_texto(tmp_path:
     decision = HumanDecision.model_validate(yaml.safe_load(path.read_text("utf-8")))
     with pytest.raises(DecisionFileError, match="text_file"):
         hitl._validate(path, decision, records=policy, flags=None)
+
+
+def test_decision_sha256_de_una_decision_08_no_cambia() -> None:
+    """El hash de una decisión 0.8 es el que calculaba el motor de ``main`` (e938d45).
+
+    ``text_file`` (D5) no entra en el volcado cuando vale ``None``: si entrara, el
+    ``decision_sha256`` de toda corrida 0.8 cambiaría y el auditor la acusaría en falso de
+    que su ``decision.yml`` no es la decisión registrada. ``reason`` sí sigue volcándose.
+    """
+    decision = HumanDecision.model_validate(
+        {
+            "request_sha256": "a" * 64,
+            "approved": True,
+            "actor": "human:jhon",
+            "records": {
+                "r1": {"label": "include"},
+                "r2": {"label": "exclude", "reason": "fuera de población"},
+                "r3": {},
+            },
+            "flags": {"0": {"verdict": "false_positive", "reason": "ok"}},
+        }
+    )
+    volcado = decision.model_dump(mode="json")
+    assert volcado["records"]["r1"] == {"label": "include", "reason": None}
+    assert canonical_sha256(volcado) == (
+        "8bec350212ce5862f470695d953e569953c8c9aba91a870d240c45493cd8c4ab"
+    )
+
+
+def test_record_label_vuelca_text_file_si_tiene_valor() -> None:
+    etiqueta = RecordLabel(label="include", reason="rescate", text_file="rescues/a.txt")
+    assert etiqueta.model_dump(mode="json") == {
+        "label": "include",
+        "reason": "rescate",
+        "text_file": "rescues/a.txt",
+    }

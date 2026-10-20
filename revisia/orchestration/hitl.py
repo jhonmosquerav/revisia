@@ -42,7 +42,16 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    StrictBool,
+    ValidationError,
+    field_validator,
+    model_serializer,
+)
 
 from revisia.config import effective_autonomy
 from revisia.orchestration.run_context import RunContext, resume_command
@@ -175,6 +184,20 @@ class RecordLabel(BaseModel):
         if not re.fullmatch(r"rescues/[^/\\]+", value) or nombre in {".", ".."}:
             raise ValueError("text_file debe ser rescues/<nombre>, relativo a screening_ft/")
         return value
+
+    @model_serializer(mode="wrap")
+    def _sin_text_file_nulo(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        """Omite ``text_file`` del volcado cuando vale ``None`` (revisión final de PR-0).
+
+        ``decision_sha256`` es ``canonical_sha256`` del volcado de la decisión: si un
+        ``text_file: None`` entrara en cada etiqueta, el hash de toda decisión 0.8 cambiaría y
+        el auditor acusaría en falso a esas corridas («decision.yml no es la decisión
+        registrada»). ``reason`` se vuelca siempre, como en 0.8.
+        """
+        volcado = handler(self)
+        if volcado.get("text_file") is None:
+            volcado.pop("text_file", None)
+        return volcado
 
 
 def _razon_obligatoria(value: str) -> str:
