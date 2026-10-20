@@ -8,7 +8,15 @@ from revisia.schemas.records import SearchRecord
 
 
 def test_cada_herramienta_tiene_dominios() -> None:
-    for tool in ("RoB2", "ROBINS-I", "NewcastleOttawa", "AMSTAR2", "QUADAS-2", "GRADE"):
+    herramientas = (
+        "RoB2",
+        "ROBINS-I",
+        "NewcastleOttawa",
+        "NewcastleOttawaCaseControl",
+        "AMSTAR2",
+        "QUADAS-2",
+    )
+    for tool in herramientas:
         assert len(TOOL_DOMAINS[tool]) >= 3
 
 

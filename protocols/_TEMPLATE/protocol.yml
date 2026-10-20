@@ -42,8 +42,8 @@ databases:
   - Europe PMC
 
 # Herramienta de riesgo de sesgo acorde al diseño esperado de los estudios:
-# RoB2 (ensayos) | ROBINS-I (no aleatorizados) | NewcastleOttawa | AMSTAR2 |
-# QUADAS-2 (diagnóstico) | GRADE (certeza agregada).
+# RoB2 (ensayos) | ROBINS-I (no aleatorizados) | NewcastleOttawa (cohortes) |
+# NewcastleOttawaCaseControl (casos y controles) | AMSTAR2 | QUADAS-2 (diagnóstico).
 rob_tool: RoB2
 
 prisma_extension: PRISMA-2020

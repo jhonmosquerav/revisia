@@ -38,6 +38,8 @@ TOOL_DOMAINS: dict[RoBTool, list[str]] = {
         "Selección del resultado reportado",
     ],
     "NewcastleOttawa": ["Selección", "Comparabilidad", "Resultado/Exposición"],
+    # Provisional hasta PR-E, que sustituye TOOL_DOMAINS por las especificaciones (D5).
+    "NewcastleOttawaCaseControl": ["Selección", "Comparabilidad", "Exposición"],
     "AMSTAR2": [
         "Protocolo registrado a priori",
         "Búsqueda exhaustiva",
@@ -51,13 +53,6 @@ TOOL_DOMAINS: dict[RoBTool, list[str]] = {
         "Prueba índice",
         "Estándar de referencia",
         "Flujo y tiempos",
-    ],
-    "GRADE": [
-        "Riesgo de sesgo",
-        "Inconsistencia",
-        "Evidencia indirecta",
-        "Imprecisión",
-        "Sesgo de publicación",
     ],
 }
 

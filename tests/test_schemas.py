@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import get_args
+
 import pytest
 from pydantic import ValidationError
 
@@ -13,6 +15,7 @@ from revisia.schemas import (
     ScreeningVote,
     VerificationReport,
 )
+from revisia.schemas.rob import RoBAssessment, RoBDomain, RoBTool
 from revisia.schemas.verification import CitationCheck
 
 
@@ -103,3 +106,39 @@ def test_extraction_record_v1_valida_como_abstract_ok() -> None:
         "ok",
     )
     assert ExtractionRecord(study_id="s", status="failed").fields == {}
+
+
+def test_rob_tool_sin_grade_y_con_nos_casos_controles() -> None:
+    assert set(get_args(RoBTool)) == {
+        "RoB2",
+        "ROBINS-I",
+        "NewcastleOttawa",
+        "NewcastleOttawaCaseControl",
+        "AMSTAR2",
+        "QUADAS-2",
+    }
+    with pytest.raises(ValidationError):
+        RoBAssessment(study_id="s", tool="GRADE")
+
+
+def test_rob_assessment_v1_valida_y_los_campos_humanos_van_atados() -> None:
+    v1 = {
+        "study_id": "s",
+        "tool": "RoB2",
+        "domains": [{"domain": "Proceso de aleatorización", "judgment": "low"}],
+        "overall": "low",
+    }
+    a = RoBAssessment.model_validate(v1)
+    assert (a.schema_version, a.tool_version, a.overall_llm, a.overall_algorithm) == (
+        2,
+        None,
+        None,
+        None,
+    )
+    assert a.domains[0].id is None and a.domains[0].quote_status == "none"
+    with pytest.raises(ValidationError):
+        RoBDomain(domain="D1", judgment="low", human_judgment="high")
+    with pytest.raises(ValidationError):
+        RoBAssessment(study_id="s", tool="RoB2", overall_human="high")
+    ok = RoBAssessment(study_id="s", tool="RoB2", overall_human="high", overall_reason="r")
+    assert ok.overall_human == "high"
