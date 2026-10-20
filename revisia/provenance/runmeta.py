@@ -16,8 +16,16 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
+
+RUNMETA_SCHEMA_VERSION: int = 2
+"""Versión del esquema de ``RunMeta``. Vive aquí (y no en ``schemas.artifacts``) porque
+``schemas.artifacts`` importa este módulo y no al revés."""
+
+Outcome = Literal["ok", "invalid_output", "transient_error", "deterministic_error"]
+ModelSource = Literal["config", "backend", "callback"]
 
 
 def sha256_text(text: str) -> str:
@@ -54,21 +62,42 @@ def canonical_sha256(value: object) -> str:
 
 
 class RunMeta(BaseModel):
-    """Procedencia de una sola llamada a un proveedor LLM.
+    """Procedencia de un intento de llamada a un proveedor LLM (una meta por intento, D14).
+
+    Los campos de la v1 conservan su significado: dicen **lo pedido**. Los
+    ``*_applied`` dicen **lo aplicado** de verdad por el backend (A6): un CLI que
+    ignora la seed deja ``seed_applied=None`` aunque ``seed`` valga 7. Los defaults
+    de la v2 reproducen la v1, así que una línea escrita por la 0.8 valida sin tocarla.
 
     Attributes:
         provider: identificador del proveedor (ej. ``"gemini"``).
         model: nombre del modelo solicitado.
         model_version: versión exacta reportada por el proveedor, si la da.
-        seed: semilla usada (``None`` si el proveedor no la soporta).
-        temperature: temperatura de muestreo usada.
-        top_p: nucleus sampling, si se usó.
-        prompt_sha256: hash del prompt efectivo (system + prompt).
-        response_sha256: hash de la respuesta cruda.
+        seed: semilla pedida (``None`` si el proveedor no la soporta).
+        temperature: temperatura pedida.
+        top_p: nucleus sampling pedido, si se usó.
+        prompt_sha256: hash del texto enviado, con el schema inyectado y el sufijo
+            de reintento cuando van en el texto (A7).
+        response_sha256: hash de la respuesta cruda; un intento fallido hashea el
+            texto crudo recibido (o ``""``).
         timestamp_utc: instante de la llamada.
         input_tokens: tokens de entrada, si el proveedor los reporta.
         output_tokens: tokens de salida, si el proveedor los reporta.
         deterministic: ``True`` solo si el proveedor garantiza determinismo.
+        schema_version: versión del esquema de la meta (2).
+        seed_applied: semilla realmente aplicada por el backend (A6).
+        temperature_applied: temperatura realmente aplicada (A6).
+        top_p_applied: top_p realmente aplicado (A6).
+        schema_sha256: hash del schema de salida inyectado, si lo hubo.
+        prompt_template: plantilla versionada renderizada (``"extraccion/v2.md"``).
+        prompt_template_sha256: hash del contenido de esa plantilla.
+        attempt: número de intento dentro de la llamada lógica (desde 1).
+        outcome: resultado del intento (D9: separa reanudar de pasar al humano).
+        effort: esfuerzo de razonamiento aplicado, si el backend lo admite.
+        backend_version: versión del backend (p. ej. del CLI).
+        latency_ms: duración del intento en milisegundos.
+        cost_usd: coste reportado del intento (D12).
+        model_source: de dónde salió el nombre del modelo (config, backend o callback).
     """
 
     provider: str
@@ -83,3 +112,17 @@ class RunMeta(BaseModel):
     input_tokens: int | None = None
     output_tokens: int | None = None
     deterministic: bool = False
+    schema_version: int = RUNMETA_SCHEMA_VERSION
+    seed_applied: int | None = None
+    temperature_applied: float | None = None
+    top_p_applied: float | None = None
+    schema_sha256: str | None = None
+    prompt_template: str | None = None
+    prompt_template_sha256: str | None = None
+    attempt: int = Field(default=1, ge=1)
+    outcome: Outcome = "ok"
+    effort: str | None = None
+    backend_version: str | None = None
+    latency_ms: int | None = Field(default=None, ge=0)
+    cost_usd: float | None = Field(default=None, ge=0.0)
+    model_source: ModelSource = "config"

@@ -7,6 +7,7 @@ import math
 from typing import get_args
 
 import pytest
+from pydantic import ValidationError
 
 from revisia.provenance.ledger import (
     AUTO_APPROVE_ACTOR,
@@ -17,7 +18,14 @@ from revisia.provenance.ledger import (
     is_human_actor,
     summarize_gates,
 )
-from revisia.provenance.runmeta import canonical_json, canonical_sha256
+from revisia.provenance.runmeta import (
+    RUNMETA_SCHEMA_VERSION,
+    ModelSource,
+    Outcome,
+    RunMeta,
+    canonical_json,
+    canonical_sha256,
+)
 from revisia.schemas.artifacts import GateAction
 
 # ── canonical_json / canonical_sha256 ───────────────────────────────────
@@ -196,3 +204,64 @@ def test_summarize_gates_auto_proceed_y_ledger_antiguo() -> None:
     assert resumen["reporte"].request_sha256 is None
     assert resumen["reporte"].n_labels == 0
     assert resumen["reporte"].actor == AUTO_APPROVE_ACTOR
+
+
+# ── RunMeta v2 (spec 2026-10-18 §4.2; A6, A7, D12, D14) ─────────────────
+
+
+def _meta_v1() -> dict:
+    """Una línea de llm_calls.jsonl escrita por la 0.8: sin ningún campo de la v2."""
+    return {
+        "provider": "gemini",
+        "model": "gemini-3.5-flash-lite",
+        "temperature": 0.0,
+        "prompt_sha256": "a" * 64,
+        "response_sha256": "b" * 64,
+        "timestamp_utc": "2026-10-01T00:00:00+00:00",
+    }
+
+
+def test_runmeta_v1_valida_con_los_defaults_de_la_v2() -> None:
+    meta = RunMeta.model_validate(_meta_v1())
+    assert meta.schema_version == RUNMETA_SCHEMA_VERSION == 2
+    assert (meta.seed_applied, meta.temperature_applied, meta.top_p_applied) == (None, None, None)
+    assert (meta.schema_sha256, meta.prompt_template, meta.prompt_template_sha256) == (
+        None,
+        None,
+        None,
+    )
+    assert (meta.attempt, meta.outcome, meta.model_source) == (1, "ok", "config")
+    assert (meta.effort, meta.backend_version, meta.latency_ms, meta.cost_usd) == (
+        None,
+        None,
+        None,
+        None,
+    )
+    assert meta.deterministic is False
+
+
+def test_runmeta_v2_acota_intento_resultado_y_origen_del_modelo() -> None:
+    with pytest.raises(ValidationError):
+        RunMeta.model_validate({**_meta_v1(), "attempt": 0})
+    with pytest.raises(ValidationError):
+        RunMeta.model_validate({**_meta_v1(), "outcome": "error"})
+    with pytest.raises(ValidationError):
+        RunMeta.model_validate({**_meta_v1(), "model_source": "guess"})
+    with pytest.raises(ValidationError):
+        RunMeta.model_validate({**_meta_v1(), "latency_ms": -1})
+    assert set(get_args(Outcome)) == {
+        "ok",
+        "invalid_output",
+        "transient_error",
+        "deterministic_error",
+    }
+    assert set(get_args(ModelSource)) == {"config", "backend", "callback"}
+
+
+def test_runmeta_v2_un_intento_fallido_se_serializa_completo() -> None:
+    fallido = RunMeta.model_validate(
+        {**_meta_v1(), "attempt": 2, "outcome": "invalid_output", "model_source": "backend"}
+    )
+    volcado = fallido.model_dump(mode="json")
+    assert volcado["attempt"] == 2 and volcado["outcome"] == "invalid_output"
+    assert RunMeta.model_validate(volcado) == fallido
