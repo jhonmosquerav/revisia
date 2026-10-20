@@ -115,6 +115,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from revisia.agents.busqueda import work_to_record
 from revisia.agents.dedup import deduplicate_with_report
 from revisia.ingest import parse_ris
 from revisia.schemas.records import SearchRecord
@@ -126,9 +127,11 @@ def test_a4_ris_con_prefijo_y_openalex_son_un_solo_registro_sin_renombrar() -> N
     # La evidencia de A4 tal cual: RIS `https://doi.org/10.1000/ABC` + OpenAlex `10.1000/abc`.
     ris = "TY  - JOUR\nTI  - Mismo artículo\nDO  - https://doi.org/10.1000/ABC\nER  -\n"
     (importado,) = parse_ris(ris)
-    openalex = SearchRecord(
-        record_id="10.1000/abc", title="Mismo artículo", doi="10.1000/abc", source_db="OpenAlex"
+    openalex = work_to_record(  # el lado OpenAlex por su parser real
+        {"id": "https://openalex.org/W1", "doi": "https://doi.org/10.1000/abc",
+         "display_name": "Mismo artículo"}
     )
+    assert openalex.doi == openalex.record_id == "10.1000/abc"
     assert importado.doi == importado.record_id == "10.1000/abc"
     unicos, informe = deduplicate_with_report([openalex, importado])
     assert [r.record_id for r in unicos] == ["10.1000/abc"]  # sin `#2`
@@ -162,6 +165,12 @@ def test_doi_que_no_es_texto_sigue_siendo_error_de_tipo() -> None:
         SearchRecord(record_id="x", title="t", doi=123)
 
 
+def test_extra_que_no_es_dict_es_error_de_validacion() -> None:
+    # Con un DOI no normalizable el validador no debe reventar con TypeError al fusionar `extra`.
+    with pytest.raises(ValidationError):
+        SearchRecord(record_id="x", title="t", doi="no-es-doi", extra=[1])
+
+
 def test_el_modelo_no_toca_el_record_id() -> None:
     crudo = "https://doi.org/10.1000/ABC"
     assert SearchRecord(record_id=crudo, title="t", doi=crudo).record_id == crudo
@@ -179,22 +188,16 @@ def test_importar_records_en_un_proceso_limpio() -> None:
     for modulo in ("revisia.schemas.records", "revisia.ingest.doi", "revisia.agents.dedup"):
         subprocess.run([sys.executable, "-c", f"import {modulo}"], check=True, cwd=RAIZ)
 
-
-def test_colision_real_de_ids_se_sigue_renombrando() -> None:
-    # `#n` queda para colisiones reales (mismo id, sin DOI, títulos distintos), §6.
-    a = SearchRecord(record_id="eric:1", title="Uno")
-    b = SearchRecord(record_id="eric:1", title="Otro distinto")
-    unicos, informe = deduplicate_with_report([a, b])
-    assert [r.record_id for r in unicos] == ["eric:1", "eric:1#2"]
-    assert [(r.from_id, r.to_id) for r in informe.renamed] == [("eric:1", "eric:1#2")]
 ```
+
+(La colisión real de ids, `#n` con mismo id y sin DOI, la cubre `tests/test_dedup.py::test_dedup_ids_repetidos_se_desambiguan` reescrito en el Step 5; no se duplica aquí.)
 
 - [ ] **Step 2: Run para verificar que falla**
 
 Run: `uv run pytest -p no:cacheprovider tests/test_identidad_registros.py -v`
 Expected: FAIL en `test_a4_…` (hoy el RIS guarda `doi` con prefijo: dos claves, `10.1000/abc#2`), `test_search_record_normaliza…`, `test_doi_no_normalizable…`; el resto PASS.
 
-- [ ] **Step 3: Implementar** en `revisia/schemas/records.py`: el validador `before` existente (`_sin_sustitutos`, línea 57) pasa a hacer, en este orden, (1) `replace_surrogates` como hoy y (2) si `data` es `dict` y `data.get("doi")` es `str`: `norm = normalize_doi(raw)`; copia el dict, pone `doi = norm` y, si `norm is None and raw.strip()`, `extra = {**(data.get("extra") or {}), "doi_raw": raw}`. **Un solo validador** (dos `before` de modelo tendrían orden implícito). Por qué no `field_validator` (lo que dice §6): un validador de campo no puede escribir `extra`; queda en §19. El `import` de `normalize_doi` va **dentro** de la función con un comentario que explique el ciclo (`records → ingest/__init__ → manual_import → records`). Renombrar el validador a `_normaliza_entrada` y su docstring: sustitutos (A4 de la revisión final de la Ola 1) y DOI (D19, auditoría A4).
+- [ ] **Step 3: Implementar** en `revisia/schemas/records.py`: el validador `before` existente (`_sin_sustitutos`, línea 57) pasa a hacer, en este orden, (1) `replace_surrogates` como hoy y (2) si `data` es `dict` y `data.get("doi")` es `str`: `norm = normalize_doi(raw)`; copia el dict, pone `doi = norm` y, si `norm is None and raw.strip()`: con `extra = data.get("extra")`, si es `None` o un `dict`, `extra = {**(extra or {}), "doi_raw": raw}`; si es otra cosa, se deja tal cual para que la validación de tipo dé `ValidationError` (nunca un `TypeError` desde el validador). **Un solo validador** (dos `before` de modelo tendrían orden implícito). Por qué no `field_validator` (lo que dice §6): un validador de campo no puede escribir `extra`; queda en §19. El `import` de `normalize_doi` va **dentro** de la función con un comentario que explique el ciclo (`records → ingest/__init__ → manual_import → records`). Renombrar el validador a `_normaliza_entrada` y su docstring: sustitutos (A4 de la revisión final de la Ola 1) y DOI (D19, auditoría A4).
 
 - [ ] **Step 4: Run para verificar que pasa**
 
@@ -203,14 +206,14 @@ Expected: PASS.
 
 - [ ] **Step 5: Tests que cambian de expectativa.** Con el validador, la suite da **20 fallos**, verificados: 19 son fixtures con DOI de registrante de una cifra (`10.1/abc`), que `DOI_RE` (`\d{4,9}`, PR-0) ya no reconoce como DOI; el 20.º es el renombrado `#2` de A4, que deja de existir. **No se relaja `DOI_RE`** (los DOI reales tienen ≥ 4 cifras): se migran las fixtures sustituyendo `10.N/` por `10.N000/` **solo** en estas líneas (entrada y su aserción):
   - `tests/test_busqueda.py:21,28,29`
-  - `tests/test_coverage_gaps.py:158,164,172,176`
+  - `tests/test_coverage_gaps.py:158,164,172,176,180`
   - `tests/test_dedup.py:21,22,54,57,70,71,100,104`
   - `tests/test_errores_deterministas.py:496,515,535,564,625`
   - `tests/test_exports_biblio_extraction.py:16,32` (solo `doi`; el `record_id` `10.1/abc` y la clave `10_1_abc` de la línea 29 no cambian)
   - `tests/test_hitl_pipeline.py:488,553,1494`
   - `tests/test_pmc_ncbi.py:90,117,118,154,164,222,227,228,244,286,331,339,351,360,365`
   - `tests/test_search_multibase.py:58,80,81,234,245,254,264`
-  - y, aunque hoy no fallan (pasan por la rama «DOI no normalizable» sin quererlo), `tests/test_search_stage.py:28` y `tests/test_audit_busqueda.py:1102,1111,1114`, para que sigan probando un registro **con** DOI.
+  - y, aunque hoy no fallan (pasan por la rama «DOI no normalizable» sin quererlo), `tests/test_search_stage.py:28`, `tests/test_audit_busqueda.py:1102,1110,1114` y `tests/test_fulltext.py:32`, para que sigan probando un registro **con** DOI.
 
   Y `tests/test_dedup.py:77-94` (`test_dedup_ids_repetidos_se_desambiguan`, que consagraba el `#2` de A4) se reescribe con el mismo nombre como colisión real: tres registros sin DOI, `record_id="hash:x"` los tres, títulos `"Uno"`, `"Dos"`, `"Uno"` → únicos `["hash:x", "hash:x#2"]`, `renamed == [("hash:x", "hash:x#2")]`, un duplicado con `key == "title:uno"` y `kept_record_id == "hash:x"`; el caso RIS + OpenAlex vive ya en `test_a4_…` de arriba. Comentario de la cabecera del test: «Ola 2 (D19): el DOI se normaliza al construir; el `#n` queda para colisiones reales».
 
@@ -231,7 +234,7 @@ git commit -m "feat(records): SearchRecord normaliza el DOI al construir y guard
 **Files:**
 - Modify: `revisia/agents/busqueda.py:41-44` (borrar `_normalize_doi`), `:53,64,69` (`work_to_record`), `:93-118` (`search` usa `_client`).
 - Modify: `revisia/agents/search_backends.py:49,61,66` (Crossref), `:87,91,96` (S2), `:128,139,144-145` (Europe PMC).
-- Modify: `revisia/agents/ncbi.py:106-126,130,135` (`_parse_pubmed_article`), `:172-175,184,189` (`esummary_pmc`).
+- Modify: `revisia/agents/ncbi.py:106-126,130,135` (`_parse_pubmed_article`), `:172-175,184,189` (`esummary_pmc`), `:283-286` (`idconv`: la clave `doi` del mapa con `normalize_doi`).
 - Modify: `revisia/agents/open_backends.py:44-53` (borrar `_doi`), `:89,95,100` (ERIC), `:119-122,132,137-138` (DOAJ), `:233,243,248-249` (BVS).
 - Modify: `revisia/agents/dspace.py:22` (import), `:58,74,79` (`_dc_record`).
 - Modify: `tests/test_open_backends.py:360-366` (ver Step 5).
@@ -244,6 +247,7 @@ git commit -m "feat(records): SearchRecord normaliza el DOI al construir y guard
   - Campos DOI nativos (pasan `doi=crudo`): OpenAlex `work["doi"]`; Crossref `it["DOI"]`; S2 `externalIds.DOI`; Europe PMC `it["doi"]`; PubMed `ArticleId[@IdType=doi]` y, si falta, `ELocationID[@EIdType=doi]` (el primero que **normalice**); PMC `articleids[idtype=doi]`; DOAJ `identifier[type=doi]`; DSpace `dc.identifier.doi`/`oapen.identifier.doi` (el primero que normalice; si ninguno, el primer crudo).
   - Campos que **no** son DOI por sí mismos (pasan `doi=doi`, ya normalizado, sin `doi_raw`): ERIC `url` (solo si contiene `doi.org/`, como hoy) y BVS `aid`.
   - `busqueda._client(timeout: float = 60.0, *, mailto: str | None = None) -> Any` → `_http.make_client(timeout, mailto=mailto)`: la indirección que ya tienen los demás backends (los tests la sustituyen; añade el User-Agent con `mailto`, mismo timeout y redirecciones). `search` deja su `import httpx` propio (`_http.HttpxMissingError` ya da el mensaje del extra).
+  - `ncbi.idconv(ids, *, mailto=None) -> dict[str, str]`: misma firma; la clave que sale del campo `doi` de la respuesta es `normalize_doi(val) or str(val).lower()` (las de `pmid`/`pmcid`, `str(val).lower()` como hoy), para que case con `record.doi`, ya normalizado. `fulltext._resolve_pmcid` (`fulltext.py:118-130`) **no se toca** (es fichero de PR-C, §15): busca `str(record.doi).lower()`, que con el DOI normalizado es la misma clave.
   - Desaparecen `busqueda._normalize_doi` y `open_backends._doi`. Respaldos de `record_id` sin cambios (`crossref:<DOI crudo o índice>`, `s2:<paperId>`, `europepmc:…`, `pubmed:<pmid>`, `pmc:<uid>`, `eric:…`, `doaj:…`, `bvs:…`/`gim:…`, `<base>:<handle>`, `unesdoc:<uuid>`).
 
 - [ ] **Step 1: Tests que fallan** — crear `tests/test_doi_backends.py`:
@@ -377,6 +381,12 @@ def test_campos_que_no_son_doi_no_dejan_doi_raw(monkeypatch: pytest.MonkeyPatch)
     assert (r_bvs.doi, r_bvs.record_id, "doi_raw" in r_bvs.extra) == (None, "bvs:b1", False)
 
 
+def test_idconv_indexa_el_doi_normalizado(monkeypatch: pytest.MonkeyPatch) -> None:
+    respuesta = {"records": [{"pmid": "1", "doi": "https://doi.org/10.1000/ABC", "pmcid": "PMC9"}]}
+    _enruta(monkeypatch, [("idconv", respuesta)])
+    assert ncbi.idconv([DOI], mailto="x@y.z")[DOI] == "PMC9"
+
+
 def test_no_queda_ningun_normalizador_propio() -> None:
     assert not hasattr(busqueda, "_normalize_doi")
     assert not hasattr(open_backends, "_doi")
@@ -387,7 +397,7 @@ def test_no_queda_ningun_normalizador_propio() -> None:
 - [ ] **Step 2: Run para verificar que falla**
 
 Run: `uv run pytest -p no:cacheprovider tests/test_doi_backends.py -v`
-Expected: FAIL. `test_todos_los_backends…`: `busqueda.search` sin `_client` (AttributeError al sustituirlo); tras eso, `record_id` con prefijo en Crossref/S2/Europe PMC/PMC. `test_doi_crudo_invalido…`: `record_id == "crossref:no-es-doi"` pasa pero `extra` sin `doi_raw` (hoy pasa `doi=None`). `test_no_queda…`: FAIL.
+Expected: FAIL. `test_todos_los_backends…`: `busqueda.search` sin `_client` (AttributeError al sustituirlo); tras eso, `record_id` con prefijo en Crossref/S2/Europe PMC/PubMed (`ncbi.py:112`, `val.lower()`)/PMC. `test_doi_crudo_invalido…`: hoy `record_id == "no-es-doi"` (el `.lower().strip()` de Crossref no valida nada), no `crossref:no-es-doi`. `test_idconv…`: la clave es `https://doi.org/10.1000/abc`. `test_no_queda…`: FAIL.
 
 - [ ] **Step 3: Implementar** el patrón de Interfaces en los cinco módulos (`from revisia.ingest.doi import doi_url, normalize_doi`; `dspace` deja de importar `_doi` de `open_backends`). Docstring de `open_backends`/`busqueda` donde vivían los normalizadores: una línea que remita a `ingest.doi` (D19). En `busqueda.py`, `_client` como en `search_backends.py:28-30` y la docstring de `search` sin el `Raises: RuntimeError` propio.
 
@@ -487,8 +497,8 @@ git commit -m "fix(ingest): el record_id importado usa normalize_doi y el doi vi
 - Consumes: `_record_id`, `_year` (Tarea 4).
 - Produces:
   - `parse_bibtex(text: str, *, source_db: str = "imported-BibTeX") -> list[SearchRecord]` (misma firma; mismos campos usados: `title`, `doi`, `author` partido por ` and `, `abstract`, `year`, `url`).
-  - `_bib_entries(text: str) -> Iterator[tuple[str, str]]`: `(tipo en minúsculas, cuerpo)` por entrada. Busca `@\s*(\w+)\s*\{`; desde ahí cuenta llaves (sin mirar comillas) hasta la que cierra; el cuerpo es lo de dentro. Un `@` que no abre `tipo{` se salta. Llaves sin cerrar al final del texto → `ValueError("BibTeX: entrada @<tipo> sin cerrar (línea <n>)")`.
-  - `_bib_fields(body: str) -> dict[str, str]`: salta la clave de cita (hasta la primera coma); después, repetidamente `nombre = valor` con `nombre` en minúsculas y `valor` = una o más piezas unidas por `#`, cada pieza `{…}` (llaves anidadas, se quitan todas las llaves internas), `"…"` (se quitan las llaves internas) o un token desnudo `[\w.:-]+` (número o macro, que se conserva **literal**: las macros `@string` no se expanden); el valor final con espacios colapsados (`" ".join(v.split())`). Para en el primer texto que no casa.
+  - `_bib_entries(text: str) -> Iterator[tuple[str, str]]`: `(tipo en minúsculas, cuerpo)` por entrada. Busca `@\s*(\w+)\s*\{`; un `@\w+\s*\(` cuyo tipo no sea `comment`, `preamble` ni `string` → `ValueError("BibTeX: @<tipo>(…) no soportado (línea <n>)")`; desde la llave cuenta llaves (sin mirar comillas) hasta la que cierra; el cuerpo es lo de dentro. Un `@` que no abre `tipo{` se salta. Llaves sin cerrar al final del texto → `ValueError("BibTeX: entrada @<tipo> sin cerrar (línea <n>)")`.
+  - `_bib_fields(body: str) -> dict[str, str]`: salta la clave de cita (hasta la primera coma); después, repetidamente `nombre = valor` con `nombre` = `[^\s=,{}"#]+` (admite `Unique-ID`, `web-of-science-categories`…) en minúsculas y `valor` = una o más piezas unidas por `#`, cada pieza `{…}` (llaves anidadas, se quitan todas las llaves internas), `"…"` (se quitan las llaves internas) o un token desnudo `[\w.:-]+` (número o macro, que se conserva **literal**: las macros `@string` no se expanden); el valor final con espacios colapsados (`" ".join(v.split())`). Un texto que no casa con `nombre = valor` (tras las comas y espacios entre campos) → `ValueError("BibTeX: campo ilegible en @<tipo>{<clave>} (línea <n>)")`: el fichero queda `failed` (M7) en vez de truncar la entrada en silencio.
   - Entradas `@comment`, `@preamble` y `@string` se ignoran; una entrada sin campos se ignora (como hoy). Sin decodificación LaTeX (solo se quitan llaves).
 
 - [ ] **Step 1: Tests que fallan** — añadir a `tests/test_manual_import.py` (imports: `parse_bibtex` de `revisia.ingest`, `deduplicate_with_report` de `revisia.agents.dedup`):
@@ -531,6 +541,31 @@ def test_bibtex_campos_en_mayusculas_y_saltos_de_linea() -> None:
     assert (r.title, r.year) == ("Multi línea", 2020)
 
 
+def test_bibtex_de_wos_con_nombres_de_campo_con_guion() -> None:
+    # Web of Science exporta `Unique-ID` antes de `title`/`doi`: no puede cortar la entrada.
+    bib = "@article{ISI:1,
+  Unique-ID = {{WOS:1}},
+  Title = {Un {LLM} criba},
+  DOI = {10.1000/WOS1},
+}
+"
+    (r,) = parse_bibtex(bib)
+    assert (r.title, r.doi, r.record_id) == ("Un LLM criba", "10.1000/wos1", "10.1000/wos1")
+
+
+def test_bibtex_campo_ilegible_es_error() -> None:
+    with pytest.raises(ValueError, match="campo ilegible"):
+        parse_bibtex("@article{k, title = {Bien}, = {sin nombre}}
+")
+
+
+def test_bibtex_con_parentesis_no_soportado_es_error() -> None:
+    with pytest.raises(ValueError, match=r"no soportado \(línea 2\)"):
+        parse_bibtex("@comment(nada)
+@article(k, title = {T})
+")
+
+
 def test_bibtex_entrada_sin_cerrar_es_error_y_no_un_registro_a_medias() -> None:
     with pytest.raises(ValueError, match="sin cerrar"):
         parse_bibtex("@article{ok, title = {Bien}}\n@article{k, title = {Abierto}\n")
@@ -539,9 +574,9 @@ def test_bibtex_entrada_sin_cerrar_es_error_y_no_un_registro_a_medias() -> None:
 - [ ] **Step 2: Run para verificar que falla**
 
 Run: `uv run pytest -p no:cacheprovider tests/test_manual_import.py -v`
-Expected: FAIL en los dos de A5, la concatenación, el `@` en un valor y la entrada sin cerrar.
+Expected: FAIL en los dos de A5, la concatenación, el `@` en un valor, `Unique-ID`, el campo ilegible, `@tipo(…)` y la entrada sin cerrar.
 
-- [ ] **Step 3: Implementar** según Interfaces. Docstring de `parse_bibtex`: el porqué (A5: el regex sin anidamiento perdía el título y los títulos de relleno se fusionaban), lo que soporta y lo que no (macros, LaTeX, `@tipo(…)` con paréntesis), y que una entrada sin cerrar hace fallar el fichero entero, que la búsqueda registra como `failed` (M7) en vez de importar medio registro.
+- [ ] **Step 3: Implementar** según Interfaces. Docstring de `parse_bibtex`: el porqué (A5: el regex sin anidamiento perdía el título y los títulos de relleno se fusionaban), lo que soporta y lo que no (macros, LaTeX, `@tipo(…)` con paréntesis, que es error), y que una entrada sin cerrar o un campo ilegible hacen fallar el fichero entero, que la búsqueda registra como `failed` (M7) en vez de importar medio registro.
 
 - [ ] **Step 4: Run para verificar que pasa**
 
@@ -676,10 +711,10 @@ git commit -m "fix(dedup): títulos NFKD sin diacríticos y los de relleno nunca
 
 **Files:**
 - Modify: `revisia/ingest/manual_import.py:1-8` (docstring), `:18-19` (`IMPORT_SUFFIXES` → `import_format`), `:107-137` (`import_file`, `import_directory`), y `parse_records_json` nueva.
-- Modify: `revisia/ingest/__init__.py` (exportar `parse_records_json` e `import_format` junto a lo que exporta PR-0; docstring «RIS, BibTeX y registros nativos»).
+- Modify: `revisia/ingest/__init__.py` (exportar `parse_records_json`, `import_format` e `ignored_files` junto a lo que exporta PR-0; docstring «RIS, BibTeX y registros nativos»).
 - Modify: `revisia/schemas/artifacts.py` (`SearchEntryKind`, línea 92 en `main`: literal nuevo al lado; `class SearchLogEntry`, línea 181: campo nuevo).
 - Modify: `revisia/orchestration/search_stage.py:27` (import), `:110-131` (`_import`), `:184-189` (`multi_database_search`).
-- Modify: `revisia/llm/preflight.py:51-52` (`_IMPORT_SUFFIXES` fuera), `:363-376` (`has_imports` y el mensaje).
+- Modify: `revisia/llm/preflight.py:51-52` (`_IMPORT_SUFFIXES` fuera), `:363-376` (`has_imports`, el mensaje y un aviso por fichero ignorado).
 - Modify: `tests/test_preflight.py:358` (ver Step 5).
 - Test: `tests/test_manual_import.py`, `tests/test_search_stage.py`, `tests/test_preflight.py` (añadir).
 
@@ -687,14 +722,15 @@ git commit -m "fix(dedup): títulos NFKD sin diacríticos y los de relleno nunca
 - Consumes: `SearchRecord` (Tarea 2), `parse_ris`/`parse_bibtex` (Tareas 4–5).
 - Produces (los consume PR-F para el benchmark, §10.2):
   - `ImportFormat = Literal["ris", "bibtex", "records_json"]` en `revisia/schemas/artifacts.py`.
-  - `import_format(path: str | Path) -> ImportFormat | None`: `records_json` si el **nombre** termina en `.records.json` (sin distinguir mayúsculas); `ris` con sufijo `.ris`; `bibtex` con `.bib`/`.bibtex`; si no, `None` (un `.json` cualquiera sigue sin importarse, como hoy).
-  - `parse_records_json(text: str) -> list[SearchRecord]`: `json.loads`; exige una lista; valida cada elemento con `SearchRecord.model_validate` (el DOI pasa por la Tarea 2; `record_id`, `source_db` y `extra` se conservan tal cual); `record_id` repetido → `ValueError("<id>: record_id repetido en el corpus nativo")`. Errores: `ValueError` (incluye `json.JSONDecodeError` y `pydantic.ValidationError`, que lo son).
-  - `import_file(path: str | Path) -> list[SearchRecord]`: despacha por `import_format`; `ValueError` con el mensaje de hoy ampliado («usa .ris, .bib, .bibtex o .records.json») si es `None`.
+  - `import_format(path: str | Path) -> ImportFormat | None`: `records_json` si el **nombre** es `records.json` o termina en `.records.json` (sin distinguir mayúsculas; así vale la copia tal cual de `02_dedup/records.json`); `ris` con sufijo `.ris`; `bibtex` con `.bib`/`.bibtex`; si no, `None` (un `.json` cualquiera sigue sin importarse, como hoy).
+  - `parse_records_json(text: str) -> list[SearchRecord]`: `json.loads`; exige una lista; valida cada elemento con `SearchRecord.model_validate` (el DOI pasa por la Tarea 2; `record_id`, `source_db` y `extra` se conservan tal cual); `record_id` repetido → `ValueError("<id>: record_id repetido en el corpus nativo; copia 02_dedup/records.json de la corrida, que ya está desambiguado")`. Errores: `ValueError` (incluye `json.JSONDecodeError` y `pydantic.ValidationError`, que lo son).
+  - `import_file(path: str | Path) -> list[SearchRecord]`: despacha por `import_format`; un `records_json` se lee con `encoding="utf-8-sig"` (un BOM de un editor de Windows no lo rompe); `ValueError` con el mensaje de hoy ampliado («usa .ris, .bib, .bibtex o .records.json») si es `None`.
   - `import_directory(directory)`: importa todo fichero con `import_format(p) is not None`, en orden de nombre.
+  - `ignored_files(directory: str | Path) -> list[str]`: nombres, en orden, de los **ficheros** de la carpeta que `import_format` no reconoce (los directorios no cuentan); vacío si la carpeta no existe. El preflight emite un aviso por cada uno (`where = "imported/<nombre>"`, «no se importa: usa .ris, .bib, .bibtex o *.records.json»), para que un `corpus.json` mal nombrado no desaparezca en silencio.
   - `SearchLogEntry.format: ImportFormat | None = None`: lo pone `search_stage._import` para **toda** importación (`ris`, `bibtex`, `records_json`); `None` en bases e inyectadas, y en los logs de la 0.8.
-  - `IMPORT_SUFFIXES` desaparece (su único consumidor era `search_stage.py:27`); `preflight` usa `import_format`.
+  - `IMPORT_SUFFIXES` desaparece (su único consumidor era `search_stage.py:27`); `preflight` usa `import_format` e `ignored_files`.
 
-- [ ] **Step 1: Tests que fallan.** Añadir a `tests/test_manual_import.py` (imports: `json`, `Path`, `get_args`, `import_directory`, `import_file`, `import_format`, `parse_records_json` de `revisia.ingest`, `ImportFormat` de `revisia.schemas.artifacts`, `SearchRecord`):
+- [ ] **Step 1: Tests que fallan.** Añadir a `tests/test_manual_import.py` (imports: `json`, `Path`, `get_args`, `ignored_files`, `import_directory`, `import_file`, `import_format`, `parse_records_json` de `revisia.ingest`, `ImportFormat` de `revisia.schemas.artifacts`, `SearchRecord`):
 
 ```python
 def _corpus() -> list[SearchRecord]:
@@ -729,6 +765,7 @@ def test_parse_records_json_rechaza_lo_que_no_es_un_corpus(malo: str) -> None:
     [
         ("a.ris", "ris"), ("b.BIB", "bibtex"), ("c.bibtex", "bibtex"),
         ("corpus.records.json", "records_json"), ("CORPUS.Records.JSON", "records_json"),
+        ("records.json", "records_json"),
         ("otro.json", None), ("x.txt", None),
     ],
 )
@@ -746,8 +783,13 @@ def test_import_directory_lee_records_json_e_ignora_otros_json(tmp_path: Path) -
         json.dumps([r.model_dump(mode="json") for r in corpus]), encoding="utf-8"
     )
     (tmp_path / "otro.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "sub.ris").mkdir()  # un directorio no es un fichero ignorado
     assert import_directory(tmp_path) == corpus
+    assert ignored_files(tmp_path) == ["otro.json"]  # de él sale el aviso del preflight
     assert import_file(tmp_path / "corpus.records.json") == corpus
+    con_bom = tmp_path / "records.json"
+    con_bom.write_bytes(b"ï»¿" + json.dumps([corpus[0].model_dump(mode="json")]).encode())
+    assert import_file(con_bom) == corpus[:1]
     with pytest.raises(ValueError, match="records.json"):
         import_file(tmp_path / "otro.json")
 ```
@@ -786,14 +828,18 @@ def test_records_json_importado_conserva_ids_y_queda_en_el_log_con_su_formato(tm
     assert (roto.format, roto.status, roto.n_returned) == ("records_json", "failed", 0)
 ```
 
-Añadir a `tests/test_preflight.py`:
+Añadir a `tests/test_preflight.py`, **justo después de `test_preflight_imported_solo_cuenta_ficheros`** (línea 354; no al final del fichero, donde PR-A también añade tests):
 
 ```python
-def test_preflight_cuenta_records_json_como_importacion(proto_dir: Path) -> None:
+def test_preflight_cuenta_records_json_y_avisa_de_lo_que_ignora(proto_dir: Path) -> None:
     protocol = _proto(databases=["OpenAlex", "Scopus"])
-    (proto_dir / "imported").mkdir()
-    (proto_dir / "imported" / "corpus.records.json").write_text("[]", "utf-8")
+    imported = proto_dir / "imported"
+    imported.mkdir()
+    (imported / "records.json").write_text("[]", "utf-8")
     assert "imported/" not in _messages(_run(protocol, proto_dir).warnings)
+    (imported / "corpus.json").write_text("[]", "utf-8")  # mal nombrado: no se importa
+    avisos = _messages(_run(protocol, proto_dir).warnings)
+    assert "[imported/corpus.json] no se importa" in avisos
 ```
 
 - [ ] **Step 2: Run para verificar que falla**
@@ -801,7 +847,7 @@ def test_preflight_cuenta_records_json_como_importacion(proto_dir: Path) -> None
 Run: `uv run pytest -p no:cacheprovider tests/test_manual_import.py tests/test_search_stage.py tests/test_preflight.py -v`
 Expected: FAIL (`ImportError: parse_records_json`/`import_format`/`ImportFormat`; después, `format` ausente en el log y el aviso del preflight).
 
-- [ ] **Step 3: Implementar** según Interfaces. Docstrings: `parse_records_json` explica D23 (el gold etiquetado sobre la exploratoria casa con el corpus del panel porque los ids no se recalculan; con RIS/BibTeX un registro sin DOI recibiría otro `hash:`), que un id repetido es un corpus dañado (renombrarlo en silencio rompería el gold) y que el DOI se renormaliza al leer (idempotente). Mensaje del preflight: «… y no hay ficheros .ris/.bib/.records.json en imported/: …».
+- [ ] **Step 3: Implementar** según Interfaces. Docstrings: `parse_records_json` explica D23 (el gold etiquetado sobre la exploratoria casa con el corpus del panel porque los ids no se recalculan; con RIS/BibTeX un registro sin DOI recibiría otro `hash:`), que un id repetido es un corpus dañado (renombrarlo en silencio rompería el gold) y que el DOI se renormaliza al leer (idempotente). Mensajes del preflight: «… y no hay ficheros .ris/.bib/.records.json en imported/: …» y, por fichero ignorado, «no se importa: usa .ris, .bib, .bibtex o *.records.json».
 
 - [ ] **Step 4: Run para verificar que pasa**
 
@@ -838,20 +884,20 @@ git fetch origin
 git rebase origin/feat/ola2-procedencia
 ```
 
-Expected: sin conflictos (A no toca ficheros de esta pista; si `tests/fakes.py` o `tests/conftest.py` chocan, se conservan ambas partes). `requires-python >= 3.11` ya viene de H.
+Expected: conflictos en tres ficheros, todos de **conservar ambas partes**: `revisia/llm/preflight.py` (A añade constantes junto a las líneas 42-52, donde B quita `_IMPORT_SUFFIXES`: quedan las de A y desaparece `_IMPORT_SUFFIXES`), `tests/test_preflight.py` (A añade tests al final; el de B va junto a `test_preflight_imported_solo_cuenta_ficheros`) y `revisia/schemas/artifacts.py` (A retira `RunInfo.prompt_sha256`; B añade `ImportFormat`, `SearchLogEntry.format` y `DedupReport.unmerged_placeholders`). Si `tests/fakes.py` o `tests/conftest.py` chocan, lo mismo. `git rebase --continue` tras cada uno y la suite en verde al final. `requires-python >= 3.11` ya viene de H.
 
 - [ ] **Step 2: Adaptar el test de parsers de PR-H.** En `tests/test_search_backends_parsers.py` (PR-H, Tarea 5), las dos líneas que reproducen la normalización vieja (`doi = (it.get("DOI") or "").lower().strip() or None` en el test de Crossref y `doi = ((p.get("externalIds") or {}).get("DOI") or "").lower().strip() or None` en el de S2) pasan a `doi = normalize_doi(it.get("DOI"))` y `doi = normalize_doi((p.get("externalIds") or {}).get("DOI"))` (`from revisia.ingest.doi import normalize_doi`). El resto del fichero no cambia (el respaldo `crossref:` del tercer ítem sin `DOI` sigue igual).
 
 Run: `uv run pytest -p no:cacheprovider tests/test_search_backends_parsers.py -v`
 Expected: PASS.
 
-Y comprobar que A y H no trajeron fixtures nuevas con DOI de una cifra que lleguen a `SearchRecord.doi`:
+Y comprobar que A y H no trajeron fixtures nuevas con DOI de registrante corto que lleguen a `SearchRecord.doi` o a un parser:
 
 ```bash
-grep -rnE "doi[\"']?\s*[=:]\s*f?[\"']10\.[0-9]{1,3}/|DO  - 10\.[0-9]{1,3}/" tests
+grep -rnE "10\.[0-9]{1,3}/" tests
 ```
 
-Expected: sin resultados (si los hay, migrarlos como en la Tarea 2, Step 5, y anotarlo en §19).
+Expected: el resultado se revisa **a mano**: quedan los usos como `record_id`, ids de diario o texto (`test_artifacts`, `test_brain`, `test_hitl`, `test_interop`, `test_fakes`, `test_run_context`…), que no pasan por `normalize_doi`; cualquier `doi=`, `"doi":`, `DO  -`, `doi = {…}` o campo DOI de una respuesta simulada se migra como en la Tarea 2, Step 5, y se anota en §19.
 
 ```bash
 git add tests/test_search_backends_parsers.py
@@ -894,15 +940,15 @@ y en `### Fixed`:
 - [ ] **Step 4: Desviaciones en el spec (§19).** Añadir **a continuación de la última fila existente**, con numeración consecutiva, estas filas (y las que haya producido la revisión por tarea):
 
 ```
-| n | §6 `SearchRecord.doi` | La normalización va en el validador `before` del modelo (el que ya quitaba sustitutos), no en un `field_validator`: uno de campo no puede escribir `extra["doi_raw"]`. Solo actúa sobre un `str`; un `""` o espacios no deja `doi_raw`; un no-`str` lo rechaza la validación de tipo. `normalize_doi` se importa dentro de la función (ciclo `records → ingest/__init__ → manual_import → records`) | Plan PR-B |
-| n+1 | §6 backends | Cada backend pasa a `doi=` el valor crudo del campo que la fuente etiqueta como DOI y calcula el `record_id` con `normalize_doi`. ERIC (`url`) y BVS (`aid`) pasan solo el normalizado: no son campos DOI y un valor que no lo es no es un «DOI crudo». DSpace toma el primer valor que normaliza (si ninguno, el primer crudo). `busqueda.search` usa `_client()` → `_http.make_client`, como los demás | Plan PR-B |
-| n+2 | §6, PR-0 `DOI_RE` | Las fixtures con registrante de una cifra (`10.1/abc`) dejan de ser DOI con `\d{4,9}`: se migran a `10.N000/…` en `test_busqueda`, `test_coverage_gaps`, `test_dedup`, `test_errores_deterministas`, `test_exports_biblio_extraction`, `test_hitl_pipeline`, `test_pmc_ncbi`, `test_search_multibase`, `test_search_stage` y `test_audit_busqueda`. `DOI_RE` no se relaja. Un plan posterior que construya `SearchRecord(doi="10.1/…")` obtiene `doi=None` y `doi_raw` | Plan PR-B |
+| n | §6 `SearchRecord.doi` | La normalización va en el validador `before` del modelo (el que ya quitaba sustitutos), no en un `field_validator`: uno de campo no puede escribir `extra["doi_raw"]`. Solo actúa sobre un `str`; un `""` o espacios no deja `doi_raw`; un no-`str` lo rechaza la validación de tipo; un `extra` que no es `dict` se deja para que salga `ValidationError`. `normalize_doi` se importa dentro de la función (ciclo `records → ingest/__init__ → manual_import → records`) | Plan PR-B |
+| n+1 | §6 backends | Cada backend pasa a `doi=` el valor crudo del campo que la fuente etiqueta como DOI y calcula el `record_id` con `normalize_doi`. ERIC (`url`) y BVS (`aid`) pasan solo el normalizado: no son campos DOI y un valor que no lo es no es un «DOI crudo». DSpace toma el primer valor que normaliza (si ninguno, el primer crudo). `busqueda.search` usa `_client()` → `_http.make_client`, como los demás. `ncbi.idconv` indexa el DOI de la respuesta con `normalize_doi`; `fulltext._resolve_pmcid` (fichero de PR-C) no se toca: su `str(record.doi).lower()` ya es la clave normalizada | Plan PR-B |
+| n+2 | §6, PR-0 `DOI_RE` | Las fixtures con registrante de una cifra (`10.1/abc`) dejan de ser DOI con `\d{4,9}`: se migran a `10.N000/…` en `test_busqueda`, `test_coverage_gaps`, `test_dedup`, `test_fulltext`, `test_errores_deterministas`, `test_exports_biblio_extraction`, `test_hitl_pipeline`, `test_pmc_ncbi`, `test_search_multibase`, `test_search_stage` y `test_audit_busqueda`. `DOI_RE` no se relaja. Un plan posterior que construya `SearchRecord(doi="10.1/…")` obtiene `doi=None` y `doi_raw` | Plan PR-B |
 | n+3 | §4.1, §4.4 | `DedupReport.unmerged_placeholders: int = 0` y `SearchLogEntry.format: ImportFormat \| None = None` (`ImportFormat = Literal["ris","bibtex","records_json"]`) los añade PR-B en `schemas/artifacts.py`: §4.1 los da como contrato, pero §4.4 y el plan de PR-0 no los incluyen. `format` se escribe en toda importación, no solo en `records_json`; default para que los artefactos v1 validen | Plan PR-B |
 | n+4 | §6 dedup | La clave de título conserva un espacio entre palabras (`title:educacion rural`), como en la 0.8. Los títulos de relleno se comparan normalizados (`"SIN TITULO"`, `"Untitled."`, `"  "` lo son). Un relleno se cuenta en `unmerged_placeholders` y, si su id choca con otro, sigue pasando por el renombrado `#n` | Plan PR-B |
-| n+5 | §6 BibTeX | `@comment`, `@preamble` y `@string` se ignoran; las macros no se expanden (el token desnudo se conserva literal); sin decodificación LaTeX (solo se quitan llaves); `@tipo(…)` con paréntesis no se admite; una entrada sin cerrar hace fallar el fichero entero (`ValueError`, queda `failed` en el log, M7) en vez de importar medio registro | Plan PR-B |
-| n+6 | D23 | `parse_records_json(text) -> list[SearchRecord]` rechaza (`ValueError`) lo que no es una lista, registros inválidos y `record_id` repetidos. Un fichero se reconoce por el nombre (`*.records.json`, sin distinguir mayúsculas) con `import_format(path)`, que sustituye a `IMPORT_SUFFIXES` en la búsqueda y en el preflight; un `.json` cualquiera sigue ignorándose | Plan PR-B |
+| n+5 | §6 BibTeX | `@comment`, `@preamble` y `@string` se ignoran; las macros no se expanden (el token desnudo se conserva literal); sin decodificación LaTeX (solo se quitan llaves); los nombres de campo son `[^\s=,{}"#]+` (admite `Unique-ID` de WoS); `@tipo(…)` con paréntesis, un campo ilegible o una entrada sin cerrar hacen fallar el fichero entero (`ValueError`, queda `failed` en el log, M7) en vez de importar medio registro | Plan PR-B |
+| n+6 | D23 | `parse_records_json(text) -> list[SearchRecord]` rechaza (`ValueError`) lo que no es una lista, registros inválidos y `record_id` repetidos. Se lee con `utf-8-sig`. Un fichero se reconoce por el nombre (`records.json` o `*.records.json`, sin distinguir mayúsculas) con `import_format(path)`, que sustituye a `IMPORT_SUFFIXES` en la búsqueda y en el preflight; un `.json` cualquiera sigue sin importarse, pero el preflight avisa de cada fichero de `imported/` que ignora (`ignored_files`) | Plan PR-B |
 | n+7 | D19 | En la importación manual, un registro sin DOI conserva el id de la 0.8 (`hash:` del título); uno con DOI no reconocible cae a ese hash (antes usaba la cadena en minúsculas) y guarda el crudo en `doi_raw` | Plan PR-B |
-| n+8 | §15 | PR-B toca, además de su lista, `orchestration/search_stage.py` (`_import`, `multi_database_search`), `llm/preflight.py` (detección de `imported/`) y `schemas/artifacts.py` (dos campos aditivos). **No toca `orchestration/pipeline.py`** | Plan PR-B |
+| n+8 | §15 | `schemas/records.py` y `agents/dedup.py` no figuran en la tabla de solapes de §15 pero son de esta pista (nadie más los toca). PR-B toca además `orchestration/search_stage.py` (`_import`, `multi_database_search`), `llm/preflight.py` (detección de `imported/`) y `schemas/artifacts.py` (dos campos aditivos). **No toca `orchestration/pipeline.py`** | Plan PR-B |
 ```
 
 - [ ] **Step 5: Commit de documentación.**
@@ -984,8 +1030,9 @@ Expected: URL de la PR.
 
 ## Self-review (hecha al escribir el plan)
 
-- **Cobertura de §6:** `SearchRecord.doi` con normalización y `doi_raw` (T2); los cinco módulos de backends sin normalizador propio, verificados con `grep` (`busqueda.py:41-44`, `open_backends.py:44-53`, `search_backends.py:49,87,128`, `ncbi.py:112,118,175`, `dspace.py:22,58`) (T3); `manual_import._record_id` (T4); parser BibTeX por llaves (T5); `dedup_key` con NFKD, `PLACEHOLDER_TITLES`, `none:<record_id>` y `unmerged_placeholders` (T6); `parse_records_json` con `format: records_json` en el log (T7); ids estables y `#n` solo en colisiones reales (T2, `test_colision_real_de_ids_se_sigue_renombrando`). Tests nombrados en §6: evidencia A4 (T2), evidencia A5 (T5 y T6), `test_normalize_doi_tabla` (ya en PR-0, `tests/test_doi.py`), `test_todos_los_backends_normalizan_el_doi_al_construir` (T3), `test_dedup_nfkd_fusiona_titulos_con_y_sin_acentos` (T6).
+- **Cobertura de §6:** `SearchRecord.doi` con normalización y `doi_raw` (T2); los cinco módulos de backends sin normalizador propio, verificados con `grep` (`busqueda.py:41-44`, `open_backends.py:44-53`, `search_backends.py:49,87,128`, `ncbi.py:112,118,175`, `dspace.py:22,58`) (T3); `manual_import._record_id` (T4); parser BibTeX por llaves (T5); `dedup_key` con NFKD, `PLACEHOLDER_TITLES`, `none:<record_id>` y `unmerged_placeholders` (T6); `parse_records_json` con `format: records_json` en el log (T7); ids estables y `#n` solo en colisiones reales (T2, `test_dedup_ids_repetidos_se_desambiguan` reescrito). Tests nombrados en §6: evidencia A4 (T2), evidencia A5 (T5 y T6), `test_normalize_doi_tabla` (ya en PR-0, `tests/test_doi.py`), `test_todos_los_backends_normalizan_el_doi_al_construir` (T3), `test_dedup_nfkd_fusiona_titulos_con_y_sin_acentos` (T6).
 - **Verificación contra el código:** con una copia de `main` @ `c1af7c3` y el cambio de cada tarea aplicado en borrador, la suite dio exactamente los 20 fallos listados en la Tarea 2 (19 por DOI de una cifra + el `#2`), más `test_open_backends.py::test_helpers_year_y_doi` en la Tarea 3 y la línea 358 de `test_preflight.py` en la Tarea 7; los tests nuevos de las Tareas 2–7 pasaron sobre el borrador. Firmas leídas: `SearchRecord` y su validador (`records.py:44-61`), `dedup_key`/`deduplicate_with_report` (`dedup.py:31,46`), `DedupReport`/`SearchLogEntry`/`SearchEntryKind` (`artifacts.py:231,181,92`), `_record_id`/`parse_ris`/`parse_bibtex`/`import_file`/`import_directory`/`IMPORT_SUFFIXES` (`manual_import.py:22,35,73,107,128,19`), `_import`/`multi_database_search` (`search_stage.py:110,155`), `_IMPORT_SUFFIXES` (`preflight.py:52`), `_client` de cada backend (`search_backends.py:28`, `open_backends.py:29`, `dspace.py:35`, `ncbi.py:49`); `pipeline.py:398-400` escribe el informe del dedup sin tocarlo.
 - **Consistencia de tipos:** `ImportFormat` (T7) lo usan `SearchLogEntry.format` e `import_format`; `normalize_doi` (PR-0) lo consumen T2, T3, T4, T6; `PLACEHOLDER_TITLES`/`is_placeholder_title`/`dedup_key` (T6) los consume PR-G; `parse_records_json`/`import_format` (T7), PR-F.
 - **Proporción:** los bloques de código son tests con los valores del spec y la evidencia de la auditoría; las tareas de código dan firma, campos y la regla del tokenizador BibTeX, sin cuerpos.
+- **Revisión independiente (2026-10-19) incorporada:** `test_coverage_gaps.py:180` y `test_fulltext.py:32` en la migración y `test_audit_busqueda.py:1110` (no 1111); conflictos del rebase sobre A (`preflight.py`, `test_preflight.py`, `artifacts.py`) y el test de preflight junto a su vecino; nombres de campo BibTeX `[^\s=,{}"#]+` con error en lo ilegible y en `@tipo(…)`; `records.json` exacto, `utf-8-sig` y aviso por fichero ignorado (`ignored_files`); Expected corregidos en T3 (Crossref y PubMed); lado OpenAlex de A4 por `work_to_record`; `extra` no-`dict` → `ValidationError`; `ncbi.idconv` con `normalize_doi`; un solo test de colisión de ids; grep manual de DOI cortos en la T8.
 - **Review Focus:** las cinco entradas tienen test en su tarea (ciclo de import y releer en T2; campos no-DOI en T3; BibTeX real en T5; corpus nativo dañado o con `#2` en T7).

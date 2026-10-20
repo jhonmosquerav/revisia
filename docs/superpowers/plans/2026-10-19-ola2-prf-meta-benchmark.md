@@ -41,7 +41,14 @@ Entradas que el spec implica y que ninguna tarea probaría sin estas líneas; ca
 
 ## Topología de ejecución (subagentes)
 
-F₁ se ejecuta en secuencia en el worktree `C:\revisia-wt\f` (rama `feat/ola2-meta-benchmark`, creada desde `feat/ola2-contratos` en la Tarea 17 de PR-0), en paralelo con H, A, B, C, D y E₁ en sus propios worktrees. F₂ continúa en la misma rama tras rebasarla sobre PR-E (§15: «0 (F₁) → E (F₂)»); los conflictos esperables al rebasar son los de `tests/test_auditor_meta_y_estados.py` (G₁ puede cambiar sus imports al partir `checks_flow.py`) y ninguno en código de producción.
+F₁ se ejecuta en secuencia en el worktree `C:\revisia-wt\f` (rama `feat/ola2-meta-benchmark`, creada desde `feat/ola2-contratos` en la Tarea 17 de PR-0), en paralelo con H, A, B, C, D y E₁ en sus propios worktrees. F₂ continúa en la misma rama tras rebasarla sobre PR-E (§15: «0 (F₁) → E (F₂)»). Conflictos esperables, todos con resolución **por unión** (se conservan los cambios de ambos lados):
+
+| Fichero | Con | Qué choca | Resolución |
+|---|---|---|---|
+| `revisia/exports/interop.py` | E (plan E, tarea E1.7) | E reescribe las líneas 28-57 (`render_robvis_csv` por herramienta) y añade `robvis_note` justo antes de `render_metafor_csv`, que F₁ cambia (`:60-76`): los bloques quedan contiguos | Unión: el código de E entero hasta `robvis_note` inclusive, después `render_metafor_csv` de F₁ |
+| `revisia/exports/__init__.py` | E | imports y `__all__` contiguos (F₁ añade `render_outcome_forest_png` y `render_outcome_funnel_png`; E añade los suyos) | Unión de ambas listas, en orden alfabético como hoy |
+| `tests/test_interop.py` | E | F₁ cambia la cabecera esperada de `test_metafor_csv_trae_yi_vi` (`:53`); E reescribe los tests de robvis, encima | Unión: los tests de robvis de E y el test de metafor de F₁ |
+| `tests/test_auditor_meta_y_estados.py` | G₁ | F₁ cambia las líneas 90, 248 y 540-544; G₁ puede cambiar sus imports al partir `checks_flow.py` | Lo resuelve **G al rebasar sobre F** (G₂, §15), no F₂: unión de los imports de G₁ y las tres ediciones de F₁ |
 
 | Tarea | Fichero(s) | Depende de |
 |---|---|---|
@@ -197,13 +204,13 @@ El cambio de forma rompe a todos los consumidores de `MetaAnalysisResult` a la v
 - Produces (en `revisia/meta_analysis.py`; nombres finales, las Tareas 4–6 rellenan los campos que aquí quedan con su default):
   - `EGGER_MIN_K: Final[int] = 10`, `PI_MIN_K: Final[int] = 3`, `DUPLICATE_TOL: Final[float] = 1e-9`.
   - `StudyEffect` (`:49`) gana `subgroup: str | None = None`.
-  - `PooledEstimate` (`:63`) gana `test: Literal["z", "t"] = "z"` y `df: int | None = None` (con `t`, el estadístico sigue en `z`).
+  - `PooledEstimate` (`:63`) gana `test: Literal["z", "t"] = "z"`, `df: int | None = None` y `p_method: str = ""` (con `t`, el estadístico sigue en `z`; `p_method` vacío en DL, `"t (HKSJ)"` en la Tarea 5; el auditor lo ignora, `checks_flow.py:151`).
   - `Heterogeneity`, `EggerTest`: sin cambio.
   - `class SubgroupResult(BaseModel)`: `subgroup: str`, `k: int`, `random: PooledEstimate | None = None`, `heterogeneity: Heterogeneity | None = None`.
   - `class SubgroupTest(BaseModel)`: `q: float`, `df: int`, `p_value: float | None = None`, `p_method: str = ""`.
   - `class NotPooledOutcome(BaseModel)`: `outcome: str | None`, `k: int`, `study_ids: list[str]`.
   - `class OutcomeMeta(BaseModel)`: `outcome: str | None`, `k: int`, `measure: Measure`, `log_scale: bool`, `studies: list[StudyEffect]`, `fixed: PooledEstimate`, `random: PooledEstimate`, `heterogeneity: Heterogeneity`, `prediction_interval: PredictionInterval | None = None`, `egger: EggerTest | None = None`, `egger_note: str | None = None`, `subgroups: list[SubgroupResult] = []`, `q_between: SubgroupTest | None = None`, `duplicates: list[DuplicateEffect] = []`.
-  - `class MetaAnalysisResult(BaseModel)` (sustituye a la plana, `:96`): `schema_version: int = ARTIFACT_SCHEMA_VERSION`, `random_method: RandomMethod = "DL"`, `outcomes: list[OutcomeMeta] = []`, `not_pooled: list[NotPooledOutcome] = []`, `excluded: int = Field(default=0, ge=0)`. Propiedades **no serializadas** (`@property`, no `computed_field`): `k -> int` = Σ `outcomes[].k`; `studies -> list[StudyEffect]` = concatenación de `outcomes[].studies` en orden. Docstring: «compatibilidad con `pipeline.py:1193` y `methods.py:49-61` hasta F₂».
+  - `class MetaAnalysisResult(BaseModel)` (sustituye a la plana, `:96`): `schema_version: int = ARTIFACT_SCHEMA_VERSION`, `random_method: RandomMethod = "DL"`, `outcomes: list[OutcomeMeta] = []`, `not_pooled: list[NotPooledOutcome] = []`, `excluded: int = Field(default=0, ge=0)`. Propiedades **no serializadas** (`@property`, no `computed_field`): `k -> int` = Σ `outcomes[].k`; `studies -> list[StudyEffect]` = concatenación de `outcomes[].studies` en orden. Docstring de `k`, literal en lo esencial: «Compatibilidad con `pipeline.py:1193` (`total_studies_ma` del CSV PRISMA2020) y con el "(k = N)" de `metodologia.md` (`methods.py:49-61`) hasta F₂. Cuenta **efectos** agregados, no estudios: con varios desenlaces o con `multiple_per_study` es mayor que el número de estudios. En F₁ coincide con lo que hoy comprueba el auditor (`len(effects)`, `checks_flow.py:1244`); F₂ y G₂ lo sustituyen por los `study_id` distintos (§19, fila propuesta n+9)».
   - `meta_analyze(effects: Sequence[EffectInput], measure: Measure) -> MetaAnalysisResult` (la Tarea 5 añade `*, random_method`). Agrupa por `outcome` en orden de primera aparición (`None` es un desenlace más: el «desenlace único» de §19 fila 3). Un desenlace con k < 2 va a `not_pooled` (no lanza); `[]` da `outcomes == []`. Lanza `ValueError` solo por datos (faltan datos de la medida, varianza ≤ 0), como hoy. Egger (`_egger`, `:125`, sin cambio de cuerpo) solo con `k ≥ EGGER_MIN_K`; si no, `egger_note = f"Egger no calculado: k = {k} < {EGGER_MIN_K} (Sterne et al. 2011)"`; con k ≥ 10 y `_egger` → `None` (precisión constante), `egger_note = "Egger no calculado: la precisión es la misma en todos los estudios (regresión indefinida)"`.
   - En `revisia/exports/forest.py`: `render_forest_markdown(result: MetaAnalysisResult, *, display: str = "raw") -> str` (misma firma), `render_outcome_forest_png(outcome: OutcomeMeta, out_path: Path, *, display: str = "raw") -> bool`, `render_outcome_funnel_png(outcome: OutcomeMeta, out_path: Path) -> bool` (`False` sin escribir si `outcome.k < EGGER_MIN_K` o sin matplotlib), y las de compatibilidad con la misma firma de hoy: `render_forest_png(result, out_path, *, display="raw") -> bool` y `render_funnel_png(result, out_path) -> bool`, que delegan en el **primer** desenlace agregado (`False` si `result.outcomes == []`).
   - En `revisia/exports/interop.py`: `render_metafor_csv(result: MetaAnalysisResult) -> str` con cabecera `study_id,label,measure,yi,vi,outcome,subgroup` (columnas nuevas al final; `None` → celda vacía), una fila por estudio de cada desenlace, en orden. Docstring: ``metafor::rma(yi, vi, data=dat, subset = outcome == "<desenlace>")``.
@@ -509,7 +516,7 @@ git commit -m "feat(meta): intervalo de predicción (Higgins 2009, t con k-2 gl)
 - Produces: `meta_analyze(effects: Sequence[EffectInput], measure: Measure, *, random_method: RandomMethod = "DL") -> MetaAnalysisResult` (firma final, §10.1). `MetaAnalysisResult.random_method` = el pedido. Con `"HKSJ"`, `OutcomeMeta.random` es (Hartung y Knapp 2001; Sidik y Jonkman 2002; IntHout, Ioannidis y Borm 2014, *BMC Med Res Methodol* 14:25), con `τ̂²` el de DL y `w*ᵢ = 1/(vᵢ + τ̂²)`:
   - `q = Σ w*ᵢ (yᵢ − μ̂)² / (k − 1)`, `SE_HK = √(q / Σ w*ᵢ)` (sin truncar `q` a 1);
   - `ci = μ̂ ± t_{k−1; 0,975} · SE_HK`; `z = μ̂ / SE_HK`; `p_value = 2 · student_t_sf(|z|, k − 1)`; `p_method = "t (HKSJ)"`; `test = "t"`; `df = k − 1`;
-  - con `SE_HK == 0` (efectos idénticos): `z = 0.0`, `p_value = 1.0`, IC `[μ̂, μ̂]`, sin división por cero;
+  - efectos idénticos: la guarda **no** es `SE_HK == 0` exacto (con yi = 0,7 × 4 los residuos valen ~1e-16 y `p` saldría 0), sino `q <= 1e-24`; entonces `SE_HK = 0.0`, `z = 0.0`, `p_value = 1.0`, IC `[μ̂, μ̂]`, sin división por cero;
   - `fixed` y `heterogeneity` no cambian; el PI (Tarea 4) usa `SE_HK`.
   - Render: la cabecera dice `- Modelo de efectos aleatorios: **DerSimonian-Laird con ajuste HKSJ** (IC y prueba con t de k − 1 gl)`, y la línea de aleatorios escribe `t=` y `gl=` en vez de `z=`.
 
@@ -526,7 +533,7 @@ def test_hksj_sobre_dl_contra_el_calculo_manual_en_dat_bcg() -> None:
     o = res.outcomes[0]
     assert o.heterogeneity.tau2 == pytest.approx(0.3088, abs=5e-5)  # τ² sigue siendo el de DL
     r = o.random
-    assert (r.test, r.df) == ("t", 12)
+    assert (r.test, r.df, r.p_method) == ("t", 12, "t (HKSJ)")
     assert r.estimate == pytest.approx(-0.7141, abs=5e-5)
     assert r.se == pytest.approx(0.180697, abs=5e-7)
     assert (round(r.ci_low, 4), round(r.ci_high, 4)) == (-1.1078, -0.3204)
@@ -545,14 +552,20 @@ def test_dl_por_defecto_conserva_la_normal() -> None:
     assert r.ci_low == pytest.approx(r.estimate - 1.96 * r.se, abs=1e-12)
 
 
-def test_hksj_con_efectos_identicos_no_divide_por_cero() -> None:
+@pytest.mark.parametrize(
+    ("yi", "vis"),
+    [
+        (0.3, (0.04, 0.02, 0.01)),
+        # Residuos de ~1e-16 por redondeo: con la guarda `SE_HK == 0` exacta, p saldría 0.
+        (0.7, (0.04, 0.02, 0.01, 0.03)),
+    ],
+)
+def test_hksj_con_efectos_identicos_no_divide_por_cero(yi: float, vis: tuple[float, ...]) -> None:
     o = meta_analyze(
-        [_e("a", 0.3, 0.04), _e("b", 0.3, 0.02), _e("c", 0.3, 0.01)],
-        "precomputed",
-        random_method="HKSJ",
+        [_e(f"s{i}", yi, v) for i, v in enumerate(vis)], "precomputed", random_method="HKSJ"
     ).outcomes[0]
     assert (o.random.se, o.random.z, o.random.p_value) == (0.0, 0.0, 1.0)
-    assert o.random.ci_low == o.random.ci_high == pytest.approx(0.3)
+    assert o.random.ci_low == o.random.ci_high == pytest.approx(yi)
 
 
 def test_sin_scipy_los_numeros_que_compara_el_auditor_no_cambian(monkeypatch) -> None:
@@ -699,7 +712,7 @@ git commit -m "feat(meta): subgrupos con τ² propio y Q entre subgrupos (Cochra
   - `EffectsFile` v2: `measure: Measure = "precomputed"`, `display: str = "raw"`, `effects: list[EffectInput] = []`, `multiple_per_study: MultiplePerStudy | None = None`, `random_method: RandomMethod = "DL"`. Con `effects` no vacío, `_calculable` valida en este orden y lanza `ValueError` con estos textos (`_detalle`, `protocol_files.py:288`, quita el prefijo de pydantic; `ProtocolFilesError` da rc 2 en `validate`, `run` y `--resume`):
     1. Efectos sin `outcome`: `f"{n} de {total} efectos sin `outcome` (el primero, `{study_id}`): desde la 0.9 cada efecto declara su desenlace y el meta-análisis agrega por desenlace (D16). Migración: añade `outcome: <desenlace>` a cada efecto, con el mismo nombre en los que se agregan juntos; si un estudio aporta varios efectos al mismo desenlace, declara también `multiple_per_study: {{allowed: true, justification: \"…\"}}`"`. Constante `EFFECTS_MIGRATION_HINT` con la parte que empieza en «Migración:».
     2. `outcome` vacío o con espacios alrededor: `` f"`{study_id}`: `outcome` {outcome!r} vacío o con espacios al principio o al final" ``.
-    3. k < 2 en un desenlace: `` f"el desenlace `{outcome}` tiene {k} estudio: el meta-análisis necesita al menos 2 por desenlace (k ≥ 2); añade estudios o quita ese desenlace" `` (conserva «k ≥ 2», que espera `test_errores_deterministas.py:249`).
+    3. k < 2 en un desenlace: `` f"el desenlace `{outcome}` tiene {k} efecto(s): el meta-análisis necesita al menos 2 por desenlace (k ≥ 2); añade efectos o quita ese desenlace" `` (conserva «k ≥ 2», que espera `test_errores_deterministas.py:249`). Razón de exigirlo **al cargar** (fila n+5): mantiene coherente en F₁ la relación 11 del auditor (`total_studies_ma == len(effects)`, `checks_flow.py:1244`), que no conoce `not_pooled`; D16 habla de k < 2 **tras filtrar** por incluidos, que es F₂.
     4. Datos de la medida, finitud y varianza: el bucle de hoy (`protocol_files.py:195-208`), sin cambio.
     5. Unidad de análisis, sin `multiple_per_study.allowed`: `` f"unidad de análisis: `{study_id}` aporta {n} efectos al desenlace `{outcome}` (Cochrane Handbook §23.3); deja uno por estudio o declara `multiple_per_study: {{allowed: true, justification: \"…\"}}`" ``.
     6. `meta_analyze(self.effects, self.measure, random_method=self.random_method)` calculable (como hoy, `:209-212`; aquí salta también la mezcla de `subgroup`).
@@ -779,7 +792,7 @@ def test_random_method_outcome_y_k_por_desenlace() -> None:
     with pytest.raises(ValidationError, match="espacios"):
         EffectsFile.model_validate({**base, "effects": [{**dos[0], "outcome": "o "}, dos[1]]})
     con_huerfano = [*dos, {"study_id": "c", "outcome": "otro", "yi": 0.3, "vi": 0.02}]
-    with pytest.raises(ValidationError, match=r"el desenlace `otro` tiene 1 estudio.*k ≥ 2"):
+    with pytest.raises(ValidationError, match=r"el desenlace `otro` tiene 1 efecto\(s\).*k ≥ 2"):
         EffectsFile.model_validate({**base, "effects": con_huerfano})
 
 
@@ -833,6 +846,7 @@ git commit -m "feat(protocolo): effects.yml v2 con outcome obligatorio, unidad d
 
 **Files:**
 - Create: `revisia/benchmark/__init__.py` (solo docstring: «Benchmark de cribado: el motor trae el método, el estudio vive fuera (D6, D23)»; F₂ añade aquí `run.py`), `revisia/benchmark/report.py`.
+- Modify: `tests/fakes.py` (añadido al final: `escribir_benchmark`).
 - Test: `tests/test_benchmark_report.py` (nuevo).
 
 **Interfaces:**
@@ -848,38 +862,18 @@ git commit -m "feat(protocolo): effects.yml v2 con outcome obligatorio, unidad d
   - `pool_benchmarks(bench_dirs: Sequence[str | Path], *, replicas_as_effects: bool = False) -> PooledBenchmark`. Reglas:
     - Corpus = `protocol.slug` de cada `benchmark.json`; un `slug` o un `corpus_sha256` repetido → `ValueError("el mismo corpus aparece dos veces (<slug>): las corridas de un mismo corpus no son estudios independientes")`.
     - Se agrupa por **nombre de celda** (`BenchmarkCellResult.cell`): una celda es el «modelo» del panel. Si una misma celda declara `models_used` distintos entre corpus, nota `"celda `<c>`: modelos distintos entre corpus (<lista>)"`.
-    - Por defecto, un efecto por (celda, corpus): `study_id = slug`, `yi` y `vi` = medias de `recall_effect` de sus réplicas, `outcome = "recall"`, sin `subgroup`; si algún corpus aporta > 1 réplica, nota `AVISO_PROMEDIO`. Con `replicas_as_effects=True`, un efecto por réplica: `study_id = f"{slug}#r{replica}"`, `subgroup = slug`, y nota `AVISO_EXPLORATORIO`.
+    - (**Pendiente de OK del arquitecto, toca D6**; ver Step 0.) Por defecto, un efecto por (celda, corpus): `study_id = slug`, `yi` y `vi` = medias de `recall_effect` de sus réplicas, `outcome = "recall"`, sin `subgroup`; si algún corpus aporta > 1 réplica, nota `AVISO_PROMEDIO`. Con `replicas_as_effects=True`, un efecto por réplica: `study_id = f"{slug}#r{replica}"`, `subgroup = slug`, y nota `AVISO_EXPLORATORIO`.
     - Una réplica con `recall_effect(...) is None` no entra, con nota `"celda `<c>`, corpus `<s>`, réplica <r>: recall indefinido (sin positivos en el gold), excluida"`; una con `n_failed_records > 0` entra con nota `"celda `<c>`, corpus `<s>`, réplica <r>: <n> registros fallidos fuera de la matriz"`.
     - `meta = meta_analyze(efectos, "precomputed")` (DL); `recall*` = `expit` de `meta.outcomes[0].random` y su PI cuando hay desenlace agregado; si no, `None`.
     - Celdas en el orden de primera aparición; fuentes en el orden de `bench_dirs`.
   - `render_pooled_report(pooled: PooledBenchmark) -> str`: `# Benchmark agregado`; tabla de fuentes (`| Corpus | Registros | Positivos del gold | Réplicas |`); tabla `| Celda | Corpus (k) | Recall agregado | IC95% | IP95% | I² |` con `{:.3f}` y `—` donde no hay; las notas como lista; y por celda con desenlace agregado, una sección `## Celda: <c>` con `render_forest_markdown(cell.meta, display="proportion")` sin su título de nivel 1.
   - `write_pooled(pooled: PooledBenchmark, out_dir: str | Path) -> tuple[Path, Path]`: crea `out_dir` y escribe `meta_analysis.json` (`model_dump_json(indent=2)`, UTF-8) y `report.md`; devuelve ambas rutas.
 
-- [ ] **Step 1: Tests que fallan** — crear `tests/test_benchmark_report.py`:
+- [ ] **Step 0: Comprobar el OK del arquitecto sobre los subgrupos (toca D6).** El diseño de esta tarea (`subgroup = corpus` solo con `--replicas-as-effects`; por defecto, réplicas promediadas y un efecto por corpus, fila propuesta n+8) está **pendiente de OK del arquitecto**. Antes de escribir código, el controlador comprueba en §19 del spec si la fila n+8 está aceptada. Si se **rechaza**, se aplica la alternativa literal de §10.2: un efecto por (corpus, celda, réplica) promediado por corpus con `outcome = "recall"` y **`subgroup = corpus` siempre**, agrupado por celda con `meta_analyze`; cambian `pool_benchmarks` (la regla «Por defecto…» de Interfaces) y las aserciones `o.subgroups == []` de `test_dos_corpus_promedian_replicas_y_agregan_por_celda` (pasan a `[("c1", 1), ("c2", 1)]`, sin `q_between` porque cada subgrupo tiene k = 1). El resto de la tarea no cambia.
+
+- [ ] **Step 1: Ayudante de tests en `tests/fakes.py`** (no se importa un test desde otro; los tests de las Tareas 8 y 9 lo comparten). Añadir al final de `tests/fakes.py`, con sus imports en el bloque de cabecera (`hashlib`; `ScreeningMetrics`, `wilson_interval` de `revisia.metrics`; `Environment` de `revisia.schemas.artifacts`; `BenchmarkCellResult`, `BenchmarkProtocolInfo`, `BenchmarkResult` de `revisia.schemas.benchmark`). Es un añadido al final del fichero: si otra pista también añade a `fakes.py`, el conflicto se resuelve por unión.
 
 ```python
-"""`benchmark-report`: efectos logit(recall) por corpus y agregación por celda (D6; §10.2)."""
-
-from __future__ import annotations
-
-import hashlib
-import math
-from pathlib import Path
-
-import pytest
-
-from revisia.benchmark.report import (
-    AVISO_EXPLORATORIO,
-    PooledBenchmark,
-    pool_benchmarks,
-    recall_effect,
-    write_pooled,
-)
-from revisia.metrics import ScreeningMetrics, wilson_interval
-from revisia.schemas.artifacts import Environment
-from revisia.schemas.benchmark import BenchmarkCellResult, BenchmarkProtocolInfo, BenchmarkResult
-
-
 def _entorno() -> Environment:
     return Environment(
         engine_version="0.9.0",
@@ -890,7 +884,7 @@ def _entorno() -> Environment:
     )
 
 
-def benchmark(
+def escribir_benchmark(
     raiz: Path,
     slug: str,
     celdas: dict[str, list[tuple[int, int]]],
@@ -927,6 +921,31 @@ def benchmark(
     carpeta.mkdir(parents=True)
     (carpeta / "benchmark.json").write_text(resultado.model_dump_json(indent=2), encoding="utf-8")
     return carpeta
+```
+
+(`n_gold_positives` usa `tp + fn` de la primera réplica de la primera celda; basta para el modelo.)
+
+- [ ] **Step 2: Tests que fallan** — crear `tests/test_benchmark_report.py`:
+
+```python
+"""`benchmark-report`: efectos logit(recall) por corpus y agregación por celda (D6; §10.2)."""
+
+from __future__ import annotations
+
+import math
+from pathlib import Path
+
+import pytest
+from fakes import escribir_benchmark as benchmark
+
+from revisia.benchmark.report import (
+    AVISO_EXPLORATORIO,
+    PooledBenchmark,
+    pool_benchmarks,
+    recall_effect,
+    write_pooled,
+)
+from revisia.metrics import ScreeningMetrics
 
 
 def test_recall_effect_logit_varianza_y_correccion() -> None:
@@ -996,24 +1015,22 @@ def test_write_pooled_escribe_json_valido_y_report(tmp_path: Path) -> None:
     assert md.startswith("# Benchmark agregado") and "## Celda: a" in md and "0.900" in md
 ```
 
-(La línea `n_gold_positives` del ayudante usa `tp + fn` de la primera réplica de la primera celda; basta para el modelo.)
-
-- [ ] **Step 2: Run para verificar que falla**
+- [ ] **Step 3: Run para verificar que falla**
 
 Run: `uv run pytest -p no:cacheprovider tests/test_benchmark_report.py -v`
 Expected: FAIL (`ModuleNotFoundError: revisia.benchmark`).
 
-- [ ] **Step 3: Implementar** según Interfaces (docstring del módulo: D6, D23, §10.2; por qué se promedian las réplicas; `expit` local).
+- [ ] **Step 4: Implementar** según Interfaces (docstring del módulo: D6, D23, §10.2; por qué se promedian las réplicas; `expit` local).
 
-- [ ] **Step 4: Run para verificar que pasa**
+- [ ] **Step 5: Run para verificar que pasa**
 
 Run: `uv run pytest -p no:cacheprovider tests/test_benchmark_report.py tests/test_benchmark_schemas.py -v && uv run python -c "import revisia, revisia.benchmark.report"`
 Expected: PASS; el import no cicla (`revisia.schemas.benchmark` no se exporta desde `revisia.schemas`, PR-0 Tarea 13).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add revisia/benchmark/__init__.py revisia/benchmark/report.py tests/test_benchmark_report.py
+git add revisia/benchmark/__init__.py revisia/benchmark/report.py tests/fakes.py tests/test_benchmark_report.py
 git commit -m "feat(benchmark): agregación logit(recall) por celda y corpus, con unidad de análisis (D6)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
@@ -1022,7 +1039,7 @@ git commit -m "feat(benchmark): agregación logit(recall) por celda y corpus, co
 ### Tarea 9: `revisia benchmark-report` (`revisia/cli.py`)
 
 **Files:**
-- Modify: `revisia/cli.py` (función nueva `_cmd_benchmark_report` tras `_cmd_audit`, `:527-548`; subparser en `build_parser`, `:609-725`; rama en `main`, `:728-743`, junto a las órdenes que no cargan protocolo).
+- Modify: `revisia/cli.py`, con anclas fijas para no chocar con G₁, que ancla los suyos (`deposit`) en `export`: la función `_cmd_benchmark_report` justo **tras `_cmd_audit`** (`:527-548`); el subparser `p_benchmark_report` justo **tras `p_audit`** (`:692-696`); el despacho `if args.command == "benchmark-report": return _cmd_benchmark_report(args)` justo **tras el de `audit`** en `main` (`:738-739`), antes de cargar protocolo.
 - Test: `tests/test_cli_benchmark_report.py` (nuevo).
 
 **Interfaces:**
@@ -1039,7 +1056,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from test_benchmark_report import benchmark
+from fakes import escribir_benchmark as benchmark
 
 from revisia import cli
 
@@ -1074,7 +1091,7 @@ def test_benchmark_report_error_de_uso_sale_2(tmp_path: Path, capsys, caso: str)
     assert "Traceback" not in err
 ```
 
-(`from test_benchmark_report import benchmark` funciona porque pytest pone `tests/` en `sys.path`, como `from fakes import …`.)
+(El ayudante vive en `tests/fakes.py` desde la Tarea 8: ningún test importa otro test.)
 
 - [ ] **Step 2: Run para verificar que falla**
 
@@ -1110,16 +1127,20 @@ El integrador de PR-F las añade **a continuación de la última fila** de §19,
 | n+2 | §10.1 PI y HKSJ | La t de Student es de Python puro (beta incompleta por fracción continua y bisección; error < 1e-12 frente a scipy): con `scipy` opcional, el auditor sin scipy daría otro PI u otro IC y FAIL por entorno. El PI usa el SE del `random` reportado (el de HKSJ con HKSJ) y t con k − 2 gl | Plan PR-F (F₁) |
 | n+3 | §10.1 subgrupos | `subgroup` en todos los efectos de un desenlace o en ninguno; τ² propio por subgrupo; un subgrupo con k = 1 no tiene `random` y no entra en Q entre grupos | Plan PR-F (F₁) |
 | n+4 | §4.3 relación 29 | `egger is None` también con k ≥ 10 si todas las precisiones son iguales (regresión de Egger indefinida); lo dice `egger_note`. G₂ lee la relación como «`egger is None` ⇔ k < 10 o `egger_note` de precisión constante» | Plan PR-F (F₁) |
-| n+5 | D16, §10.1 | Unidad de análisis = `study_id` repetido dentro de un desenlace (`unit_of_analysis_violations`). `outcome` con espacios alrededor es error de carga. Cada desenlace necesita k ≥ 2 al cargar; tras filtrar (F₂), k < 2 se declara | Plan PR-F (F₁) |
+| n+5 | D16, §10.1 | Unidad de análisis = `study_id` repetido dentro de un desenlace (`unit_of_analysis_violations`). `outcome` con espacios alrededor es error de carga. Cada desenlace necesita k ≥ 2 efectos al cargar (mensaje «tiene N efecto(s)»): así la relación 11 del auditor (`total_studies_ma == len(effects)`, `checks_flow.py:1244`), que no conoce `not_pooled`, sigue coherente en F₁; D16 habla de k < 2 **tras filtrar** por incluidos, y eso lo declara F₂ | Plan PR-F (F₁) |
 | n+6 | §10.1 `effects_metafor.csv` | Una sola tabla con columnas `outcome,subgroup` añadidas al final (`study_id,label,measure,yi,vi,outcome,subgroup`); el funnel solo se dibuja con k ≥ 10, así que el demo (k = 4) deja de producir `funnel.png` | Plan PR-F (F₁) |
 | n+7 | §10.1 `random_method` | `EffectsFile.random_method` se valida en F₁, pero el pipeline solo lo pasa a `meta_analyze` en F₂ (F₁ no toca `pipeline.py`) y el auditor en G₂. Ambas fases van en la misma PR: ninguna versión publicada lo ignora | Plan PR-F (F₁) |
-| n+8 | §10.2 `benchmark-report` | Se agrupa por nombre de celda del panel. Por defecto, las réplicas de un corpus se promedian (yi y vi medios) y el corpus es el estudio; `subgroup = corpus` solo con `--replicas-as-effects` (con un efecto por corpus, cada subgrupo tendría k = 1). logit(recall) con corrección 0,5 solo si `tp` o `fn` es 0. Corpus repetido (slug o hash) → rc 2. `pooled/meta_analysis.json` guarda un `PooledBenchmark`. `--out` por defecto `<primer benchmark>/pooled` | Plan PR-F (F₁) |
+| n+8 | §10.2 `benchmark-report` | **Pendiente de OK del arquitecto (toca D6).** Se agrupa por nombre de celda del panel. Por defecto, las réplicas de un corpus se promedian (yi y vi medios) y el corpus es el estudio; `subgroup = corpus` solo con `--replicas-as-effects` (con un efecto por corpus, cada subgrupo tendría k = 1). logit(recall) con corrección 0,5 solo si `tp` o `fn` es 0. Corpus repetido (slug o hash) → rc 2. `pooled/meta_analysis.json` guarda un `PooledBenchmark`. `--out` por defecto `<primer benchmark>/pooled`. Si se rechaza: alternativa literal de §10.2, `subgroup = corpus` siempre (Tarea 8, Step 0) | Plan PR-F (F₁) |
+| n+9 | PRISMA2020 `total_studies_ma`, `metodologia.md` | (Para F₂ y G₂.) `total_studies_ma` y el «(k = N)» de `metodologia.md` = número de `study_id` distintos agregados, no Σk: la propiedad de compatibilidad `MetaAnalysisResult.k` de F₁ cuenta efectos (`pipeline.py:1193`, `methods.py:49-61`) | Plan PR-F (F₁, revisión) |
+| n+10 | §4.1, §10.1 `meta_analysis.json` | §4.1 dice que existe «con efectos válidos tras filtrar» y §10.1 lo escribe con k < 2. Se adopta §10.1: `08_meta/meta_analysis.json` existe siempre que haya `effects.yml` en la instantánea; si ningún desenlace llega a k ≥ 2 tras filtrar, lleva `outcomes: []` y `excluded: n` | Plan PR-F (F₁, revisión) |
+| n+11 | §4.2 `ExcludedEffect.reason` | `unit_of_analysis` no se produce nunca en ejecución: la violación es error de carga de `effects.yml` (rc 2). Propuesta: se conserva en el `Literal` (PR-0 ya lo dio) pero F₂ no lo emite, y G₂ da FAIL si aparece; retirarlo exigiría tocar el contrato de PR-0 | Plan PR-F (F₁, revisión) |
+| n+12 | §10 tests, PI | «PI con los valores de `metafor::predict` sobre `dat.bcg`» se lee como `predict(rma(yi, vi, data=dat, method="DL"), pi.type="Riley")` (t con k − 2 gl, Higgins 2009): [−1,9988; 0,5706]. El `predict` por defecto (`test="z"`) usa el cuantil normal y da [−1,8582; 0,4299]. Valores calculados con numpy/scipy por el redactor y recalculados por el revisor; sin R. Si el implementador tiene R, anota la salida en el commit de la Tarea 4 | Plan PR-F (F₁, revisión) |
 ```
 
 ### Self-review de F₁
 
 - **Cobertura de §10 que es de F₁:** `meta_analyze` v2 por desenlace (T3), PI con t de k − 2 gl y k ≥ 3 (T4), Egger solo k ≥ 10 con `egger_note` (T3), subgrupos con Q entre grupos (T6), duplicados a 1e-9 (T4), HKSJ opcional (T5), `EffectsFile` v2 con `outcome` obligatorio y mensaje de migración (rc 2), `multiple_per_study`, `random_method` y unidad de análisis (T7), `effects_metafor.csv` y forest/funnel por desenlace con funnel solo k ≥ 10 (T3), `benchmark-report` CLI y módulo (T8, T9). Tests de §10 que son de F₁: C3 sin `multiple_per_study` no carga y con él carga (T7); PI de `dat.bcg` a 4 decimales (T4); Egger `None` con k = 9 (T3); HKSJ sobre DL contra el cálculo manual (T5); `benchmark-report` sobre dos benchmarks sintéticos → subgrupos por corpus (T8, con `--replicas-as-effects`). Quedan para F₂: efecto de un no incluido → `excluded_effects`; k = 1 tras filtrar → sin meta-análisis declarado; el benchmark con el demo importado en dos celdas × 2 réplicas.
-- **Valores numéricos:** μ̂, τ², Q, I² y SE de DL sobre `dat.bcg` coinciden con lo publicado por metafor (μ̂ ≈ −0,7141, τ² ≈ 0,3088, Q = 152,2330, I² = 92,12 %). El PI [−1,9988; 0,5706], el HKSJ (SE 0,180697; IC [−1,1078; −0,3204]; t −3,9520; p 0,001921) y su PI [−2,0002; 0,5719] se calcularon el 2026-10-19 con numpy 2.5.4 y scipy 1.18.1 aplicando las fórmulas de Higgins 2009 e IntHout 2014 (script en el scratchpad de la sesión, no versionado). **No se ejecutó R**: `metafor::predict` con su opción por defecto (`test="z"`) da un PI con cuantil normal, [−1,8582; 0,4299], no el de t con k − 2 gl; si el implementador tiene R, anota en el commit de la Tarea 4 la salida de `predict(rma(yi, vi, data=dat, method="DL"), pi.type="Riley")` y confirma que coincide; si no coincide, manda la fórmula de Higgins (§10.1) y la diferencia se registra en §19.
+- **Valores numéricos:** μ̂, τ², Q, I² y SE de DL sobre `dat.bcg` coinciden con lo publicado por metafor (μ̂ ≈ −0,7141, τ² ≈ 0,3088, Q = 152,2330, I² = 92,12 %). El PI [−1,9988; 0,5706], el HKSJ (SE 0,180697; IC [−1,1078; −0,3204]; t −3,9520; p 0,001921) y su PI [−2,0002; 0,5719] se calcularon el 2026-10-19 con numpy 2.5.4 y scipy 1.18.1 aplicando las fórmulas de Higgins 2009 e IntHout 2014 (script en el scratchpad de la sesión, no versionado). El revisor independiente los recalculó con numpy y cuadran. **No se ejecutó R**: la lectura de «`metafor::predict`» como `pi.type="Riley"` va en la fila propuesta n+12.
 - **Firmas verificadas contra el árbol (= `main` @ `c1af7c3`) el 2026-10-19:** `meta_analysis.py:29-214`, `schemas/effects.py:20-93`, `protocol_files.py:166-213,288-370`, `exports/forest.py:35-208`, `exports/interop.py:60-76`, `exports/__init__.py:16-54`, `exports/methods.py:40-63`, `pipeline.py:68,885-898,1144-1150,1193,1197-1200,1489-1490`, `audit/artifacts.py:40,582,612`, `audit/checks_flow.py:116,119,151,429-491,1236-1247,1843-1877,1880-1945,2161-2190`, `cli.py:527-548,609-797`, `metrics.py:30-53,121-138`. Los nombres de PR-0 (`RandomMethod`, `MultiplePerStudy`, `ExcludedEffect`, `ExcludedEffectsFile`, `PredictionInterval`, `DuplicateEffect`, `BenchmarkResult` y compañía, `Environment`) son los de las Tareas 12 y 13 de su plan.
 - **Consistencia de tipos:** `OutcomeMeta`, `SubgroupResult`, `SubgroupTest`, `NotPooledOutcome` (T3) los rellenan T4–T6 y los consume T8; `meta_analyze(..., *, random_method)` (T5) lo consume T7; `unit_of_analysis_violations` (T7) queda para F₂ y G₂; `student_t_*` (T2) los consumen T4 y T5.
 - **Proporción:** los bloques de código son tests con los valores del spec; los únicos algoritmos escritos son la t de Student, el PI, HKSJ y Q entre subgrupos, en fórmulas con su referencia.
@@ -1164,6 +1185,7 @@ class PooledEstimate(BaseModel):
     p_value: float
     test: Literal["z", "t"] = "z"
     df: int | None = None
+    p_method: str = ""            # "" en DL; "t (HKSJ)" con HKSJ
 
 class Heterogeneity(BaseModel):  # sin cambio
     q: float; df: int; i2: float; tau2: float; p_value: float | None = None; p_method: str = ""
@@ -1211,7 +1233,7 @@ class MetaAnalysisResult(BaseModel):          # 08_meta/meta_analysis.json v2 (r
     not_pooled: list[NotPooledOutcome] = []
     excluded: int = Field(default=0, ge=0)
     @property
-    def k(self) -> int: ...                      # compatibilidad: Σ outcomes[].k
+    def k(self) -> int: ...                      # compatibilidad: Σ outcomes[].k (cuenta efectos, no estudios; fila n+9)
     @property
     def studies(self) -> list[StudyEffect]: ...  # compatibilidad: concatenación
 
@@ -1227,7 +1249,7 @@ def meta_analyze(
 ) -> MetaAnalysisResult: ...
 ```
 
-Para F₂: `meta_analyze` no conoce los incluidos ni las exclusiones. `_meta_analysis(run, included_ids)` filtra, escribe `ExcludedEffectsFile` (PR-0) y fija el recuento con `result.model_copy(update={"excluded": n})`; con todo filtrado, `MetaAnalysisResult(outcomes=[], excluded=n, random_method=…)` es el resultado válido de §10.1. Debe pasar `random_method=effects.random_method` (supuesto n+7). Si F₂ retira el uso de las propiedades `k`/`studies` en `pipeline.py` y `methods.py`, las propiedades se quedan hasta que G₂ confirme que el auditor no las necesita.
+Para F₂: `meta_analysis.json` existe siempre que haya `effects.yml` (fila n+10); `unit_of_analysis` no se emite (fila n+11); `total_studies_ma` = `study_id` distintos (fila n+9). `meta_analyze` no conoce los incluidos ni las exclusiones. `_meta_analysis(run, included_ids)` filtra, escribe `ExcludedEffectsFile` (PR-0) y fija el recuento con `result.model_copy(update={"excluded": n})`; con todo filtrado, `MetaAnalysisResult(outcomes=[], excluded=n, random_method=…)` es el resultado válido de §10.1. Debe pasar `random_method=effects.random_method` (supuesto n+7). Si F₂ retira el uso de las propiedades `k`/`studies` en `pipeline.py` y `methods.py`, las propiedades se quedan hasta que G₂ confirme que el auditor no las necesita.
 
 Para G₂ (relación 29): «conjunto agregado» de un desenlace = `[s.study_id for s in o.studies]`; los efectos analizados = esos ∪ `not_pooled[].study_ids`; `prediction_interval is None ⇔ k < PI_MIN_K`; `egger is None ⇔ k < EGGER_MIN_K` salvo `egger_note` de precisión constante (supuesto n+4); el recálculo debe pasar el `random_method` de `00_protocol/effects.yml` (hoy `checks_flow.py:490` llama sin él). `p_value`/`p_method` de `q_between` siguen dependiendo de `scipy` y van en `_META_SEGUN_ENTORNO`.
 

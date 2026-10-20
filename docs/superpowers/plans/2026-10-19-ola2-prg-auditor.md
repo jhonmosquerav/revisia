@@ -68,7 +68,7 @@ Números de línea de `main` @ `c1af7c3` (idénticos en PR-0, que no toca `revis
 
 | Destino | Rangos de `checks_flow.py` | Contenido |
 |---|---|---|
-| `relations.py` (nuevo, ≈ 330) | 126-148, 155-164 (sin 151-155), 188-191, 226-385, 574-625, 657-696, 1797-1798 | rutas (`TA`…`TEXTOS`, `SCREENING_JOURNAL`, `LLM_CALLS`, `DEDUP_RECORDS`, `RETRIEVAL_JOURNAL`), `_PASAN_TA`, límites `_MAX`…`_LIMITE_ERROR`, `_SUFIJO_MAS`, `_repartir`, `_acotar_item`, `_limitar`, `_ids`, `_valor`, `_n`, `_primera_diferencia`, `_misma_secuencia`, `_ola1`, `_ids_incluidos`, `included_ids`, `_requiere_doble_extraccion`, `_recuperacion_con_diario`, `_cribado_con_trabajo`, `_Relation`, `_Relations`, `_close`, `_ratio`, `_screeners`, `_seccion`, `_artefacto`, `_normalizar` |
+| `relations.py` (nuevo, ≈ 330) | 126-138, 140-148, 156-164, 188-191, 226-385, 574-625, 657-696, 1797-1798 | rutas (`TA`…`TEXTOS`, `SCREENING_JOURNAL`, `LLM_CALLS`, `DEDUP_RECORDS`, `RETRIEVAL_JOURNAL`), `_PASAN_TA`, límites `_MAX`…`_LIMITE_ERROR`, `_SUFIJO_MAS`, `_repartir`, `_acotar_item`, `_limitar`, `_ids`, `_valor`, `_n`, `_primera_diferencia`, `_misma_secuencia`, `_ola1`, `_ids_incluidos`, `included_ids`, `_requiere_doble_extraccion`, `_recuperacion_con_diario`, `_cribado_con_trabajo`, `_Relation`, `_Relations`, `_close`, `_ratio`, `_screeners`, `_seccion`, `_artefacto`, `_normalizar` |
 | `checks_flow.py` (≈ 810) | 628-654, 699-1246, 1949-1966, 2004-2113 | `_Csv`, `_read_csv`, embudo (`_funnel`, `_conteos_ola1`, `_cribado_ta`, `_cribado_ta_ola1`, `_busqueda_y_dedup`, `_diario_dentro_del_dedup`, `_texto_completo_ola1`, `_recuperacion`, `_textos_en_cache`, `_propuestas_ft`, `_lista_16b`, `_texto_completo`), incluidos (`_included_artifacts`, `_herramienta_rob`, `_doble_extraccion`, `_total_excluidos`), `_csv`, `_diagrama_prisma`, `collect_relations`, `check_arithmetic`, `check_exclusions` |
 | `checks_journals.py` (nuevo, ≈ 560) | 153-155, 1249-1342, 1494-1503, 1506-1794, 1801-1840, 1969-2001 | `_CAMPOS_HUMANOS`, `_calls` (llamadas), `_clave`, `_sin_humanos`, `_Llamadas`, `_llamadas`, `_llamadas_esperadas`, `_diarios`, `_RevisionDiario`, `_revisar_diario`, `_Diario`, `_diario`, `_contra_diario` (relación 12), `_consolidado`, `_consolidados` (13), `_documento`, `_doble_extraccion_en_diario` |
 | `checks_meta.py` (nuevo, ≈ 260) | 149-151, 429-491, 1843-1946, 2161-2190 | `_META_SEGUN_ENTORNO`, `_EfectosProtocolo`, `_EFECTOS_LEIDOS`, `_efectos_del_protocolo`, `_leer_efectos_del_protocolo`, `_meta_distinto`, `_meta_analisis`, `_P_SEGUN_ENTORNO`, `_meta_entregables`, `_meta_sin_incluidos` |
@@ -91,7 +91,7 @@ La docstring de 81 líneas de `checks_flow.py` se reparte por párrafos: 3-9, 31
 
 | Destino | Rangos de `checks_hitl.py` | Contenido |
 |---|---|---|
-| `checks_ledger.py` (nuevo, ≈ 390) | 55-73, 88-364, 372-376, 388-412 | `_NA_LEDGER`, límites, `_ETAPAS_DE_CRIBADO`, `DECISIONES_DE_CRIBADO`, `ACTOR_POR_DEFECTO`, `CONSEJO_ACTOR`, `_BANDERA`, `indice_de_bandera`, `_ola1`, `_forzado`, `autonomia_efectiva_de_la_corrida`, `_limitar`, `_ids`, `_clave`, `_hash`, `_relacion_16`, `_autonomia_del_manifiesto`, `_NA_SIN_GATES_DECIDIDOS`, `_sin_gates_decididos`, `check_ledger`, `_detenida`, `_gates_pendientes`, `_nota_pendientes`, `_listar`, `de_la_decision_efectiva` |
+| `checks_ledger.py` (nuevo, ≈ 390) | 55-64, 67-73, 88-364, 372-376, 388-412 | `_NA_LEDGER`, límites, `_ETAPAS_DE_CRIBADO`, `DECISIONES_DE_CRIBADO`, `ACTOR_POR_DEFECTO`, `CONSEJO_ACTOR`, `_BANDERA`, `indice_de_bandera`, `_ola1`, `_forzado`, `autonomia_efectiva_de_la_corrida`, `_limitar`, `_ids`, `_clave`, `_hash`, `_relacion_16`, `_autonomia_del_manifiesto`, `_NA_SIN_GATES_DECIDIDOS`, `_sin_gates_decididos`, `check_ledger`, `_detenida`, `_gates_pendientes`, `_nota_pendientes`, `_listar`, `de_la_decision_efectiva` |
 | `checks_hitl.py` (≈ 330) | 367-369, 379-385, 415-678 | `_orden_etapa`, `_excluded_human`, `_etiquetas_de_cribado`, `_es_exclusion_humana`, `_etiquetas_por_registro`, `_reglas_ft`, `check_hitl` |
 | `checks_request_hash.py` (nuevo, ≈ 620) | 65-66, 74-85, 684-1223 | `ARTEFACTOS_APROBADOS`, `_BYTES_POR_CARACTER`, `_BYTES_MINIMOS`, `_ALIAS_DESMESURADOS`, `_NO_ES_JSON`, `_CLAVES_DEL_MOTOR`, `_SinEtiquetar`, `_caracteres_json` … `_atada`, `check_request_hash` |
 | `checks_final_gate.py` (nuevo, ≈ 200) | 1229-1389 | `_relacion_17`, `_ids_numericos`, `_sin_terminar`, `_solicitud_vigente`, `check_final_gate` |
@@ -148,7 +148,7 @@ Expected: la suite de PR-0 en verde (anotar el recuento); `checks_flow.py 2190`,
 
 **Files:**
 - Create: `revisia/audit/relations.py`, `checks_journals.py`, `checks_meta.py`, `checks_artifacts.py`, `checks_ledger.py`, `checks_request_hash.py`, `checks_final_gate.py`, `text.py`.
-- Modify: `revisia/audit/checks_flow.py` (entero, según el mapa), `revisia/audit/checks_hitl.py` (entero), `revisia/audit/artifacts.py:24-27,249-324,346-370`, `revisia/audit/__init__.py:21-25,35-42,82-89`, `revisia/audit/checks_quality.py:29,35-40`.
+- Modify: `revisia/audit/checks_flow.py` (entero, según el mapa), `revisia/audit/checks_hitl.py` (entero), `revisia/audit/artifacts.py:24-27,249-324,346-370`, `revisia/audit/__init__.py:21-25,35-42,82-89` (dentro de `CHECKS`, 70-102), `revisia/audit/checks_quality.py:29,35-40`.
 - Modify (solo imports): `tests/test_audit_flujo.py:33`, `tests/test_auditor_meta_y_estados.py:39`, `tests/test_audit_hitl.py:17`, `tests/test_audit_hitl_registro.py:55`.
 - Test: `tests/test_audit_paquete.py` (añadir).
 
@@ -291,7 +291,7 @@ PR-A es quien escribe `run.json.environment` y su copia en el manifiesto (§5.5)
   - `editar_entorno(run_dir: Path, fn: Callable[[dict], Any]) -> None`: aplica `fn` (semántica de `_apply`) al `environment` de `run.json` y al del `manifest.yml` si existe, la misma edición en las dos copias.
   - `write_run_v08(run_dir: Path) -> Path`: convierte **en el sitio** una copia de una corrida real en la forma de una corrida 0.8: quita `environment` y `kind` de `run.json`, `environment` del manifiesto, y las `CLAVES_RUNMETA_V2` de cada llamada en `llm_calls.jsonl`, en las `metas` de los diarios y en `manifest.llm_calls` (con `editar_llamadas`). Devuelve `run_dir`. Las claves se quitan con `del` dentro de una función, nunca con `lambda d: d.pop(...)`: `_apply` (`audit_fixtures.py:74`) sustituiría el documento entero por el mapa que devuelve `pop`.
 - Produces (en `tests/conftest.py`): fixture `_andamio_entorno_ola2` (`scope="session"`, `autouse=True`), con `pytest.MonkeyPatch.context()` durante toda la sesión:
-  - sustituye `pipeline_mod.ensure_snapshot` por un envoltorio que, **solo si `run.json` no existía antes de la llamada** y el `RunInfo` devuelto tiene `environment is None`, reescribe `run.json` con `write_run_info(run_ctx.run_dir, info.model_copy(update={"environment": entorno_de_prueba()}))` y devuelve ese `info`;
+  - sustituye `pipeline_mod.ensure_snapshot` por un envoltorio que, **solo si `run.json` no existía antes de la llamada** y el `RunInfo` devuelto tiene `environment is None`, reescribe `run.json` con `write_run_info(run_ctx.run_dir, info.model_copy(update={"environment": entorno_de_prueba()}))` y devuelve la tupla `(snapshot, info)` con ese `info` (la firma de `ensure_snapshot` devuelve `tuple[Path, RunInfo]`, `snapshot.py:106-112`);
   - sustituye `RunContext.write_manifest` por un envoltorio que, si `read_run_info(self.run_dir)` tiene `environment`, pasa `extra={**(extra or {}), "environment": info.environment.model_dump(mode="json")}` con `setdefault` (no pisa un `environment` que el motor ya escriba).
   - Docstring: «ANDAMIO TEMPORAL de PR-G (plan 2026-10-19, Tarea 3): emula PR-A §5.5 en las corridas de la suite para que el check `environment` (D12) no dé FAIL en todas mientras G₁ se desarrolla desde PR-0. Con PR-A en la pila el motor ya escribe `environment` y los envoltorios no hacen nada; G₂ lo retira.» Es de sesión y no de función porque las corridas cacheadas (`_corrida_auditoria`…) se crean en fixtures de sesión, antes de cualquier fixture de función.
 
@@ -370,7 +370,7 @@ git commit -m "test(audit): andamio temporal de environment en las corridas de l
 
 **Files:**
 - Create: `revisia/audit/checks_environment.py`.
-- Modify: `revisia/audit/__init__.py` (import y `CheckSpec` justo después de `provenance`, línea 76).
+- Modify: `revisia/audit/__init__.py` (import y `CheckSpec` justo después de `provenance`, línea 72; `CHECKS` ocupa 70-102).
 - Modify: `tests/test_audit_paquete.py` (`CHECKS_ESPERADOS`: fila nueva tras `provenance`).
 - Test: `tests/test_audit_entorno.py` (nuevo).
 
@@ -381,6 +381,7 @@ git commit -m "test(audit): andamio temporal de environment en las corridas de l
   - `SEMVER: re.Pattern[str]` (la expresión oficial de semver.org 2.0.0) y `es_semver(version: str) -> bool`.
   - `entorno_de_la_corrida(ctx: AuditContext) -> Environment | None`: el de `run.json` si valida; `None` si no hay `run.json`, no valida o `environment` es `None`/falta.
   - `check_environment(ctx: AuditContext) -> Verdict`. Reglas, en este orden (un FAIL junta todos sus problemas, separados por `; `, como mucho 5 y `sufijo_mas`):
+    Las reglas 1–3 **cortan la evaluación**: devuelven su FAIL con ese detalle exacto y nada más (los tests comparan el detalle por igualdad); las reglas 4–8 acumulan.
     1. Sin `run.json`: FAIL `f"{LEGACY_RUN}."`.
     2. `run.json` que no valida: FAIL `"run.json no valida (ver `schemas`): sin `environment` verificable."`.
     3. `environment` ausente o `null`: FAIL `f"{PRE_OLA2_RUN}."`.
@@ -572,7 +573,7 @@ git commit -m "feat(audit): check environment: corrida 0.8 no publicable, entorn
 **Interfaces:**
 - Consumes: `DepositInfo`, `DepositSource`, `WithheldDir`, `WithheldFile`, `DEPOSIT_FILE`, `WITHHELD_DIRS` (`revisia.schemas.artifacts`, PR-0 T5), `read_run_info` (`snapshot.py:84`), `revisia.__version__`.
 - Produces: `make_deposit(run_dir: str | Path, out_dir: str | Path) -> DepositInfo`.
-  - `out_dir` es la carpeta de depósito misma (no su madre). Antes de copiar nada se comprueba, y si falla se lanza sin haber creado ni copiado nada: `run_dir` existe y tiene `run.json` válido (si no, `ValueError("… sin run.json: solo se depositan corridas de la Ola 1 o posteriores")`) y `manifest.yml` (si no, `ValueError("… sin manifest.yml: solo se deposita una corrida terminada")`); `run_dir` no tiene `deposit.json` (`ValueError("… ya es una copia de depósito")`); `out_dir` no está dentro de `run_dir` (`ValueError`); `out_dir` no existe o es una carpeta vacía (si no, `FileExistsError`).
+  - `out_dir` es la carpeta de depósito misma (no su madre). Antes de copiar nada se comprueba, y si falla se lanza sin haber creado ni copiado nada: `run_dir` existe y tiene `run.json` válido (si no, `ValueError("… sin run.json: solo se depositan corridas de la Ola 1 o posteriores")`) y `manifest.yml` (si no, `ValueError("… sin manifest.yml: solo se deposita una corrida terminada")`); `run_dir` no tiene `deposit.json` (`ValueError("… ya es una copia de depósito")`); `out_dir` no está dentro de `run_dir` (`ValueError(f"el destino {out_dir} está dentro de la corrida {run_dir}: elige una carpeta fuera de ella")`); `out_dir` no existe o es una carpeta vacía (si no, `FileExistsError`).
   - Copia `run_dir` → `out_dir` con `shutil.copytree(..., dirs_exist_ok=True, ignore=…)` omitiendo exactamente las carpetas de `WITHHELD_DIRS` (comparando la ruta relativa POSIX + `/`).
   - `withheld`: siempre las dos entradas de `WITHHELD_DIRS`, en ese orden, `reason="copyright"` las dos; `files` = todos los ficheros de esa carpeta a cualquier profundidad, ordenados por `relpath`, con `relpath` relativo a `run_dir` y con `/`, `sha256` = `hashlib.sha256(bytes).hexdigest()` (para un texto en caché es igual a su `text_sha256`, porque el motor lo escribe en bytes UTF-8) y `n_bytes`. Una carpeta que no existe da `files=[]`.
   - `source_run` = `slug` y `timestamp` de `run.json`, `manifest_sha256` = sha256 de los bytes de `manifest.yml`; `engine_version=__version__`.
@@ -587,6 +588,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -655,8 +657,13 @@ def test_make_deposit_sin_carpetas_retenidas_las_declara_vacias(corrida_sin_regi
 
 
 def test_make_deposit_rechaza_sin_copiar_nada(
-    corrida, corrida_en_pausa_ft, tmp_path
+    corrida, _corrida_en_pausa_ft, tmp_path_factory, tmp_path
 ) -> None:
+    # La corrida en pausa se copia bajo OTRA raíz: `corrida` y `corrida_en_pausa_ft` se llaman
+    # `<slug>-<YYYYmmdd-HHMMSS>` y, copiadas las dos en `tmp_path/runs/`, colisionarían si se
+    # generaron en el mismo segundo.
+    corrida_en_pausa_ft = tmp_path_factory.mktemp("pausa") / _corrida_en_pausa_ft.name
+    shutil.copytree(_corrida_en_pausa_ft, corrida_en_pausa_ft)
     ocupado = tmp_path / "ocupado"
     ocupado.mkdir()
     (ocupado / "x.txt").write_text("x", encoding="utf-8")
@@ -665,13 +672,14 @@ def test_make_deposit_rechaza_sin_copiar_nada(
     with pytest.raises(ValueError, match="dentro"):
         make_deposit(corrida, corrida / "dep")
     with pytest.raises(ValueError, match="manifest.yml"):
-        make_deposit(corrida_en_pausa_ft, tmp_path / "pausa")
+        make_deposit(corrida_en_pausa_ft, tmp_path / "pausa")  # su copia vive en otra raíz
     with pytest.raises(ValueError, match="run.json"):
         make_deposit(write_legacy_v07(tmp_path / "v07"), tmp_path / "legado")
     make_deposit(corrida, tmp_path / "dep")
     with pytest.raises(ValueError, match="ya es una copia de depósito"):
         make_deposit(tmp_path / "dep", tmp_path / "dep2")
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["dep", "ocupado", "v07"]
+    # `corrida` se copia en `tmp_path/runs/` (conftest.py:323-332); nada más se creó.
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["dep", "ocupado", "runs", "v07"]
     assert not (corrida / "dep").exists()
 
 
@@ -865,6 +873,7 @@ git commit -m "feat(audit): check deposit y textos en caché verificados por has
 from __future__ import annotations
 
 import json
+import shutil
 
 import pytest
 
@@ -895,8 +904,11 @@ def test_cli_deposit_carpeta_inexistente_rc_2(tmp_path, capsys) -> None:
 
 
 def test_cli_deposit_destino_ocupado_o_corrida_sin_manifiesto_rc_2(
-    corrida, corrida_en_pausa_ft, tmp_path, capsys
+    corrida, _corrida_en_pausa_ft, tmp_path_factory, tmp_path, capsys
 ) -> None:
+    # Copia de la corrida en pausa bajo otra raíz (colisión de nombre con `corrida`, ver T5).
+    corrida_en_pausa_ft = tmp_path_factory.mktemp("pausa") / _corrida_en_pausa_ft.name
+    shutil.copytree(_corrida_en_pausa_ft, corrida_en_pausa_ft)
     ocupado = tmp_path / "ocupado"
     ocupado.mkdir()
     (ocupado / "x").write_text("x", encoding="utf-8")
@@ -940,12 +952,13 @@ El spec no fija estos puntos; el plan decide y el integrador los añade a §19 *
 | n+6 | D17, §11.3 | `make_deposit(run_dir, out_dir)`: `out_dir` es la carpeta de depósito misma, vacía o inexistente y fuera de la corrida; exige `run.json` y `manifest.yml` y rechaza depositar un depósito, todo antes de copiar. Las dos carpetas de `WITHHELD_DIRS` se declaran siempre (con `files: []` si no existen), ambas con `reason: copyright`; `sha256` es el de los bytes del fichero; `--out` es obligatorio en la CLI | Plan PR-G |
 | n+7 | D17, relación 30 | Con `deposit.json` válido, la relación 7 de `arithmetic` comprueba ruta y hash de cada texto contra lo retenido; `n_chars` deja de verificarse (bytes ≠ caracteres) y se declara. El check `deposit` va tras `stage_artifacts` con ítem «PRISMA 27»; `environment`, tras `provenance` con «PRISMA 27 / trAIce M2» | Plan PR-G |
 | n+8 | §15 `cli.py` | G toca `build_parser` y `main`, las mismas funciones que F (`benchmark`, `benchmark-report`): G ancla sus tres trozos en `export` (función antes de `_cmd_brain`, subparser y despacho tras los de `export`) y F₁ en `audit`, para que el rebase de G sobre F no tenga trozos contiguos | Plan PR-G |
+| n+9 | D17, relaciones 23, 24 y 28 | Con `deposit.json` válido, las relaciones que recalculan desde textos en caché o rescates retenidos (23 rescate, 24 `quote_status`, 28 ventana y `numbers_missing`) se dan por verificadas por hash contra lo retenido y se anota; G₂ lo implementa con `leer_deposito`/`texto_retenido` | Mismo veredicto que la corrida original (D17, §11.3) |
 ```
 
 ### Self-review de G₁
 
 - **Cobertura de §11 para G₁:** partición D26 con el test de 900 líneas y `CHECKS` fijado (T2); `environment` con su tabla de §11.2 (PASS, WARN y FAIL con el mensaje literal de D12) y la parte de entorno de las relaciones 19 y 20 (T4); `make_deposit` (T5); check `deposit`, relación 30 y «textos en caché frente a `retrieval.json`» por hash (T6); `revisia deposit` e impresión de hashes (T7); test de frontera «el depósito audita con el mismo veredicto» (T6, y por CLI en T7); «corrida 0.8 → FAIL `environment` y el resto diagnóstico» (T4 con `write_run_v08`, T3). Lo demás de §11.2 y §16 es de G₂ (abajo).
-- **Firmas y líneas verificadas contra el árbol (`main` @ `c1af7c3`, igual en esta rama):** `checks_flow.py` (2 190; rangos del mapa por AST), `checks_hitl.py` (1 389), `artifacts.py` (919; `short_repr` 306, `short_text` 311, `sufijo_mas` 346, `format_validation` 363, `AuditContext` 755), `__init__.py` (`CHECKS` 74-96), `checks_quality.py:29,35-40`, `checks_provenance.py:45` (`LEGACY_RUN`), `cli.py` (`_cmd_audit` 527, `_cmd_export` 551, `_cmd_brain` 573, `p_export` 698-714, `main` 728, despacho de `export` 740-741), `snapshot.py` (`prompt_fingerprint` 76, `read_run_info` 84, `write_run_info` 92, `ensure_snapshot` 106), `run_context.py:190` (`write_manifest`), `pipeline.py:107,558,1278`, `audit_fixtures.py` (`edit_json` 86, `edit_yaml` 92, `editar_llamadas` 146, `write_legacy_v07` 280), `conftest.py` (`_correr` 234, fixtures de sesión 279-319). Las de PR-0 (`Environment`, `DepositInfo`, `WithheldDir`, `WithheldFile`, `DepositSource`, `DEPOSIT_FILE`, `WITHHELD_DIRS`, `tool_spec_fingerprint`) se toman de los bloques Interfaces de su plan (T5, T10).
+- **Firmas y líneas verificadas contra el árbol (`main` @ `c1af7c3`, igual en esta rama):** `checks_flow.py` (2 190; rangos del mapa por AST), `checks_hitl.py` (1 389), `artifacts.py` (919; `short_repr` 306, `short_text` 311, `sufijo_mas` 346, `format_validation` 363, `AuditContext` 755), `__init__.py` (`CHECKS` 70-102, `provenance` 72), `checks_quality.py:29,35-40`, `checks_provenance.py:45` (`LEGACY_RUN`), `cli.py` (`_cmd_audit` 527, `_cmd_export` 551, `_cmd_brain` 573, `p_export` 698-714, `main` 728, despacho de `export` 740-741), `snapshot.py` (`prompt_fingerprint` 76, `read_run_info` 84, `write_run_info` 92, `ensure_snapshot` 106), `run_context.py:190` (`write_manifest`), `pipeline.py:107,558,1278`, `audit_fixtures.py` (`edit_json` 86, `edit_yaml` 92, `editar_llamadas` 146, `write_legacy_v07` 280), `conftest.py` (`_correr` 234, fixtures de sesión 279-319). Las de PR-0 (`Environment`, `DepositInfo`, `WithheldDir`, `WithheldFile`, `DepositSource`, `DEPOSIT_FILE`, `WITHHELD_DIRS`, `tool_spec_fingerprint`) se toman de los bloques Interfaces de su plan (T5, T10).
 - **Consistencia de tipos:** `entorno_de_prueba`/`editar_entorno`/`write_run_v08` (T3) los usan T4 y G₂; `PRE_OLA2_RUN`/`es_semver`/`entorno_de_la_corrida` (T4) y `leer_deposito`/`texto_retenido`/`Deposito`/`ruta_del_texto` (T6) se nombran igual en el bloque de G₂; `CHECKS_ESPERADOS` crece en T4 y T6 sin cambiar las filas de T2.
 - **Review Focus:** las cinco líneas tienen test en su tarea (T4: hostil, en pausa, `null`; T5: rechazo sin copiar, `/` y subcarpetas; T6: hostil, rutas que escapan, fichero fuera de la lista).
 - **Proporción:** los bloques de código son tests y un script de verificación de un solo uso; ninguna función de producción tiene cuerpo en el plan.
@@ -963,6 +976,9 @@ Pendiente: la escribe el redactor de G₂.
 - Retirar la fixture `_andamio_entorno_ola2` de `tests/conftest.py` (PR-A ya escribe `environment` en `run.json` y en el manifiesto); `entorno_de_prueba` puede quedarse para tests unitarios.
 - Ajustar `write_run_v08` a la forma 0.8 real con lo que A haya retirado (p. ej. volver a poner `run.json.prompt_sha256`, §5.5) y conservar `test_corrida_08_falla_solo_en_environment…`, que pasa a exigir también el FAIL de `prompts` (llamadas sin `outcome`/`attempt`).
 - Volver verdes los `xfail(strict=True, reason="PR-G: …")` que PR-A deja en su Tarea 3 si algún check da FAIL por intentos fallidos (D14), y revisar la compatibilidad que PR-F declara en su Tarea 3 para `checks_meta.py` (los rangos que F cita de `checks_flow.py`, 429-491, 1843-1945 y 2161-2190, viven ahora en `checks_meta.py`).
+- Al retirar el andamio, el `git_dirty` real de un árbol con cambios daría WARN en `environment`, que no está en `AVISOS_DE_LA_DEMO` (`test_pipeline_fake.py`): G₂ se apoya en la fixture autouse del plan de PR-A que fija `snapshot.git_state` a `("0" * 40, False)` en los tests, no en el andamio.
+- `write_run_v08` debe quitar además lo que la 0.8 no tenía y E/F añaden: `outcome` de `00_protocol/effects.yml` y el `id` de los dominios de RoB (§19 fila 2). Entonces fallarán también `arithmetic`, `rob` y `prompts`, así que `test_corrida_08_falla_solo_en_environment…` deja de exigir `== {"environment"}` y pasa a exigir `"environment"` en FAIL con el mensaje de D12, sin «error interno» en ninguna fila (el spec solo pide «resto diagnóstico», §11.3).
+- **Hueco de D17:** las relaciones 23, 24 y 28 recalculan desde textos en caché y rescates que la copia de depósito retiene. Con `deposit.json` válido se dan por verificadas por hash (`texto_retenido` contra `text_sha256`/`rescue_file_sha256`) y se anota en el detalle, como la relación 7; si no, `test_deposito_audita_con_el_mismo_veredicto` deja de pasar. Fila propuesta n+9 de §19.
 - Mantener `test_ningun_modulo_del_auditor_supera_900_lineas`: `checks_flow.py` queda en ≈ 820 tras G₁, así que las relaciones nuevas **no** van ahí.
 
 **Dónde va cada familia** (módulo destino; «nuevo» = módulo que crea G₂):

@@ -127,7 +127,7 @@ Expected: `2103 tests collected`; suite en verde.
 - Consumes: nada nuevo.
 - Produces (D9, §4.4):
   - `class TransientCallError(RuntimeError)`: el intento falló por algo que reanudar puede arreglar (429, 5xx, red, timeout).
-  - `class DeterministicCallError(RuntimeError)`: el intento falló por algo que repetir no arregla (4xx distinto de 408/429, bloqueo de contenido, salida que no valida tras los reintentos). Constructor: `(message: str, *, attempts: int = 1)`; atributo `attempts`.
+  - `class DeterministicCallError(RuntimeError)`: el intento falló por algo que repetir no arregla (4xx distinto de 401/403/408/429, bloqueo de contenido, límite de presupuesto o de turnos, salida que no valida tras los reintentos; 401 y 403 son globales —credencial, permiso— y se tratan como transitorios: decisión del orquestador al revisar el plan de PR-A). Constructor: `(message: str, *, attempts: int = 1)`; atributo `attempts`.
   - `LLMRequest.prompt_template: str | None = None` (último campo del dataclass; `"extraccion/v2.md"` cuando el agente renderiza una plantilla versionada; lo rellenan los agentes en PR-A).
 
 - [ ] **Step 1: Test que falla** — crear `tests/test_contratos_llm.py`:
@@ -1659,8 +1659,8 @@ git commit -m "test(fakes): ScriptedProvider con fallo determinista, juez, extra
 - Consumes: `subprocess.run`, `shutil.which`, `json`, `re`, `argparse`, `datetime`, `pathlib`.
 - Produces (D11; §4.4; lo ejecuta el arquitecto antes de PR-A, §14.2 paso 0):
   - CLI: `python scripts/sonda_claude_cli.py [--cli claude] [--model sonnet] [--out docs/superpowers/sondas/<YYYY-MM-DD>-claude-cli.md] [--timeout 120]`. Siempre termina con rc 0 y escribe el informe; los fallos quedan dentro del informe (Review Focus 5).
-  - Pasos, en orden: `<cli> --version`; `<cli> --help`; una llamada `-p` con `--output-format json --model <model> --no-session-persistence --tools "" --strict-mcp-config --json-schema <SCHEMA>` y, **solo si `--help` lo anuncia**, `--safe-mode`; prompt por stdin: `"Responde exactamente con respuesta='hola' y numero=7."`. `SCHEMA = {"type": "object", "properties": {"respuesta": {"type": "string"}, "numero": {"type": "integer"}}, "required": ["respuesta", "numero"], "additionalProperties": false}` (dos campos, D11). `cwd` temporal vacío, como el proveedor.
-  - Funciones puras, probadas: `detect_flags(help_text: str) -> dict[str, bool]` con las claves `--safe-mode`, `--tools`, `--json-schema`, `--max-turns`, `--max-budget-usd`, `--bare`, `--strict-mcp-config`, `--no-session-persistence` (una bandera está anunciada si aparece como palabra completa en el `--help`); `parse_version(text: str) -> str | None` (primer `\d+\.\d+\.\d+`); `locate_structured(data: object, schema: dict) -> dict` → `{"where": "result" | "structured_output" | "<otra clave>" | None, "valid": bool}`: busca en `result` (si es texto, intenta `json.loads`; si es dict, tal cual) y en cualquier otra clave de primer nivel cuyo valor sea un dict con las claves `required` del schema; `valid` = tiene las dos claves con los tipos del schema; `redact(text: str, secrets: Iterable[str]) -> str`: sustituye cada valor no vacío de `secrets` por `<redacted>` y además `sk-[A-Za-z0-9_-]{16,}` y `Bearer \S+`; `render_report(*, cli, version, flags, help_text, command, returncode, stdout, stderr, located, date) -> str` (Markdown con secciones fijas y estas cadenas exactas, que los tests buscan: `## Versión`; `## Flags anunciados` (tabla `| flag | anunciado |` con `sí`/`no`); `## --help crudo` (fenced `text`); `## Comando` (fenced; el schema inline se sustituye por `<schema>` si pasa de 300 caracteres); `## Código de salida` (`None` si el proceso no llegó a correr); `## stdout crudo` (fenced `json` si `json.loads` funciona, `text` si no); `## stderr` (fenced; incluye el nombre de la excepción, p. ej. `FileNotFoundError`, cuando la hubo); `## Dónde viene el objeto validado` con las líneas `- clave: `<where>`` (o `- clave: ninguna`), `- válido: sí` / `- válido: no` y `- claves de primer nivel: …`; `## Para PR-A` con la línea `MIN_CLI_VERSION candidata: <versión>` si `--safe-mode`, `--tools` y `--json-schema` están anunciados y, si no, `esta versión no sirve: actualiza el CLI (npm i -g @anthropic-ai/claude-code@latest)`).
+  - Pasos, en orden: `<cli> --version`; `<cli> --help`; una llamada `-p` con `--output-format json --model <model> --no-session-persistence --tools "" --strict-mcp-config --json-schema <SCHEMA>` y, **solo si `--help` lo anuncia**, `--safe-mode`; prompt por stdin: `"Responde exactamente con respuesta='hola' y numero=7."`. `SCHEMA = {"type": "object", "properties": {"respuesta": {"type": "string"}, "numero": {"type": "integer"}}, "required": ["respuesta", "numero"], "additionalProperties": false}` (dos campos, D11). `cwd` temporal vacío, como el proveedor. **Segunda llamada** (lo pide el plan de PR-A, decisión del orquestador I3): la misma, con `--max-turns 1` añadido, **solo si `--help` anuncia `--max-turns`**; si no, no se lanza y el informe lo dice. De las dos se registran `subtype` y `total_cost_usd` del JSON.
+  - Funciones puras, probadas: `detect_flags(help_text: str) -> dict[str, bool]` con las claves `--safe-mode`, `--tools`, `--json-schema`, `--max-turns`, `--max-budget-usd`, `--bare`, `--strict-mcp-config`, `--no-session-persistence` (una bandera está anunciada si aparece como palabra completa en el `--help`); `parse_version(text: str) -> str | None` (primer `\d+\.\d+\.\d+`); `locate_structured(data: object, schema: dict) -> dict` → `{"where": "result" | "structured_output" | "<otra clave>" | None, "valid": bool}`: busca en `result` (si es texto, intenta `json.loads`; si es dict, tal cual) y en cualquier otra clave de primer nivel cuyo valor sea un dict con las claves `required` del schema; `valid` = tiene las dos claves con los tipos del schema; `redact(text: str, secrets: Iterable[str]) -> str`: sustituye cada valor no vacío de `secrets` por `<redacted>` y además `sk-[A-Za-z0-9_-]{16,}` y `Bearer \S+`; `result_meta(data: object) -> dict` → `{"subtype": str | None, "total_cost_usd": float | None, "is_error": bool | None}` (lo que haya en el primer nivel de un dict; todo `None` si `data` no es un dict); `render_report(*, cli, version, flags, help_text, command, returncode, stdout, stderr, located, meta, second, date) -> str`, donde `meta` es el `result_meta` de la primera llamada y `second` es `None` (sin `--max-turns` anunciado) o un dict con `command`, `returncode`, `stdout`, `stderr`, `located` y `meta` de la segunda (Markdown con secciones fijas y estas cadenas exactas, que los tests buscan: `## Versión`; `## Flags anunciados` (tabla `| flag | anunciado |` con `sí`/`no`); `## --help crudo` (fenced `text`); `## Comando` (fenced; el schema inline se sustituye por `<schema>` si pasa de 300 caracteres); `## Código de salida` (`None` si el proceso no llegó a correr); `## stdout crudo` (fenced `json` si `json.loads` funciona, `text` si no); `## stderr` (fenced; incluye el nombre de la excepción, p. ej. `FileNotFoundError`, cuando la hubo); `## Dónde viene el objeto validado` con las líneas `- clave: `<where>`` (o `- clave: ninguna`), `- válido: sí` / `- válido: no`, `- claves de primer nivel: …`, `- subtype: `<subtype>`` (o `- subtype: ninguno`) y `- total_cost_usd: <valor>` (o `ninguno`); `## Segunda llamada: --max-turns 1` con, si se lanzó, las subsecciones `### Comando`, `### Código de salida`, `### stdout crudo`, `### stderr` y las mismas cinco líneas de «dónde viene», y, si no, la línea `no se lanzó: el CLI no anuncia --max-turns`; `## Para PR-A` con la línea `MIN_CLI_VERSION candidata: <versión>` si `--safe-mode`, `--tools` y `--json-schema` están anunciados y, si no, `esta versión no sirve: actualiza el CLI (npm i -g @anthropic-ai/claude-code@latest)`, y la línea `MAX_TURNS con --json-schema: compatible` (segunda llamada con código 0 y objeto válido), `MAX_TURNS con --json-schema: incompatible (subtype <subtype>)` o `MAX_TURNS con --json-schema: no anunciado`).
   - `main(argv: list[str] | None = None) -> int`: orquesta, redacta con `secrets = [os.environ.get(v, "") for v in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")]`, crea la carpeta de salida y escribe UTF-8 con LF; imprime la ruta. `FileNotFoundError` del CLI → informe con `returncode=None` y el error en «stderr»; `TimeoutExpired` igual. Sin `--bare` (rompe la suscripción, §2).
 
 - [ ] **Step 1: Tests que fallan** — crear `tests/test_sonda_claude_cli.py`:
@@ -1728,6 +1728,14 @@ def test_locate_structured_en_result_texto_dict_u_otra_clave() -> None:
     assert sonda.locate_structured("no es json", schema) == {"where": None, "valid": False}
 
 
+def test_result_meta_lee_subtype_y_coste() -> None:
+    sonda = _modulo()
+    datos = {"subtype": "error_max_turns", "total_cost_usd": 0.01, "is_error": True}
+    assert sonda.result_meta(datos) == datos
+    assert sonda.result_meta({"result": "x"}) == {"subtype": None, "total_cost_usd": None, "is_error": None}
+    assert sonda.result_meta("no es json") == {"subtype": None, "total_cost_usd": None, "is_error": None}
+
+
 def test_redact_tapa_tokens_y_valores_del_entorno() -> None:
     sonda = _modulo()
     texto = "Authorization: Bearer abc.def token=sk-ant-0123456789abcdefXYZ otra cosa"
@@ -1759,7 +1767,7 @@ def test_main_escribe_el_informe_y_solo_usa_safe_mode_si_se_anuncia(
     respuestas = {
         "--version": _ok("2.1.126 (Claude Code)"),
         "--help": _ok(help_text),
-        "-p": _ok(json.dumps({"result": '{"respuesta": "hola", "numero": 7}', "total_cost_usd": 0.0, "usage": {}})),
+        "-p": _ok(json.dumps({"subtype": "success", "result": '{"respuesta": "hola", "numero": 7}', "total_cost_usd": 0.0, "usage": {}})),
     }
     fake = _fake_run(respuestas)
 
@@ -1773,8 +1781,20 @@ def test_main_escribe_el_informe_y_solo_usa_safe_mode_si_se_anuncia(
     out = tmp_path / "sondas" / "x.md"
     assert sonda.main(["--out", str(out), "--model", "sonnet"]) == 0
     informe = out.read_text(encoding="utf-8")
-    llamada = next(c for c in comandos if "-p" in c)
+    llamadas_p = [c for c in comandos if "-p" in c]
+    llamada = llamadas_p[0]
     assert ("--safe-mode" in llamada) is ("--safe-mode" in help_text)
+    con_max_turns = "--max-turns" in help_text
+    assert len(llamadas_p) == (2 if con_max_turns else 1)
+    assert "--max-turns" not in llamada
+    if con_max_turns:
+        assert llamadas_p[1][llamadas_p[1].index("--max-turns") + 1] == "1"
+        assert "MAX_TURNS con --json-schema: compatible" in informe
+    else:
+        assert "no se lanzó: el CLI no anuncia --max-turns" in informe
+        assert "MAX_TURNS con --json-schema: no anunciado" in informe
+    assert "- subtype: `success`" in informe and "- total_cost_usd: 0.0" in informe
+    assert "## Segunda llamada: --max-turns 1" in informe
     assert "--json-schema" in llamada and "--bare" not in llamada
     assert "--tools" in llamada and llamada[llamada.index("--tools") + 1] == ""
     assert "2.1.126" in informe and "## Dónde viene el objeto validado" in informe
