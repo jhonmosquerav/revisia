@@ -235,7 +235,7 @@ def test_main_con_cli_ausente_o_json_invalido_escribe_el_informe_igual(
     out2 = tmp_path / "b.md"
     assert sonda.main(["--out", str(out2)]) == 0
     informe = out2.read_text(encoding="utf-8")
-    seccion = informe.split("## stdout crudo")[1].split("## stderr")[0]
+    seccion = informe.split("\n## stdout crudo")[1].split("## stderr")[0]
     assert "```text" in seccion and "válido: no" in informe
 
 
@@ -295,3 +295,21 @@ def test_el_script_corre_como_proceso_con_help() -> None:
     assert proc.returncode == 0
     for opcion in ("--cli", "--model", "--out", "--timeout"):
         assert opcion in proc.stdout
+
+
+def test_redact_tapa_la_forma_corta_8_3_y_el_usuario_y_no_lanza(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sonda = _modulo()
+    monkeypatch.setattr(sonda, "_home_corto", lambda _h: r"C:\Users\JHONAL~1")
+    monkeypatch.setattr(sonda.getpass, "getuser", lambda: "jhonalex")
+    salida = sonda.redact(r"a C:\Users\JHONAL~1\x y C:/Users/JHONAL~1/y soy jhonalex", [])
+    assert "JHONAL~1" not in salida and "jhonalex" not in salida
+    assert "~" + chr(92) + "x" in salida and "~/y" in salida
+
+    def _falla(*_a):
+        raise RuntimeError("sin HOME")
+
+    monkeypatch.setattr(sonda.os.path, "expanduser", _falla)
+    monkeypatch.setattr(sonda.getpass, "getuser", _falla)
+    assert sonda.redact("limpio", []) == "limpio"

@@ -19,11 +19,13 @@ autenticación por suscripción (§2).
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -109,20 +111,55 @@ def result_meta(data: object) -> dict:
     }
 
 
+def _home_corto(home: str) -> str | None:
+    """Forma corta 8.3 de Windows del home (el nombre de usuario recortado a `XXXXXX~1`)."""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+
+    buf = ctypes.create_unicode_buffer(1024)
+    n = ctypes.windll.kernel32.GetShortPathNameW(home, buf, 1024)  # type: ignore[attr-defined]
+    return buf.value if 0 < n < 1024 else None
+
+
+def _identidad_local() -> tuple[set[str], set[str]]:
+    """Rutas del home (largas y cortas) y nombre de usuario; nunca lanza (rc 0 siempre)."""
+    homes: set[str] = set()
+    try:
+        home = os.path.expanduser("~")
+        if home and home != "~":
+            homes.add(home)
+            corto = _home_corto(home)
+            if corto:
+                homes.add(corto)
+    except Exception:  # noqa: BLE001
+        pass
+    variantes: set[str] = set()
+    for h in homes:
+        variantes |= {h, h.replace("\\", "/"), h.replace("\\", "\\\\")}
+    usuarios: set[str] = set()
+    try:
+        usuario = getpass.getuser()
+        if len(usuario) >= 3:
+            usuarios.add(usuario)
+    except Exception:  # noqa: BLE001
+        pass
+    return variantes, usuarios
+
+
 def redact(text: str, secrets: Iterable[str | None]) -> str:
     for s in secrets:
         if s:
             text = text.replace(s, "<redacted>")
     text = re.sub(r"sk-[A-Za-z0-9_-]{16,}", "<redacted>", text)
     text = re.sub(r"Bearer \S+", "Bearer <redacted>", text)
-    # El informe se commitea en un repo público: fuera la ruta del usuario y su correo.
-    homes = {str(Path.home()), os.path.expanduser("~")}
-    variantes = set()
-    for h in homes:
-        variantes |= {h, h.replace("\\", "/"), h.replace("\\", "\\\\")}
+    # El informe se commitea en un repo público: fuera la ruta del usuario, su nombre y su correo.
+    variantes, usuarios = _identidad_local()
     for h in sorted(variantes, key=len, reverse=True):
         if h and h not in ("~", "/"):
             text = text.replace(h, "~")
+    for u in usuarios:
+        text = text.replace(u, "<usuario>")
     return re.sub(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", "<correo>", text)
 
 
