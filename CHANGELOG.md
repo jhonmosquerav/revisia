@@ -17,11 +17,20 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   de `decision.yml`, extracción/RoB/verificación/efectos v2, `BenchmarkPanel`/`BenchmarkResult`,
   seis especificaciones oficiales de RoB como datos (`revisia/rob/tools/*.yml`),
   `ingest.doi.normalize_doi` (sin cablear) y la sonda `scripts/sonda_claude_cli.py`.
-  `ARTIFACT_SCHEMA_VERSION` pasa a 2. Sin cambio de comportamiento del motor.
+  `ARTIFACT_SCHEMA_VERSION` pasa a 2. Sin cambio funcional del pipeline: los modelos v2 validan
+  los artefactos de la 0.8 y nadie emite todavía los campos ni las acciones nuevas.
 
 ### Changed
 
 - `RoBTool` ya no admite `GRADE` (califica certeza por desenlace, no riesgo de sesgo por estudio; vuelve como etapa propia) y gana `NewcastleOttawaCaseControl` (D5). Un `protocol.yml` con `rob_tool: GRADE` deja de cargar.
+- Los artefactos nuevos se escriben con `schema_version: 2` (también el `request_sha256` de cada
+  solicitud de gate, que incluye la versión). Reanudar una corrida 0.8 (`run.json` con
+  `schema_version` 1) da rc 2 con `PreOla2RunError`: «anterior a la Ola 2; regenera la corrida
+  con el motor actual» (D12).
+- El auditor acepta las acciones `edit_field`, `edit_domain` y `rescue_text` del ledger solo en su
+  etapa (`extraccion`, `rob`, `screening_ft`), antes del `approve` de su decisión y nunca junto a
+  un `reject`. `decision_sha256` y el recálculo del meta-análisis siguen dando lo mismo sobre
+  corridas 0.8.
 
 ## [0.8.0] · 2026-10-18
 
