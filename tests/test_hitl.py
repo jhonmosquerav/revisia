@@ -7,8 +7,22 @@ from pathlib import Path
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
-from revisia.orchestration.hitl import DecisionFileError, GateResult, review_gate
+from revisia.orchestration import hitl
+from revisia.orchestration.hitl import (
+    DecisionFileError,
+    DomainEdit,
+    DomainEdits,
+    FieldEdit,
+    FieldEdits,
+    GateResult,
+    HumanDecision,
+    RecordHint,
+    RecordLabel,
+    RecordPolicy,
+    review_gate,
+)
 from revisia.orchestration.run_context import RunContext
 from revisia.provenance.runmeta import canonical_sha256
 
@@ -307,3 +321,103 @@ def test_decision_humana_repetida_tras_oscilar_pide_cambiar_reason(tmp_path: Pat
     _decidir(ctx, texto, primera.request_sha256)  # vuelve a la primera, decisión idéntica
     with pytest.raises(DecisionFileError, match="cambia `reason` en decision.yml"):
         _solicitar(ctx, payload={"included": 1})
+
+
+# ── Ola 2 · modelos de decisión por campo y por dominio (spec 2026-10-18 §4.2; D3, D5, D21) ──
+
+
+def test_field_edits_y_domain_edits_son_estrictos() -> None:
+    edits = FieldEdits.model_validate({"fields": {"n": {"value": 240, "reason": "tabla 1"}}})
+    assert edits.fields["n"].value == 240
+    with pytest.raises(ValidationError):  # clave desconocida
+        FieldEdits.model_validate({"fields": {"n": {"value": 1, "reason": "r", "extra": 1}}})
+    with pytest.raises(ValidationError):  # razón en blanco
+        FieldEdit(value="x", reason="   ")
+    with pytest.raises(ValidationError):  # razón solo con marcas invisibles
+        DomainEdit(judgment="low", reason="​")
+    dominios = DomainEdits.model_validate(
+        {"domains": {"D1": {"judgment": "high", "reason": "sin cegamiento"}}, "overall": None}
+    )
+    assert dominios.domains["D1"].judgment == "high" and dominios.overall is None
+    assert (
+        DomainEdits.model_validate({"overall": {"judgment": "high", "reason": "r"}}).domains == {}
+    )
+
+
+@pytest.mark.parametrize(
+    ("crudo", "tipo"),
+    [
+        ({}, RecordLabel),
+        ({"label": "include", "reason": "ok"}, RecordLabel),
+        ({"fields": {"n": {"value": "240", "reason": "r"}}}, FieldEdits),
+        ({"domains": {"D1": {"judgment": "low", "reason": "r"}}}, DomainEdits),
+        ({"overall": {"judgment": "low", "reason": "r"}}, DomainEdits),
+    ],
+)
+def test_human_decision_records_admite_las_tres_formas(crudo: dict, tipo: type) -> None:
+    decision = HumanDecision.model_validate(
+        {"request_sha256": "h", "approved": True, "records": {"s1": crudo}}
+    )
+    assert isinstance(decision.records["s1"], tipo)
+
+
+def test_human_decision_records_rechaza_una_mezcla_de_formas() -> None:
+    with pytest.raises(ValidationError):
+        HumanDecision.model_validate(
+            {
+                "request_sha256": "h",
+                "approved": True,
+                "records": {"s1": {"label": "include", "fields": {}}},
+            }
+        )
+
+
+@pytest.mark.parametrize("ruta", ["rescues/a.pdf", "rescues/texto completo.txt"])
+def test_record_label_text_file_relativo_bajo_rescues(ruta: str) -> None:
+    assert RecordLabel(label="include", reason="r", text_file=ruta).text_file == ruta
+
+
+@pytest.mark.parametrize(
+    "ruta",
+    [
+        "a.pdf",
+        "rescues/../x.pdf",
+        "rescues/..",
+        "rescues/.",
+        "/tmp/rescues/a.pdf",
+        "C:\\rescues\\a.pdf",
+        "rescues/",
+        "rescues/a/b.pdf",
+    ],
+)
+def test_record_label_text_file_rechaza_rutas_fuera_de_rescues(ruta: str) -> None:
+    with pytest.raises(ValidationError):
+        RecordLabel(label="include", reason="r", text_file=ruta)
+
+
+def _decision_con(tmp_path: Path, records: dict) -> Path:
+    path = tmp_path / "decision.yml"
+    path.write_text(
+        yaml.safe_dump({"request_sha256": "h", "approved": True, "records": records}), "utf-8"
+    )
+    return path
+
+
+def test_validate_rechaza_ediciones_en_un_gate_de_cribado_con_mensaje(tmp_path: Path) -> None:
+    hints = (RecordHint(record_id="s1", title="t", proposal="include"),)
+    policy = RecordPolicy(hints=hints)
+    path = _decision_con(tmp_path, {"s1": {"fields": {"n": {"value": 1, "reason": "r"}}}})
+    decision = HumanDecision.model_validate(yaml.safe_load(path.read_text("utf-8")))
+    with pytest.raises(DecisionFileError, match="ediciones por campo o por dominio"):
+        hitl._validate(path, decision, records=policy, flags=None)
+
+
+def test_validate_rechaza_text_file_mientras_no_haya_rescate_con_texto(tmp_path: Path) -> None:
+    hints = (RecordHint(record_id="s1", title="t", proposal=None),)
+    policy = RecordPolicy(hints=hints, rescue_ids=frozenset({"s1"}))
+    path = _decision_con(
+        tmp_path, {"s1": {"label": "include", "reason": "pdf propio", "text_file": "rescues/a.pdf"}}
+    )
+    decision = HumanDecision.model_validate(yaml.safe_load(path.read_text("utf-8")))
+    with pytest.raises(DecisionFileError, match="text_file"):
+        hitl._validate(path, decision, records=policy, flags=None)
