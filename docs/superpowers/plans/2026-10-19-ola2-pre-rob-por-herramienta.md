@@ -1271,7 +1271,7 @@ Dos grupos. Las filas **a registrar ya** son contratos que otras pistas consumen
 | E2.1 | `revisia/config.py` (`GRADE` → mensaje) | E2.0 |
 | E2.2 | `revisia/orchestration/gates.py` (RoB), `revisia/orchestration/hitl.py` (solo dataclases) | E2.0 |
 | E2.3 | `revisia/orchestration/hitl.py` (`review_gate(..., domains=)`) | E2.2 |
-| E2.4 | `revisia/orchestration/pipeline.py`, `revisia/agents/rob.py` (sin adaptador), `revisia/exports/methods.py`, `tests/hitl_helpers.py` | E2.1, E2.3 |
+| E2.4 | `revisia/orchestration/pipeline.py`, `revisia/agents/rob.py` (sin adaptador), `revisia/exports/methods.py`, `tests/hitl_helpers.py`, `tests/test_prompts.py` | E2.1, E2.3 |
 | E2.5 | `tests/conftest.py`, `tests/test_pipeline_fake.py` (fixtures y frontera para G₂) | E2.4 |
 | E2.6 | integración (controlador) | todas |
 
@@ -1788,6 +1788,7 @@ git commit -m "feat(hitl): corrección por dominio con escala, razón y edit_dom
 - Modify: `revisia/agents/rob.py`: se borra el adaptador `tool=` y su `@overload`.
 - Modify: `revisia/exports/methods.py` («### Evaluación de calidad», hoy en `:229-232`).
 - Modify: `tests/hitl_helpers.py` (`editar_dominio`, nuevo); `tests/test_rob_agent.py` (se borra `test_firma_heredada_con_tool_hasta_e2`).
+- Modify: `tests/test_prompts.py`: en `test_cada_agente_declara_su_plantilla_en_la_peticion` (plan A, Tarea 1), `assess_rob(p, tool="RoB2", record=rec)` pasa a `assess_rob(p, spec=load_tool_spec("RoB2"), record=rec)` (con `from revisia.schemas.rob_tools import load_tool_spec`).
 - Test: `tests/test_rob_pipeline.py` (añadir).
 
 **Interfaces:**
@@ -1940,7 +1941,7 @@ Notas para el implementador:
 Run: `uv run pytest -p no:cacheprovider tests/test_rob_pipeline.py -v`
 Expected: ERROR de colección (`ImportError: cannot import name 'editar_dominio'`).
 
-- [ ] **Step 3: Implementar** según Interfaces. Se borran `_rob_table_md`, el adaptador `tool=` y `test_firma_heredada_con_tool_hasta_e2`. El `_ProveedorConTablas` de `tests/test_hitl_pipeline.py` sigue funcionando: devuelve los cinco dominios (E1.6).
+- [ ] **Step 3: Implementar** según Interfaces. Se borran `_rob_table_md`, el adaptador `tool=` y `test_firma_heredada_con_tool_hasta_e2`. En el mismo paso, la llamada de `tests/test_prompts.py` (plan A) pasa a `assess_rob(p, spec=load_tool_spec("RoB2"), record=rec)`: sin adaptador, `tool=` ya no existe. El `_ProveedorConTablas` de `tests/test_hitl_pipeline.py` sigue funcionando: devuelve los cinco dominios (E1.6).
 
 - [ ] **Step 4: Run para verificar que pasa.**
 
@@ -2068,6 +2069,7 @@ En `### Cambios incompatibles`:
   - las de E₂ que siguen;
   - las que haya producido la revisión por tarea.
   - Las dos «a registrar ya» de E₁ las registró el coordinador: comprobar que están y no repetirlas.
+  - **Filas sustituidas:** al registrar, marcar la fila de C n+11 (su número real en §19) como «sustituida por la fila X», con X el número real que reciba aquí la e+3; la e+3 cita la fila de C por su número.
 
 ```
 | e | §4.2 `review_request.yml` · rob | Forma de la solicitud: `tool`, `tool_version`, `studies[]` con `status`, `source_text`, `overall_llm`, `overall_algorithm`, `overall`, `domains[]` (`id`, `domain`, `judgment`, `rationale`, `support_quote`, `quote_status`, `answers`) y `applicability[]`; `failed`; `attention[]` con `{study_id, domain, reason: failed \| quote_not_found \| aggregation, note?}` (`domain = "overall"` para las notas de la regla); `editable: {id: {domains, overall}}`; `artifact_sha256` del diario, antes de las ediciones | Plan PR-E (E₂) |

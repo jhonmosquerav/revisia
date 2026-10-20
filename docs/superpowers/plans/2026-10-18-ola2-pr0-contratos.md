@@ -1609,6 +1609,7 @@ def test_extraccion_por_clave_rellena_el_formulario() -> None:
 def test_rob_por_dominio_y_global() -> None:
     from revisia.agents.rob import assess_rob
 
+    # Forma interina por nombre de dominio; E1.6 la cambia a id (§19 fila 10); C y D no usan rob=.
     proveedor = ScriptedProvider(rob={"Proceso de aleatorización": "high", "overall": "high"})
     assessment, _ = assess_rob(proveedor, tool="RoB2", record=_rec("r", "T"))
     assert [(d.domain, d.judgment) for d in assessment.domains] == [("Proceso de aleatorización", "high")]

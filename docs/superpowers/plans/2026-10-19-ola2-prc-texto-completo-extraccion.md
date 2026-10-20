@@ -79,7 +79,8 @@ Worktree `C:\revisia-wt\c`, rama `feat/ola2-texto-completo-extraccion` creada de
 
 ```bash
 git -C C:/revisia fetch origin
-git -C C:/revisia worktree add C:/revisia-wt/c -b feat/ola2-texto-completo-extraccion \
+git -C C:/revisia worktree list | grep -q revisia-wt/c || \
+  git -C C:/revisia worktree add C:/revisia-wt/c -b feat/ola2-texto-completo-extraccion \
   origin/feat/ola2-identidad-registros
 cd C:/revisia-wt/c
 git merge-base --is-ancestor origin/feat/ola2-procedencia HEAD && echo "B va sobre A"
@@ -2008,7 +2009,8 @@ git commit -m "feat(pipeline): un fallo determinista de la IA llega al gate como
 
 **Files:**
 - Modify: `revisia/exports/methods.py` (`### Extracción`, 210-226; `### Uso de IA`, 237-241: línea de fallos), `revisia/exports/checklist.py` (`render_traice_checklist`, 507-612: kwarg y sección nueva antes de `## Pendientes de declaración humana`).
-- Modify: `revisia/orchestration/pipeline.py` (`_write_deliverables`: kwarg `failed`; llamada a `render_traice_checklist` con `concordance`).
+- Modify: `revisia/orchestration/pipeline.py` (`_write_deliverables`: kwarg `failed`; llamada a `render_traice_checklist` con `concordance`; `models_used` de `metodologia.md`, hoy `:1124`, solo sobre las metas `ok`).
+- Modify: `tests/test_fallos_deterministas_pipeline.py` (T11; un test al final: `metodologia.md` no lista un modelo que solo falló).
 - Modify: `examples/demo-mini-review/protocol.yml:55` (comentario: «Segundo extractor → concordancia IA–IA del 20 % (señal de calidad; la verificación es humana, campo a campo).») y `protocols/_TEMPLATE/protocol.yml` (bloque comentado tras `search_window`, ~línea 131: `# fulltext:` / `#   max_chars: 120000   # texto completo que lee la IA; un texto más largo se recorta y se declara (D20)`).
 - Modify: `tests/test_hitl_pipeline.py:2763-2777` (`test_methods_dice_que_la_extraccion_usa_titulo_y_abstract_para_todos`): sin renombrar; su `frase` pasa a `"La IA extrae del texto completo cuando lo hay"` (está en «### Extracción» con o sin rescates) y se añade `assert "el texto completo no entra en la extracción" not in md`.
 - Modify: `tests/conftest.py` (aditivo: parámetros de `_correr` y fixtures nuevas al final), `tests/test_pipeline_fake.py` (dos tests al final).
@@ -2020,6 +2022,7 @@ git commit -m "feat(pipeline): un fallo determinista de la IA llega al gate como
   - `### Extracción` de `metodologia.md`: «Formulario configurable (extraction_form.yml). La IA extrae del texto completo cuando lo hay (recuperado en abierto o aportado por el revisor en un rescate) y, si no, del título y el abstract; el documento entra en el prompt delimitado como dato. Cada campo lleva una cita textual de origen que el motor busca en la fuente (exacta, normalizada o no encontrada).» y la línea de método, según lo que de verdad ocurrió (supuesto §19): `verificada = gate is not None and gate.action == "approve" and gate.actor != AUTO_APPROVE_ACTOR` (`gate = gates.get("extraccion")`); `base = "Método: extracción por IA, verificada campo a campo por un humano"` si `verificada`, si no `"Método: extracción por IA, sin verificación humana campo a campo en esta corrida"`; `+ "; concordancia IA–IA del 20 % como señal."` si hay `extraction_agreement` (es decir, `agreement.json`), si no `"."`. Con ambos, la frase es exactamente la de D4. Después, «La tabla de extracción se aprueba por etapa, con corrección por campo registrada en el ledger: {decision('extraccion')}.»
   - Concordancia: con `extraction_agreement.n_studies`, ``f"Concordancia IA–IA (señal de calidad, no doble extracción) en {n} estudios ({pares} pares de campo con valor en ambos extractores): acuerdo de valor normalizado={agr}, kappa de presencia={fmt_metric(k)}{f' ({nota})' if nota else ''}. Desacuerdos señalados al revisor: {len(disagreements)}."``; con `n_studies == 0` y `failed_studies`, ``f"Concordancia IA–IA: no calculable (el 2.º extractor no pudo comparar {', '.join(failed_studies)})."``.
   - `render_methods(..., failed: Mapping[str, Sequence[str]] | None = None)`: con algún id, en `### Uso de IA` ``"Fallos deterministas de la IA (D9): " + " · ".join(f"{etapa}: {', '.join(ids)}") + "; esos registros los decidió un humano en su gate."`` (etapas en el orden de `GATED_STAGES`, solo las no vacías). `_write_deliverables` lo calcula: `screening_ta`/`screening_ft` con `failed_ids`, `extraccion` y `rob` con `status == "failed"`.
+  - `_write_deliverables`: `models_used = sorted({f"{m.provider}:{m.model}" for m in run.ctx.metas if m.outcome == "ok"})` (hoy `pipeline.py:1124`, sobre todas las metas). Cierra lo que A dejó para C (A §19 n+12): la lista de modelos de `metodologia.md` cuenta lo mismo que `models_used` del manifiesto (relación 20) y que `checklist_traice.md`; un modelo cuyas llamadas fallaron todas no figura como usado.
   - `render_traice_checklist(..., concordance: bool = False)`: sección `## Extracción` con la misma regla de `verificada` y de concordancia: ``"- " + <base> + ("; concordancia IA–IA del 20 % como señal (D4)." if concordance else ".")`` (con `base` en mayúscula inicial: «Extracción por IA, verificada…») y ``f"- Correcciones humanas de campo registradas (edit_field): {gates['extraccion'].n_edits}"`` si hay gate de extracción, si no `- Correcciones humanas de campo: gate de extracción pendiente`.
   - `tests/conftest.py` (para G₂, §15 «aditivo»): `_correr(..., fetch_fn=fetch_disponible, etiquetar_con_carpeta: Callable[[Path], Callable[[str, dict], dict | None]] | None = None)` (si se da, sustituye a `etiquetar` por `etiquetar_con_carpeta(ctx.run_dir)`); constantes `EDICION_DE_CAMPO = ("10.1000/asreview", "reduccion_carga", "70 %", "Resumen: «reduces screening workload by 70%»")` y `RESCATE_CON_TEXTO = ("10.1000/ensemble", "ensemble.txt", "Texto aportado por la revisora: tres modelos votan con sesgo a recall.".encode(), "PDF por préstamo interbibliotecario")`; fixtures de sesión `_corrida_con_edicion_de_campo` (revisora `editar_campo(*EDICION_DE_CAMPO, base=etiquetar_auditoria)`) y `_corrida_con_rescate_con_texto` (`fetch_fn=fetch_no_disponible(["10.1000/ensemble"])`, `etiquetar_con_carpeta=lambda d: rescatar_con_texto(d, *RESCATE_CON_TEXTO[:3], reason=RESCATE_CON_TEXTO[3], base=etiquetar_auditoria)`), ambas completadas; y sus copias por test `corrida_con_edicion_de_campo` y `corrida_con_rescate_con_texto` (como `corrida`, `conftest.py:328-332`).
   - Frontera (§7, §16, con PR-G): en `tests/test_pipeline_fake.py`, `test_pipeline_fake_con_edicion_de_campo_audita_sin_fail` con la aserción completa de `test_pipeline_fake_con_humano_audita_sin_fail` (`test_pipeline_fake.py:402-429`) sobre `corrida_con_edicion_de_campo`, marcado `xfail(strict=True, reason="PR-G₂: el auditor de la Ola 1 compara extractions.json con el diario y con artifact_sha256 sin los campos humanos (relaciones 13 y 25, check extraction)")`; y `test_pipeline_fake_con_edicion_de_campo_solo_falla_lo_que_adapta_g2` (sin marcador; lo borra G₂), que fija los detalles concretos (abajo). Decisión de este plan: C solo exige las relaciones que ya existen y deja fijado qué rompe; el check `extraction` y la frontera verde son de G₂.
@@ -2130,6 +2133,31 @@ def test_traice_declara_la_extraccion_y_sus_ediciones() -> None:
     assert "- Correcciones humanas de campo: gate de extracción pendiente" in pendiente
 ```
 
+al final de `tests/test_fallos_deterministas_pipeline.py` (T11; reutiliza `_busqueda`, `EXAMPLE` y sus imports):
+
+```python
+def test_metodologia_lista_solo_los_modelos_con_llamadas_ok(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A §19 n+12: un modelo cuyas llamadas fallaron todas no figura como usado (relación 20).
+    class _FallaSegundo(ScriptedProvider):
+        def structured(self, req, schema):
+            if self.model == "fake-extractor-2" and "extractor de datos" in req.prompt:
+                raise DeterministicCallError("400 Bad Request", attempts=1)
+            return super().structured(req, schema)
+
+    monkeypatch.setattr(pipeline_mod, "build_provider", lambda cfg: _FallaSegundo(model=cfg.model))
+    protocol = load_protocol(EXAMPLE)
+    ctx = RunContext(protocol.slug, tmp_path, "T")
+    resultado = pipeline_mod.run_pipeline(
+        protocol, EXAMPLE, ctx, auto_approve=True, search_fn=_busqueda, fetch_fn=fetch_disponible
+    )
+    assert resultado.status == "completed"
+    md = (ctx.run_dir / "deliverable" / "metodologia.md").read_text(encoding="utf-8")
+    linea = next(x for x in md.splitlines() if x.startswith("Modelos: "))
+    assert "fake:fake-extractor-2" not in linea and "fake:fake-a" in linea
+```
+
 y, al final de `tests/test_pipeline_fake.py`:
 
 ```python
@@ -2183,7 +2211,7 @@ Expected: las dos fixtures listadas y el test en verde.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add revisia/exports revisia/orchestration/pipeline.py examples/demo-mini-review/protocol.yml protocols/_TEMPLATE/protocol.yml tests/conftest.py tests/test_pipeline_fake.py tests/test_hitl_pipeline.py tests/test_declaraciones_extraccion.py tests/test_rescate_con_texto.py
+git add revisia/exports revisia/orchestration/pipeline.py examples/demo-mini-review/protocol.yml protocols/_TEMPLATE/protocol.yml tests/conftest.py tests/test_pipeline_fake.py tests/test_hitl_pipeline.py tests/test_declaraciones_extraccion.py tests/test_rescate_con_texto.py tests/test_fallos_deterministas_pipeline.py
 git commit -m "feat(exports): metodologia y trAIce declaran lo que de verdad se verificó, la concordancia IA-IA y los fallos de la IA; fixtures para PR-G (D4, D9)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
@@ -2241,6 +2269,7 @@ En `### Changed`: plantillas `screening`, `screening_ft` y `extraccion` en `v2` 
 | n+18 | §15 fixtures | `tests/conftest.py`: `corrida_con_edicion_de_campo`, `corrida_con_rescate_con_texto` (y `EDICION_DE_CAMPO`, `RESCATE_CON_TEXTO`); `tests/hitl_helpers.py`: `editar_campo`, `rescatar_con_texto` | Plan PR-C |
 | n+19 | Review Focus | Las claves devueltas por el modelo se casan con el formulario por `strip().casefold()` | Plan PR-C |
 | n+20 | D9, PR-A | `tests/test_reanudacion.py::test_fallo_determinista_sale_2_y_no_repite_la_llamada` (de A) pasa a `test_fallo_determinista_pausa_y_no_repite_la_llamada`: con C un fallo en T/A pausa (rc 0) sin repetir la llamada; el rc 2 sin bucle lo cubre la síntesis | Plan PR-C (revisión) |
+| n+21 | §5.5, relación 20 | La lista de modelos de `metodologia.md` (`_write_deliverables`, `run.ctx.metas`) se calcula solo sobre las metas con `outcome == "ok"`, como `models_used` del manifiesto y `checklist_traice.md`: un modelo cuyas llamadas fallaron todas no figura como usado. Cierra lo que la fila n+12 de A dejó para C (`test_metodologia_lista_solo_los_modelos_con_llamadas_ok`) | Plan PR-C |
 ```
 
 - [ ] **Step 3: Commit de documentación.**

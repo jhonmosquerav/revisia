@@ -1683,7 +1683,7 @@ git commit -m "feat(meta): metodologia.md y meta_analisis.md declaran el filtrad
   - `class RunKindMismatchError(ProtocolMismatchError)` en `snapshot.py`, `files=["run.json"]`, mensaje: `` f"{run_dir}: corrida de tipo `{actual}`; se reanuda con la orden con que empezó ({orden})" `` con `orden` = `` "`revisia benchmark <protocolo> --panel <panel.yml>`" `` si `actual == "benchmark"` y `` "`revisia run --resume <run_dir>`" `` si no.
   - `ensure_snapshot(protocol_dir, run_ctx, *, max_results, mailto, kind: RunKind = "review") -> tuple[Path, RunInfo]`: en una corrida nueva escribe `RunInfo(..., kind=kind)`. La comprobación de tipo **no** está aquí (ver `run_pipeline`).
   - `RunContext.create_at(run_dir: str | Path, *, slug: str, timestamp: str) -> RunContext` (classmethod): como `__init__` (misma guarda `RunDirExistsError` de carpeta no vacía) pero con la carpeta exacta.
-  - `preflight(..., until: str | None = None)`: con `until`, `stages_in_use` y `check_retired` solo miran las etapas de `STAGES` hasta `until` inclusive (en un benchmark, `busqueda`, `dedup` y `screening_ta`): el proveedor de extracción o de síntesis de un protocolo de benchmark no tiene por qué estar disponible (fila n+24).
+  - `preflight(..., until: str | None = None)`: con `until`, `stages_in_use` y `check_retired` solo miran las etapas de `STAGES` hasta `until` inclusive (en un benchmark, `busqueda`, `dedup` y `screening_ta`): el proveedor de extracción o de síntesis de un protocolo de benchmark no tiene por qué estar disponible (fila n+24). Con un `until` anterior a `sintesis` tampoco se ejecutan las comprobaciones de `grounding_issues` (D): un protocolo en `judge` sin `llm.verificador` no bloquea el benchmark.
   - `run_pipeline(protocol, protocol_dir, run_ctx, *, …, stop_after: Literal["screening_ta"] | None = None, kind: RunKind = "review") -> PipelineResult`, en este orden, **antes de tocar nada**:
     1. `(kind == "benchmark") != (stop_after == "screening_ta")` → `ValueError("kind='benchmark' y stop_after='screening_ta' van juntos")` (error de programación: los dos sentidos);
     2. `before = read_run_info(run_ctx.run_dir)`; `before is not None and before.kind != kind` → `RunKindMismatchError` (sin escribir `run.json`);
@@ -1800,6 +1800,28 @@ def test_preflight_hasta_screening_ta_ignora_las_etapas_posteriores(
     )
     assert any("extraccion" in i.where for i in completo.errors)
     assert not any("extraccion" in i.where for i in hasta_ta.errors)
+
+
+def test_judge_sin_verificador_no_bloquea_el_benchmark(
+    protocolo_auditoria: Path, tmp_path: Path, monkeypatch
+) -> None:
+    # grounding_issues (D) es de la etapa `sintesis`: con until="screening_ta" no se ejecuta.
+    raw = yaml.safe_load((protocolo_auditoria / "protocol.yml").read_text(encoding="utf-8"))
+    raw["grounding"] = "judge"
+    raw["llm"].pop("verificador", None)
+    proto = tmp_path / protocolo_auditoria.name
+    proto.mkdir()
+    for f in protocolo_auditoria.iterdir():
+        if f.is_file():
+            (proto / f.name).write_bytes(f.read_bytes())
+    (proto / "protocol.yml").write_text(yaml.safe_dump(raw), encoding="utf-8")
+    mensaje = "grounding: judge necesita llm.verificador"
+    completo = preflight(load_protocol(proto), proto, context="run", env={})
+    hasta_ta = preflight(load_protocol(proto), proto, context="run", env={}, until="screening_ta")
+    assert any(mensaje in i.message for i in completo.errors)
+    assert not any(mensaje in i.message for i in hasta_ta.errors)
+    resultado = _benchmark(proto, tmp_path / "runs" / "fake-a-r1", monkeypatch)
+    assert (resultado.status, resultado.stage) == ("completed", "screening_ta")
 
 
 def test_create_at_no_reutiliza_una_carpeta_con_contenido(tmp_path: Path) -> None:

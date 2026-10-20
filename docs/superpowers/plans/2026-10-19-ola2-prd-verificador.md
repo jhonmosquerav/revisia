@@ -1915,7 +1915,7 @@ En `### Cambios incompatibles`:
 - Los dobles `fake` juzgan *fail-closed*.
 - `protocols/prisma-ia-origen` (git-ignorado, del arquitecto; declara `grounding: agent` y no tiene `llm.verificador`) da **rc 2** en `validate` y `run` hasta que el arquitecto añada `llm.verificador` con otro modelo (§14.2, paso 1). El motor no lo toca.
 
-- [ ] **Step 2: §19 del spec.** Añadir **a continuación de la última fila existente**, con numeración consecutiva. Hay que copiar estas filas y completarlas con lo que haya producido la revisión por tarea:
+- [ ] **Step 2: §19 del spec.** Añadir **a continuación de la última fila existente**, con numeración consecutiva. Hay que copiar estas filas y completarlas con lo que haya producido la revisión por tarea. **Filas sustituidas:** al registrar, marcar la fila de C n+10 (su número real en §19) como «sustituida por la fila X», con X el número real que reciba aquí la n+5 de D; la sustitución alcanza a la parte de la verificación (la síntesis sigue con rc 2), y la n+5 cita la fila de C por su número.
 
 ```
 | n | §8, D2 | Errores (`judge` sin `llm.verificador`; verificador == síntesis) y avisos (mismo fabricante, `existence`, `embedder`, alias `agent`, verificador sin uso) en `preflight.grounding_issues` (rc 2 en `validate`/`run`/`resume`), no en el modelo: `ReviewProtocol` solo valida el literal y el alias. Un validador de modelo no podría avisar e impediría cargar en el auditor la instantánea de una corrida 0.8 con `agent` (diagnóstico, D12) | Plan PR-D |
@@ -2068,6 +2068,7 @@ E₂ hereda de D:
   - `source_window(claim.sentence, fuente, abstract=record.abstract or None, max_chars=protocol.verificador.max_source_chars).sha256`;
   - `support_quote_status(check.support_quote, fuente, abstract=…)`;
   - `is_grounded(mode, exists=…, source_available=…, numbers_missing=…, verdict_grounded=<output.grounded de la línea, o None si la línea es failed>, quote_status=…)`.
+- **Qué comprobaciones tienen línea:** en `judge`, solo las que cumplen `exists_in_corpus and source_available and not numbers_missing` (§19 n+4: con una cifra ausente no se llama al juez y no se escribe línea); sin ninguna, no hay `verification.jsonl`.
 - **La línea:** `input_sha256 == canonical_sha256({claim, cited_id, fuente_sha256, ventana_sha256, modo: "judge", juez: [f"{p}:{m}", temperature, seed]})` de `llm.verificador`; salida `GroundingVerdict`, o `status: failed` con la nota `JUDGE_FAILED_NOTE` en el check.
 - **Modo y juez:**
   - `verification.mode == protocol.grounding`.

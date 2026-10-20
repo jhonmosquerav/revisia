@@ -108,7 +108,7 @@ Expected:
 - La segunda no imprime nada (C sustituyó la viñeta de M15 en su Tarea 13).
 - `GRADE` solo aparece en frases que dicen que queda fuera (PR-0, Tarea 17, Step 0; E, Tarea E2.6).
 - `grounding: agent` solo en las dos filas de la tabla de defaults del README (`README.md:475-476` en `c1af7c3`), que D dejó para I.
-- `grounding` del demo: `existence` o ausente (default `existence`); el de `_TEMPLATE`: `existence` explícito (D, §19 n+14). G₂ **no** pasó el demo a `judge`: su fila n+19 sustituye a la n+14 de D y deja a PR-I el cierre por CLI. En G₂, `protocolo_auditoria` (y con ella `corrida`) ya está en `judge` con juez `fake-juez` y es APTA; la frontera D2 usa `corrida_existence`; el cierre completo en proceso es `corrida_ola2_completa` (`test_frontera_de_la_ola_2_completa_es_apta`, G2.10); y `test_pipeline_fake_con_humano_audita_sin_fail` (el demo) espera `fallos == {"grounding"}`. Comprobarlo: `grep -n "fake-juez\|corrida_existence" tests/conftest.py` y `grep -n 'fallos == {"grounding"}' tests/test_pipeline_fake.py` encuentran cada uno al menos una línea.
+- `grounding` del demo: `existence` o ausente (default `existence`); el de `_TEMPLATE`: `existence` explícito (D, §19 n+14). G₂ **no** pasó el demo a `judge`: su fila n+18 sustituye a la n+14 de D, y su fila n+19 deja a PR-I el cierre por CLI. En G₂, `protocolo_auditoria` (y con ella `corrida`) ya está en `judge` con juez `fake-juez` y es APTA; la frontera D2 usa `corrida_existence`; el cierre completo en proceso es `corrida_ola2_completa` (`test_frontera_de_la_ola_2_completa_es_apta`, G2.10); y `test_pipeline_fake_con_humano_audita_sin_fail` (el demo) espera `fallos == {"grounding"}`. Comprobarlo: `grep -n "fake-juez\|corrida_existence" tests/conftest.py` y `grep -n 'fallos == {"grounding"}' tests/test_pipeline_fake.py` encuentran cada uno al menos una línea.
 - El comentario de `auto_approve` del README existe (A, Tarea 13).
 - Anotar el número de la última fila de §19 (`L`): las filas de PR-I se numeran desde `L + 1`.
 
@@ -1118,13 +1118,28 @@ git commit -m "docs(auditoría): §11 Ola 2 · motor cerrado, con la tabla halla
 
 - [ ] **Step 1: §19 al día.** Comprobar que cada integración registró sus filas y que la numeración no salta:
 
+Se cuenta **por los rangos registrados**, no por el texto del Origen: muchas filas dicen «Revisión (…)», «Coordinador» o «Decisión del orquestador», así que `grep -c "Plan $P"` no las cuenta. Cada integración añadió un bloque consecutivo de filas; su primera y su última fila se leen del diff de §19 de su PR (`git log -p --format='%h %s' -- "$SPEC" | grep -E '^(commit|[0-9a-f]{7,} |\+\| [0-9]+ \|)'`) y se copian en `RANGOS`. Las filas «a registrar ya» que el coordinador registró antes de una integración (las dos de E₁, por ejemplo) son de otro bloque y no cuentan en el de su plan.
+
 ```bash
 SPEC=docs/superpowers/specs/2026-10-18-ola-2-remediacion-design.md
-for P in PR-0 PR-H PR-A PR-B PR-C PR-D PR-E PR-F PR-G; do printf "%s " "$P"; grep -c "Plan $P" "$SPEC"; done
+# plan, primera fila, última fila, filas esperadas (las de su tarea de integración)
+RANGOS="PR-0 a0 z0 7
+PR-H aH zH 4
+PR-A aA zA 20
+PR-B aB zB 9
+PR-C aC zC 22
+PR-D aD zD 26
+PR-E aE zE 24
+PR-F aF zF 30
+PR-G aG zG 23"
+echo "$RANGOS" | while read -r P DESDE HASTA ESPERADO; do
+  n=$(awk -F'|' -v d="$DESDE" -v h="$HASTA" '/^\| [0-9]+ \|/{x=$2+0; if (x>=d && x<=h) c++} END{print c+0}' "$SPEC")
+  [ "$n" = "$ESPERADO" ] || echo "$P: $n filas en $DESDE-$HASTA, se esperaban $ESPERADO"
+done
 awk -F'|' '/^\| [0-9]+ \|/{n=$2+0; if (prev && n != prev + 1) print "salto en la fila", n; prev = n}' "$SPEC"
 ```
 
-Expected: cada plan con al menos tantas filas como propuso en su tarea de integración (PR-0: 7; H: 3; A: 20; B: las de su Tarea 8; C: 21; D: 26; E: las de E₁ más 11; F: 30, de n a n+29; G: 23, de n a n+22), y el `awk` no imprime nada. Si falta alguna, se añade ahora con su origen y se anota en el cuerpo de la PR.
+Expected: ninguno de los dos bucles imprime nada. Filas esperadas por plan: PR-0: 7; H: 4; A: 20; B: 9; C: 22 (n a n+21); D: 26 (n a n+25); E: 24 (las trece «de integración» de E₁, m a m+12, y las once de E₂, e a e+10); F: 30 (n a n+29); G: 23 (n a n+22). Si falta alguna, se añade ahora con su origen y se anota en el cuerpo de la PR.
 
 Después, añadir las filas de PR-I a continuación de la última (`L + 1` de la Tarea 0):
 
@@ -1136,7 +1151,7 @@ Después, añadir las filas de PR-I a continuación de la última (`L + 1` de la
 | I-5 | D27 | Quitar `InMemoryVectorStore` de `revisia.rag.__all__` es un cambio incompatible de la API pública del paquete y va en el CHANGELOG | Plan PR-I |
 | I-6 | Plan PR-G, mapa del auditor | `CHECKS` tiene **26** filas tras G₂ (21 de la Ola 1 + `environment`, `deposit` + `extraction`, `rob`, `meta_analysis`; el plan de G₂ decía 25 antes de su revisión). El mapa de `docs/arquitectura.md` se contrasta con `CHECKS` en un test | Plan PR-I |
 | I-7 | §1, §11 auditoría | «M15» designa dos cosas: en la tabla de la auditoría, reintentos/backoff en los proveedores API (fuera de alcance, §17); en el README y el spec de la Ola 1, el bucle de rc 3 (cerrado por D9). La §11 nombra las dos | Plan PR-I |
-| I-8 | D §19 n+14, G n+19 | PR-I decide (la fila n+19 de G sustituye a la n+14 de D): el demo (`examples/demo-mini-review`) y `_TEMPLATE` siguen en `grounding: existence`. Con `judge` y juez `fake` (fail-closed) el `--auto-approve` del quickstart pausaría en el gate final (cita marcada, humano forzado). La frontera de §16 con `judge` corre sobre una copia del demo (Tarea 3); `test_pipeline_fake_con_humano_audita_sin_fail` sigue con `fallos == {"grounding"}` y `AVISOS_DE_LA_DEMO` pierde la entrada `grounding` si la conserva | Plan PR-I |
+| I-8 | D §19 n+14, G n+18 | PR-I decide (la fila n+18 de G sustituye a la n+14 de D): el demo (`examples/demo-mini-review`) y `_TEMPLATE` siguen en `grounding: existence`. Con `judge` y juez `fake` (fail-closed) el `--auto-approve` del quickstart pausaría en el gate final (cita marcada, humano forzado). La frontera de §16 con `judge` corre sobre una copia del demo (Tarea 3); `test_pipeline_fake_con_humano_audita_sin_fail` sigue con `fallos == {"grounding"}` y `AVISOS_DE_LA_DEMO` pierde la entrada `grounding` si la conserva | Plan PR-I |
 | I-9 | §13 `docs/metodologia/` | Las notas sobre GRADE, unidad de análisis y concordancia IA–IA van en una sección de `docs/metodologia/README.md`, no en un fichero nuevo | Plan PR-I |
 | I-10 | §13 `docs/benchmark-cribado.md` | La tabla «Panel de referencia» con modelos concretos sale: el panel es del estudio externo (D6) y los modelos caducan; queda un `panel.yml` de ejemplo con marcadores | Plan PR-I |
 | I-11 | §13 README | La sección «Auditoría abierta» se conserva y se actualiza en 0.9.0; se retira en 1.0.0 (§14.4) | Plan PR-I |

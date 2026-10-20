@@ -972,7 +972,7 @@ El spec no fija estos puntos; el plan decide y el integrador los añade a §19 *
 ## Fase G₂ (sobre PR-F)
 
 **Estado de partida:** PR-0 + H + A + B + C + D + E + F, con G₁ rebasada encima. Los nombres que G₂ consume salen de los bloques «Para PR-G₂», «Contratos/Interfaces para G₂» y «Estado en que X deja el pipeline» de cada plan:
-- `2026-10-19-ola2-pra-procedencia.md` (A): Tarea 2 (`APPLIED_PARAMS`, `emit_attempt`), Tarea 3 (sink, `RecordFailedError`) y Tarea 9 (`environment`, `collect_environment`, `git_state`, `_git_state_fijo`, relación 20).
+- `2026-10-19-ola2-pra-procedencia.md` (A): Tarea 2 (`APPLIED_PARAMS`, `emit_attempt`), Tarea 3 (sink, `RecordFailedError`) y Tarea 6 (`environment`, `collect_environment`, `git_state`, `_git_state_fijo`, relación 20).
 - `-prb-identidad-registros.md` (B): Tarea 6 (`DedupReport.unmerged_placeholders`, `PLACEHOLDER_TITLES`, `dedup_key`) y Tarea 7 (`SearchLogEntry.format`, `ignored_files`).
 - `-prc-texto-completo-extraccion.md` (C): «Contratos para G₂ (relaciones 22–26)», `failed_extraction` (T5) y `failed_ids` (T11).
 - `-prd-verificador.md` (D): «Interfaces para G₂ (relación 28)», con `claim_numbers_missing`.
@@ -993,7 +993,7 @@ Si un nombre de aquí no coincide con el del plan dueño, **manda el bloque Inte
 ### Interfaces que G₁ deja para G₂
 
 **Obligaciones de arranque de G₂** (las cumplen las Tareas G2.0, G2.1 y G2.5):
-- Retirar la fixture `_andamio_entorno_ola2` de `tests/conftest.py` (PR-A ya escribe `environment` en `run.json` y en el manifiesto). G₂ se apoya en la fixture autouse `_git_state_fijo` de PR-A (Tarea 9), que fija `snapshot.git_state` a `("0" * 40, False)`. Sin ella, el `git_dirty` real daría WARN en `environment`, que no está en `AVISOS_DE_LA_DEMO`.
+- Retirar la fixture `_andamio_entorno_ola2` de `tests/conftest.py` (PR-A ya escribe `environment` en `run.json` y en el manifiesto). G₂ se apoya en la fixture autouse `_git_state_fijo` de PR-A (Tarea 6), que fija `snapshot.git_state` a `("0" * 40, False)`. Sin ella, el `git_dirty` real daría WARN en `environment`, que no está en `AVISOS_DE_LA_DEMO`.
 - `write_run_v08` se acerca a la forma 0.8 real (G2.1). Por eso `test_corrida_08_falla_solo_en_environment…` pasa a exigir:
   - `environment` en FAIL con el mensaje de D12;
   - `prompts` en FAIL por esquema v1;
@@ -1111,7 +1111,7 @@ Expected: PASS con exactamente estos XFAIL estrictos. Son los que G₂ pone en v
 
 | Test | Plan | Pone en verde |
 |---|---|---|
-| `tests/test_snapshot.py::test_modelo_con_solo_intentos_fallidos_audita_sin_fail` | A (Tarea 9) | G2.2 |
+| `tests/test_snapshot.py::test_modelo_con_solo_intentos_fallidos_audita_sin_fail` | A (Tarea 6) | G2.2 |
 | los que A marque en su Tarea 3 con `reason="PR-G: <check> no conoce los intentos fallidos (D14)"` (condicionales: copiarlos del cuerpo de la PR-A) | A (Tarea 3) | G2.2 |
 | `tests/test_auditor_meta_y_estados.py::test_agreement_editado_con_su_copia_no_es_el_acuerdo_aprobado` | C (Tarea 7) | G2.6 |
 | `tests/test_pipeline_fake.py::test_pipeline_fake_con_edicion_de_campo_audita_sin_fail` | C (Tarea 12) | G2.6 |
@@ -1142,7 +1142,7 @@ Si la lista real (`-rxX`) difiere, se completa la tabla en el informe y en el cu
 - Modify: `tests/test_audit_entorno.py`, `tests/test_audit_fixtures.py`.
 
 **Interfaces:**
-- Consumes: `_git_state_fijo` (A, Tarea 9); `primera_llamada`, `editar_llamadas` (`audit_fixtures.py`).
+- Consumes: `_git_state_fijo` (A, Tarea 6); `primera_llamada`, `editar_llamadas` (`audit_fixtures.py`).
 - Produces:
   - `write_run_v08(run_dir) -> Path`, además de lo de G₁:
     - pone `run.json.prompt_sha256 = {k: v for k, v in environment.prompt_templates.items() if k.endswith(".md")}`, leído antes de quitar `environment`. Antes de implementarlo, comprobar que `RunInfo` sigue sin `model_config` con `extra="forbid"` (`grep -n "model_config\|ConfigDict" revisia/schemas/artifacts.py`). Hoy no lo tiene, así que la clave sobrante se ignora al validar; si A lo añadiera, `prompt_sha256` no se repone y se anota (M7);
@@ -1564,7 +1564,7 @@ git commit -m "feat(audit): relación 22 (diarios con fallo, D9), exenciones de 
     - afirmaciones recalculadas desde la narrativa de `documento.md` con `split_claims(…, incluidos)`, cuyo número o pares `(claim_index, cited_id)` ≠ `checks`: `"afirmaciones recalculadas ≠ checks"`;
     - `n_uncited_quantitative ≠ len(uncited_quantitative(…))`;
     - por comprobación: `numbers_missing` ≠ `claim_numbers_missing(claim, sources, abstracts)`, `quote_status` ≠ `support_quote_status(…)` o `grounded` ≠ `is_grounded(…)`, con `verdict_grounded` de la salida de su línea o `None` si es `failed`: `"grounded recalculado ≠ en <índices>"`;
-    - en `judge`, cada comprobación con `exists_in_corpus and source_available` tiene su línea `check:<i>:<id>`:
+    - en `judge`, cada comprobación con `exists_in_corpus and source_available and not numbers_missing` tiene su línea `check:<i>:<id>` (con una cifra ausente D no llama al juez y no escribe línea, D §19 n+4; si ninguna comprobación se juzga, no hay `verification.jsonl`):
       - con exactamente una llamada `ok`, o `status: failed` con la nota `JUDGE_FAILED_NOTE`;
       - `inputs.ventana_sha256 == source_window(…).sha256`;
       - `input_sha256 == canonical_sha256({claim, cited_id, fuente_sha256, ventana_sha256, modo: "judge", juez: [f"{p}:{m}", temperature, seed]})`, el contrato de D (M5).
@@ -1591,6 +1591,8 @@ import json
 from pathlib import Path
 
 from audit_fixtures import auditar, edit_json, editar_protocolo, editar_verificacion, fila
+from conftest import PALABRAS_FT, _correr, adjudicar_auditoria, proveedor_con_juez
+from fakes import ScriptedProvider
 
 
 def _lineas(run: Path) -> list[dict]:
@@ -1655,6 +1657,30 @@ def test_grounding_grounded_manipulado_falla(corrida_con_juez) -> None:
 def test_grounding_comprobacion_sin_su_linea_falla(corrida_con_juez) -> None:
     _escribir(corrida_con_juez, _lineas(corrida_con_juez)[1:])
     assert "sin su línea check:" in fila(auditar(corrida_con_juez), "grounding").detail
+
+
+def test_grounding_cifra_ausente_no_exige_linea_ni_da_fail(tmp_path, protocolo_con_juez) -> None:
+    # D §19 n+4: con una cifra ausente el juez no se llama y no hay línea check:<i>:<id>.
+    def _proveedor(cfg):
+        if cfg.model == "fake-1":
+            sintesis = "LLM screening reached a recall of 0.55 [10.1000/llm-1]."
+            return ScriptedProvider(model=cfg.model, palabras=PALABRAS_FT, sintesis=sintesis)
+        return proveedor_con_juez(cfg)
+
+    run = _correr(
+        tmp_path,
+        protocolo_con_juez,
+        parar_en=None,
+        proveedor=_proveedor,
+        etiquetar=adjudicar_auditoria,
+    )
+    verificacion = json.loads(
+        (run / "06_synthesis" / "verification.json").read_text(encoding="utf-8")
+    )
+    assert verificacion["checks"][0]["numbers_missing"] == ["0.55"]
+    assert not (run / "06_synthesis" / "verification.jsonl").exists()
+    grounding = fila(auditar(run), "grounding")
+    assert grounding.status != "FAIL" and "sin su línea check:" not in grounding.detail
 
 
 def test_grounding_ventana_manipulada_falla(corrida_con_juez) -> None:
@@ -2354,7 +2380,9 @@ git commit -m "test(audit): fronteras de la Ola 2: corrida completa APTA, existe
 
 En `### Changed`: ``- `grounding: existence`/`embedder` da FAIL en el auditor: una corrida publicable exige `grounding: judge` con un juez distinto del redactor (D2). El demo sigue en `existence` hasta PR-I.``
 
-- [ ] **Step 2: §19.** Copiar tal cual las filas n…n+9 de «Supuestos revocables de G₁» y las n+10…n+21 de «Supuestos revocables de G₂», numeradas a continuación de la última fila existente. La n+18 se escribe como sustituta de la fila n+14 de PR-D, citándola.
+- [ ] **Step 2: §19.** Copiar tal cual las filas n…n+9 de «Supuestos revocables de G₁» y las n+10…n+22 de «Supuestos revocables de G₂», numeradas a continuación de la última fila existente. La n+18 se escribe como sustituta de la fila n+14 de PR-D, citándola. **Filas sustituidas:** al registrar, marcar como «sustituida por la fila X» (X, el número real que reciba aquí la fila de G):
+  - la fila de D n+14 → por la n+18 de G;
+  - las filas de F n+26 y n+27 (propuestas de la revisión de F₂) → por la n+15 de G.
 
 - [ ] **Step 3: Commit de documentación.**
 
