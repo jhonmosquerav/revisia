@@ -16,7 +16,7 @@ from revisia.schemas import (
     VerificationReport,
 )
 from revisia.schemas.rob import RoBAssessment, RoBDomain, RoBTool
-from revisia.schemas.verification import CitationCheck
+from revisia.schemas.verification import CitationCheck, JudgeInfo, UncitedClaim
 
 
 def test_research_question_framework_enum() -> None:
@@ -142,3 +142,37 @@ def test_rob_assessment_v1_valida_y_los_campos_humanos_van_atados() -> None:
         RoBAssessment(study_id="s", tool="RoB2", overall_human="high")
     ok = RoBAssessment(study_id="s", tool="RoB2", overall_human="high", overall_reason="r")
     assert ok.overall_human == "high"
+
+
+def test_verification_report_v1_valida_sin_modo_ni_juez() -> None:
+    v1 = {
+        "stage": "reporte",
+        "checks": [{"claim": "A", "cited_id": "rec-1", "exists_in_corpus": True, "grounded": True}],
+        "hallucination_flagged": False,
+    }
+    report = VerificationReport.model_validate(v1)
+    assert (report.schema_version, report.mode, report.judge, report.n_claims) == (2, None, None, 0)
+    check = report.checks[0]
+    assert (check.index, check.source_available, check.numbers_missing, check.quote_status) == (
+        None,
+        True,
+        [],
+        "none",
+    )
+
+
+def test_verification_report_v2_coherencia_de_modo_y_cifras_sin_cita() -> None:
+    with pytest.raises(ValidationError):  # judge sin juez
+        VerificationReport(stage="reporte", mode="judge")
+    with pytest.raises(ValidationError):  # contador distinto de la lista
+        VerificationReport(stage="reporte", n_uncited_quantitative=1)
+    ok = VerificationReport(
+        stage="reporte",
+        mode="judge",
+        judge=JudgeInfo(provider="zai", model="glm"),
+        n_uncited_quantitative=1,
+        uncited_quantitative=[UncitedClaim(claim_index=3, sentence="El 40 % …", numbers=["40"])],
+    )
+    assert ok.judge is not None and ok.judge.model == "glm"
+    with pytest.raises(ValidationError):
+        CitationCheck(claim="x" * 601, cited_id="r")
