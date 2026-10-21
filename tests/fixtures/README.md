@@ -28,4 +28,4 @@ van recortados. No contienen correos ni claves.
   El primer paper trae `openAccessPdf.url`.
 - Licencias: paper 1 (`10.3390/info16050378`) CC-BY (`openAccessPdf.license: CCBY`);
   paper 2 (`10.1007/978-3-031-56027-9_25`, capítulo de Springer) sin licencia abierta: abstract
-  recortado; paper 3 (arXiv `2510.16091`) sin licencia declarada en la respuesta, abstract completo.
+  recortado; paper 3 (arXiv `2510.16091`) sin licencia declarada en la respuesta: abstract recortado.
