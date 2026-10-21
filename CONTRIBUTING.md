@@ -25,7 +25,7 @@ No mezcles datos de una revisión con el código del motor en un PR.
 
 ## Entorno de desarrollo
 
-Requiere **Python 3.13+** y [`uv`](https://docs.astral.sh/uv/).
+Requiere **Python 3.11+** y [`uv`](https://docs.astral.sh/uv/).
 
 ```bash
 git clone <tu-fork> revisia && cd revisia
@@ -41,11 +41,19 @@ No necesitas ninguna API key para desarrollar ni para correr la suite.
 Tu rama debe pasar, en este orden:
 
 ```bash
+uv lock --check              # uv.lock al día con pyproject.toml
 uv run ruff check .          # linting
+uv run ruff format --check . # formato (ruff)
 uv run black --check .       # formato (line-length 100)
 uv run pytest -q -n auto -m "not cronometrado"   # en paralelo (en serie tarda ~11 min)
 uv run pytest -q -m cronometrado                 # los de cota de tiempo, en serie
+uv run pytest -q -n auto -m "not cronometrado" --cov --cov-report=term   # cobertura total >= 90 %
 ```
+
+El CI corre la suite en Ubuntu y Windows con Python 3.11, 3.12 y 3.13; la
+cobertura (cota del 90 %) se juzga solo en Ubuntu/3.13, y un job aparte
+(`sdk-smoke`) comprueba contra los SDK reales la superficie que usan los
+proveedores.
 
 Pautas:
 
