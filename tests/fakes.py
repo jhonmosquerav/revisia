@@ -27,6 +27,7 @@ Uso desde un test (``tests/`` está en ``sys.path`` porque no es un paquete)::
 
 from __future__ import annotations
 
+import io
 import shutil
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
@@ -360,3 +361,39 @@ class ClienteJSON:
         self.last_url = url
         self.last_params = params
         return _RespuestaJSON(self._payload)
+
+
+def pdf_minimo(texto: str) -> bytes:
+    """PDF 1.4 de una página con ``texto`` en Helvetica 12, legible por pypdf (M19).
+
+    Solo ASCII sin paréntesis ni barras: el texto va sin escapar en el flujo de contenido.
+    """
+    if not texto.isascii() or any(c in texto for c in "()\\"):
+        raise ValueError("pdf_minimo: solo ASCII sin paréntesis ni barras")
+    contenido = f"BT /F1 12 Tf 72 712 Td ({texto}) Tj ET".encode()
+    objetos = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+        b"/Resources << /Font << /F1 5 0 R >> >> >>",
+        b"<< /Length "
+        + str(len(contenido)).encode()
+        + b" >>\nstream\n"
+        + contenido
+        + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    salida = io.BytesIO()
+    salida.write(b"%PDF-1.4\n")
+    offsets: list[int] = []
+    for numero, objeto in enumerate(objetos, 1):
+        offsets.append(salida.tell())
+        salida.write(f"{numero} 0 obj\n".encode() + objeto + b"\nendobj\n")
+    xref = salida.tell()
+    salida.write(f"xref\n0 {len(objetos) + 1}\n".encode() + b"0000000000 65535 f \n")
+    for offset in offsets:
+        salida.write(f"{offset:010d} 00000 n \n".encode())
+    salida.write(
+        f"trailer\n<< /Size {len(objetos) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    )
+    return salida.getvalue()
