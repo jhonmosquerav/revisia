@@ -27,9 +27,12 @@ Uso desde un test (``tests/`` está en ``sys.path`` porque no es un paquete)::
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Callable, Iterable, Mapping
+from pathlib import Path
 from typing import TypeVar, get_args
 
+import yaml
 from pydantic import BaseModel
 
 from revisia.agents.extraccion import _ExtractionOut
@@ -276,3 +279,47 @@ def fetch_disponible_largo(n_chars: int) -> Callable[[SearchRecord], FullText]:
         )
 
     return _fetch
+
+
+_RIS_OFFLINE = """TY  - JOUR
+TI  - LLM screening for systematic reviews
+AU  - Prueba, Ana
+PY  - 2021
+AB  - Estudio de prueba sobre cribado asistido por modelos de lenguaje.
+ER  -
+
+TY  - JOUR
+TI  - Active learning with ASReview
+AU  - Prueba, Beto
+PY  - 2021
+AB  - Estudio de prueba sobre aprendizaje activo para el cribado.
+ER  -
+"""
+
+
+def protocolo_offline(dest: Path, *, provider: str = "fake", model: str = "fake-1") -> Path:
+    """Copia el protocolo de demo a ``dest`` listo para correr sin red (auditoría 2026-09-03, A13).
+
+    ``databases: [Scopus]`` es una base de importación manual: ``search_stage`` no llama a ningún
+    backend y solo lee ``imported/corpus.ris`` (dos registros sin DOI, URL ni PMCID). Sin DOI ni
+    ``oa_url``, ``fetch_fulltext`` no toca la red (``sin_url_oa``), así que ``run_review`` y el CLI
+    completan la corrida sin dobles inyectados y con 0 incluidos. Cambia ``provider``/``model`` de
+    todas las entradas de ``llm`` y ``ensemble_llm``.
+    """
+    raiz = Path(__file__).resolve().parent.parent
+    shutil.copytree(raiz / "examples" / "demo-mini-review", dest)
+    shutil.rmtree(dest / "search_strings", ignore_errors=True)
+    (dest / "effects.yml").unlink(missing_ok=True)
+    (dest / "imported").mkdir(exist_ok=True)
+    (dest / "imported" / "corpus.ris").write_text(_RIS_OFFLINE, encoding="utf-8")
+    ruta = dest / "protocol.yml"
+    raw = yaml.safe_load(ruta.read_text(encoding="utf-8"))
+    raw["databases"] = ["Scopus"]
+    entradas = list(raw.get("llm", {}).values())
+    for miembros in raw.get("ensemble_llm", {}).values():
+        entradas.extend(miembros)
+    for entrada in entradas:
+        entrada["provider"] = provider
+        entrada["model"] = model
+    ruta.write_text(yaml.safe_dump(raw, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return dest
