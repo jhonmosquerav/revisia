@@ -27,9 +27,13 @@ Uso desde un test (``tests/`` está en ``sys.path`` porque no es un paquete)::
 
 from __future__ import annotations
 
+import io
+import shutil
 from collections.abc import Callable, Iterable, Mapping
+from pathlib import Path
 from typing import TypeVar, get_args
 
+import yaml
 from pydantic import BaseModel
 
 from revisia.agents.extraccion import _ExtractionOut
@@ -276,3 +280,120 @@ def fetch_disponible_largo(n_chars: int) -> Callable[[SearchRecord], FullText]:
         )
 
     return _fetch
+
+
+_RIS_OFFLINE = """TY  - JOUR
+TI  - LLM screening for systematic reviews
+AU  - Prueba, Ana
+PY  - 2021
+AB  - Estudio de prueba sobre cribado asistido por modelos de lenguaje.
+ER  -
+
+TY  - JOUR
+TI  - Active learning with ASReview
+AU  - Prueba, Beto
+PY  - 2021
+AB  - Estudio de prueba sobre aprendizaje activo para el cribado.
+ER  -
+"""
+
+
+def protocolo_offline(dest: Path, *, provider: str = "fake", model: str = "fake-1") -> Path:
+    """Copia el protocolo de demo a ``dest`` listo para correr sin red (auditoría 2026-09-03, A13).
+
+    ``databases: [Scopus]`` es una base de importación manual: ``search_stage`` no llama a ningún
+    backend y solo lee ``imported/corpus.ris`` (dos registros sin DOI, URL ni PMCID). Sin DOI ni
+    ``oa_url``, ``fetch_fulltext`` no toca la red (``sin_url_oa``), así que ``run_review`` y el CLI
+    completan la corrida sin dobles inyectados y con 0 incluidos. Cambia ``provider``/``model`` de
+    todas las entradas de ``llm`` y ``ensemble_llm``.
+    """
+    raiz = Path(__file__).resolve().parent.parent
+    shutil.copytree(raiz / "examples" / "demo-mini-review", dest)
+    shutil.rmtree(dest / "search_strings", ignore_errors=True)
+    (dest / "effects.yml").unlink(missing_ok=True)
+    (dest / "imported").mkdir(exist_ok=True)
+    (dest / "imported" / "corpus.ris").write_text(_RIS_OFFLINE, encoding="utf-8")
+    ruta = dest / "protocol.yml"
+    raw = yaml.safe_load(ruta.read_text(encoding="utf-8"))
+    raw["databases"] = ["Scopus"]
+    entradas = list(raw.get("llm", {}).values())
+    for miembros in raw.get("ensemble_llm", {}).values():
+        entradas.extend(miembros)
+    for entrada in entradas:
+        entrada["provider"] = provider
+        entrada["model"] = model
+    ruta.write_text(yaml.safe_dump(raw, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return dest
+
+
+class _RespuestaJSON:
+    """Respuesta mínima de ``httpx``: ``raise_for_status()`` y ``json()``."""
+
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class ClienteJSON:
+    """Sustituto de ``httpx.Client`` (context manager) que sirve un payload fijo.
+
+    Es el ``_FakeClient`` de ``test_search_multibase.py`` hecho compartible
+    (auditoría 2026-09-03, M18). Guarda ``last_url`` y ``last_params``.
+    """
+
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+        self.last_url: str | None = None
+        self.last_params: dict | None = None
+
+    def __enter__(self) -> ClienteJSON:
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+    def get(self, url: str, params: dict | None = None) -> _RespuestaJSON:
+        self.last_url = url
+        self.last_params = params
+        return _RespuestaJSON(self._payload)
+
+
+def pdf_minimo(texto: str) -> bytes:
+    """PDF 1.4 de una página con ``texto`` en Helvetica 12, legible por pypdf (M19).
+
+    Solo ASCII sin paréntesis ni barras: el texto va sin escapar en el flujo de contenido.
+    """
+    if not texto.isascii() or any(c in texto for c in "()\\"):
+        raise ValueError("pdf_minimo: solo ASCII sin paréntesis ni barras")
+    contenido = f"BT /F1 12 Tf 72 712 Td ({texto}) Tj ET".encode()
+    objetos = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+        b"/Resources << /Font << /F1 5 0 R >> >> >>",
+        b"<< /Length "
+        + str(len(contenido)).encode()
+        + b" >>\nstream\n"
+        + contenido
+        + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    salida = io.BytesIO()
+    salida.write(b"%PDF-1.4\n")
+    offsets: list[int] = []
+    for numero, objeto in enumerate(objetos, 1):
+        offsets.append(salida.tell())
+        salida.write(f"{numero} 0 obj\n".encode() + objeto + b"\nendobj\n")
+    xref = salida.tell()
+    salida.write(f"xref\n0 {len(objetos) + 1}\n".encode() + b"0000000000 65535 f \n")
+    for offset in offsets:
+        salida.write(f"{offset:010d} 00000 n \n".encode())
+    salida.write(
+        f"trailer\n<< /Size {len(objetos) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    )
+    return salida.getvalue()

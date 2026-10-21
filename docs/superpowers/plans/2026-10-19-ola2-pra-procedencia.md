@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.13 en desarrollo; la suite también en 3.11/3.12 tras rebasar sobre PR-H (sin sintaxis de 3.12+). Pydantic v2, `contextvars` (sink de PR-0), `subprocess` (dobles en todos los tests), `importlib.metadata`, pytest + pytest-xdist, ruff + black (línea 100), uv, gh.
 
-**Spec:** `docs/superpowers/specs/2026-10-18-ola-2-remediacion-design.md`. Este plan implementa §5 entero (5.1–5.5) y la parte de §4.2/§4.3 que le toca (relaciones 19–21 del lado productor). Lee antes §3 (D9, D10, D11, D12, D14, D24), §4.2, §15 y **§19 filas 1–8** (decisiones del arquitecto; vinculan). Planes hermanos: `2026-10-18-ola2-pr0-contratos.md` (sus bloques **Interfaces** son la fuente de `RunMeta` v2, `sink.py`, `TransientCallError`/`DeterministicCallError`, `LLMRequest.prompt_template`, `Environment`, `RunInfo` v2, `JournalEntry` v2/`JournalFailure`, `ScriptedProvider`, `tool_spec_fingerprint`, la sonda) y `2026-10-18-ola2-prh-ci-tests.md` (deja tres `xfail(strict=True)` en `tests/test_providers_api.py` y el job `sdk-smoke` con `tests/test_sdk_superficie.py`, que esta PR pone en verde).
+**Spec:** `docs/superpowers/specs/2026-10-18-ola-2-remediacion-design.md`. Este plan implementa §5 entero (5.1–5.5) y la parte de §4.2/§4.3 que le toca (relaciones 19–21 del lado productor). Lee antes §3 (D9, D10, D11, D12, D14, D24), §4.2, §15 y **§19 filas 1–8** (decisiones del arquitecto; vinculan). Planes hermanos: `2026-10-18-ola2-pr0-contratos.md` (sus bloques **Interfaces** son la fuente de `RunMeta` v2, `sink.py`, `TransientCallError`/`DeterministicCallError`, `LLMRequest.prompt_template`, `Environment`, `RunInfo` v2, `JournalEntry` v2/`JournalFailure`, `ScriptedProvider`, `tool_spec_fingerprint`, la sonda) y `2026-10-18-ola2-prh-ci-tests.md` (deja cuatro `xfail(strict=True, raises=AssertionError)` en `tests/test_providers_api.py` y el job `sdk-smoke` con `tests/test_sdk_superficie.py`, que esta PR pone en verde).
 
 ## Global Constraints
 
@@ -37,7 +37,7 @@ Entradas que el spec implica y que ningún test de §5 ejercita; cada una tiene 
 
 ## Topología de ejecución (subagentes)
 
-Worktree `C:\revisia-wt\a`, rama `feat/ola2-procedencia`, creada desde `feat/ola2-contratos` en la Tarea 17 de PR-0. Secuencial, tarea a tarea. Al final (Tarea 12) se rebasa sobre `feat/ola2-ci-tests` (PR-H), se ponen en verde sus tres `xfail(strict=True)` y la PR se abre con base `feat/ola2-ci-tests` (§15).
+Worktree `C:\revisia-wt\a`, rama `feat/ola2-procedencia`, creada desde `feat/ola2-contratos` en la Tarea 17 de PR-0. Secuencial, tarea a tarea. Al final (Tarea 12) se rebasa sobre `feat/ola2-ci-tests` (PR-H), se ponen en verde sus cuatro `xfail(strict=True)` y la PR se abre con base `feat/ola2-ci-tests` (§15).
 
 | Tarea | Fichero(s) | Depende de |
 |---|---|---|
@@ -2109,12 +2109,12 @@ git commit -m "feat(claude_code): una meta por intento con texto enviado, coste,
 
 ---
 
-## Tarea 12: Rebase sobre PR-H y sus tres `xfail(strict=True)` en verde (controlador + implementador)
+## Tarea 12: Rebase sobre PR-H y sus cuatro `xfail(strict=True)` en verde (controlador + implementador)
 
 **Files:**
 - Rebase: `feat/ola2-procedencia` sobre `feat/ola2-ci-tests`.
 - Modify: `tests/fakes.py` y `tests/test_providers_procedencia.py` (M8): los dobles de cliente de PR-H (`_Gemini`, `_OpenAI`, `_Anthropic` de `tests/test_providers_api.py`) pasan a `tests/fakes.py` como `ClienteGeminiFalso`, `ClienteOpenAIFalso` y `ClienteAnthropicFalso`, con dos parámetros de palabra clave añadidos (`fallo: Exception | None = None`, que lanzan en vez de responder, y, en Gemini, `bloqueo: str | None = None`); `tests/test_providers_api.py` y `tests/test_providers_procedencia.py` los importan con `from fakes import …` y los dobles provisionales de la Tarea 4 se borran. Las aserciones de ambos ficheros no cambian.
-- Modify: `tests/test_providers_api.py` (de PR-H, Tarea 7): quitar el marcador de `test_gemini_runmeta_v2_aplicado`, `test_local_openai_prompt_sha256_es_del_texto_enviado` y `test_anthropic_runmeta_v2_aplicado`; en `test_local_openai_inyecta_el_schema_en_el_prompt` la última línea `assert meta.prompt_sha256 == V1  # la 0.8 hashea el prompt ORIGINAL…` pasa a `assert meta.prompt_sha256 != V1  # A7: hash del texto enviado (PR-A)`.
+- Modify: `tests/test_providers_api.py` (de PR-H, Tarea 7): quitar el marcador de `test_gemini_runmeta_v2_aplicado`, `test_local_openai_prompt_sha256_es_del_texto_enviado`, `test_anthropic_runmeta_v2_aplicado` y `test_anthropic_structured_hashea_el_schema_aparte` (el cuarto lo separó la revisión de PR-H: A7, schema aparte en Anthropic); en `test_local_openai_inyecta_el_schema_en_el_prompt` la última línea `assert meta.prompt_sha256 == V1  # la 0.8 hashea el prompt ORIGINAL…` pasa a `assert meta.prompt_sha256 != V1  # A7: hash del texto enviado (PR-A)`.
 
 **Interfaces:** ninguna nueva. Consume el estado de PR-H (`tests/test_providers_api.py`, `tests/test_sdk_superficie.py`, `ci.yml` con `sdk-smoke`, `requires-python >= 3.11`).
 
@@ -2127,10 +2127,10 @@ git rebase origin/feat/ola2-ci-tests
 
 Expected: conflictos, si los hay, solo en `tests/fakes.py` (H añade `protocolo_offline`, `ClienteJSON`, `pdf_minimo`; A cambia `ScriptedProvider` y añade `capacidades_cli`) y en `tests/conftest.py`: se conservan ambos lados.
 
-- [ ] **Step 2: Comprobar que los tres xfail ahora pasan (XPASS estricto = FAIL).**
+- [ ] **Step 2: Comprobar que los cuatro xfail ahora pasan (XPASS estricto = FAIL).**
 
 Run: `uv run pytest -p no:cacheprovider tests/test_providers_api.py -v`
-Expected: tres `FAILED … [XPASS(strict)]` y `test_local_openai_inyecta_el_schema_en_el_prompt` FAILED en la aserción de `V1`.
+Expected: cuatro `FAILED … [XPASS(strict)]` y `test_local_openai_inyecta_el_schema_en_el_prompt` FAILED en la aserción de `V1`.
 
 - [ ] **Step 3: Quitar los tres marcadores, cambiar la aserción y unificar los dobles** según Files.
 
@@ -2294,7 +2294,7 @@ A6, A7, A8, A10, A15, M17, D9 (proveedores), D11 y D14 de la auditoría 2026-09-
 - `agent`: `AgentReply(payload, model, usage)`; `agent_driver` con `auto_approve=False`.
 - `run.json`/`manifest.yml`: `environment`; corridas 0.8 → rc 2 al reanudar (D12).
 - `metodologia.md`/`checklist_traice.md`: parámetros aplicados, versiones e intentos.
-- Los tres `xfail(strict=True)` de PR-H en `tests/test_providers_api.py`, en verde.
+- Los cuatro `xfail(strict=True)` de PR-H en `tests/test_providers_api.py`, en verde.
 
 ## Cambios incompatibles
 

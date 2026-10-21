@@ -1,44 +1,173 @@
 name: CI
 
+# D25 (spec 2026-10-18 §12). `pull_request` sin filtro de rama (§19 fila 15): las PR de la
+# Ola 2 van apiladas con base `feat/ola2-*` y con `branches: [main]` ninguna tendría CI.
 on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# uv fijado en 0.11.26: es la versión local con la que se regeneró `uv.lock`, y
+# `uv lock --check` compara resoluciones; otra versión podría dar un lock distinto.
 jobs:
-  test:
-    name: lint · format · tests
+  lint:
+    name: lint · formato · lock
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081  # v5
         with:
           python-version: "3.13"
+          enable-cache: true
+          version: "0.11.26"
 
-      # Pango para WeasyPrint (extra `pdf`): así la prueba real del
-      # `URLFetcher(allowed_protocols={"data"})` del exportador corre en CI en
-      # vez de saltarse (seguimiento de la Ola 0).
-      - name: System libs for WeasyPrint
-        run: sudo apt-get install -y --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0
+      - name: Lock al día
+        run: uv lock --check
 
-      - name: Sync (dev + pdf extras)
-        run: uv sync --extra dev --extra pdf
-
-      # Falla aquí si WeasyPrint no carga: sin este paso, `importorskip` saltaría
-      # la prueba en silencio y el CI seguiría en verde sin verificar nada.
-      - name: WeasyPrint importable
-        run: uv run python -c "import weasyprint; print('weasyprint', weasyprint.__version__)"
+      - name: Sync (dev)
+        run: uv sync --locked --extra dev
 
       - name: Lint (ruff)
         run: uv run ruff check .
 
+      - name: Format check (ruff)
+        run: uv run ruff format --check .
+
       - name: Format check (black)
         run: uv run black --check .
 
-      - name: Tests (pytest, offline)
+  test:
+    name: tests · ${{ matrix.os }} · py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13"]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081  # v5
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+          version: "0.11.26"
+
+      # Pango para WeasyPrint (extra `pdf`) solo en Ubuntu: en Windows WeasyPrint
+      # necesita GTK y el único chequeo real de WeasyPrint se hace en Linux.
+      - name: System libs for WeasyPrint
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0
+
+      - name: Sync (dev + search + meta + pdf)
+        if: runner.os == 'Linux'
+        run: uv sync --locked --extra dev --extra search --extra meta --extra pdf
+
+      # Falla aquí si WeasyPrint no carga: sin este paso, `importorskip` saltaría
+      # la prueba en silencio y el CI seguiría en verde sin verificar nada.
+      - name: WeasyPrint importable
+        if: runner.os == 'Linux'
+        run: uv run python -c "import weasyprint; print('weasyprint', weasyprint.__version__)"
+
+      - name: Sync (dev + search + meta)
+        if: runner.os == 'Windows'
+        run: uv sync --locked --extra dev --extra search --extra meta
+
+      # Sin esto, `importorskip` saltaría tests en silencio si falta un extra.
+      - name: Extras importables
+        run: uv run python -c "import httpx, pypdf, scipy; print('extras ok')"
+
+      # En Windows `--basetemp` apunta a una ruta corta: el temporal por defecto
+      # (nombre largo de usuario + nombre del test) supera MAX_PATH en algunos tests.
+      - name: Tests (sin cobertura)
+        if: "!(matrix.os == 'ubuntu-latest' && matrix.python == '3.13')"
         run: |
-          uv run pytest -q -rs -n auto -m "not cronometrado"
-          uv run pytest -q -rs -m cronometrado
+          BASETEMP=""
+          if [ "$RUNNER_OS" = "Windows" ]; then BASETEMP="--basetemp=${RUNNER_TEMP}/p"; fi
+          uv run pytest -q -rs -n auto -m "not cronometrado" $BASETEMP
+          uv run pytest -q -rs -m cronometrado $BASETEMP
+
+      # La primera pasada no juzga (`--cov-fail-under=0`): pytest-cov aplicaría el
+      # `fail_under` del pyproject a un subconjunto. La cota del 90 % (§19 fila 5)
+      # se juzga sobre la suma de las dos pasadas.
+      - name: Tests (con cobertura)
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.13'
+        run: |
+          uv run pytest -q -rs -n auto -m "not cronometrado" --cov --cov-report=xml --cov-report=term --cov-fail-under=0
+          uv run pytest -q -rs -m cronometrado --cov --cov-append --cov-report=xml --cov-report=term --cov-fail-under=90
+
+  build:
+    name: build · humo del empaquetado
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081  # v5
+        with:
+          python-version: "3.13"
+          enable-cache: true
+          version: "0.11.26"
+
+      - name: Build
+        run: uv build
+
+      # `zipfile -l` imprime fecha y tamaño tras el nombre: el patrón termina en espacio, no en `$`.
+      # Los datos viajan en el wheel; las corridas (`runs/`) no viajan en el sdist.
+      - name: Humo del wheel
+        run: |
+          listado=$(uv run --no-project python -m zipfile -l dist/*.whl)
+          n=$(printf '%s\n' "$listado" | grep -cE "revisia/(rob/tools/RoB2\.yml|prompts/screening/v1\.md)[[:space:]]" || true)
+          test "$n" = "2"
+
+      # El sdist tiene un directorio raíz `revisia-X.Y.Z/`: `runs/` se busca bajo él.
+      # Control positivo: el listado debe contener `/pyproject.toml` (si no, 0 no prueba nada).
+      - name: Humo del sdist
+        run: |
+          listado=$(uv run --no-project python -m tarfile -l dist/*.tar.gz)
+          printf '%s\n' "$listado" | grep -q "/pyproject.toml"
+          n=$(printf '%s\n' "$listado" | grep -cE '^[^/]+/runs/' || true)
+          test "$n" = "0"
+
+  sdk-smoke:
+    name: sdk-smoke · SDK reales sin red
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081  # v5
+        with:
+          python-version: "3.13"
+          enable-cache: true
+          version: "0.11.26"
+
+      - name: Sync (dev + SDK)
+        run: uv sync --locked --extra dev --extra gemini --extra openai --extra anthropic
+
+      # Claves ficticias y sin llamadas a la API: solo la superficie de los SDK.
+      - name: Superficie de los SDK
+        env:
+          REVISIA_SDK_SMOKE: "1"
+        run: uv run pytest -q -rs tests/test_sdk_superficie.py

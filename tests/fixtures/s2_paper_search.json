@@ -1,0 +1,115 @@
+{
+  "total": 112284,
+  "offset": 0,
+  "data": [
+    {
+      "paperId": "eddfd8533c8211825aa8a28dc0375a251e501278",
+      "externalIds": {
+        "DBLP": "journals/information/GalliGC25",
+        "DOI": "10.3390/info16050378",
+        "CorpusId": 278278649
+      },
+      "url": "https://www.semanticscholar.org/paper/eddfd8533c8211825aa8a28dc0375a251e501278",
+      "title": "Large Language Models in Systematic Review Screening: Opportunities, Challenges, and Methodological Considerations",
+      "year": 2025,
+      "openAccessPdf": {
+        "url": "https://www.mdpi.com/2078-2489/16/5/378/pdf?version=1746089910",
+        "status": "GOLD",
+        "license": "CCBY",
+        "disclaimer": "Notice: Paper or abstract available at https://api.unpaywall.org/v2/10.3390/info16050378?email=<INSERT_YOUR_EMAIL> or https://doi.org/10.3390/info16050378, which is subject to the license by the author or copyright owner provided with this content. Please go to the source to verify the license and copyright information for your use."
+      },
+      "authors": [
+        {
+          "authorId": "2281085731",
+          "name": "C. Galli"
+        },
+        {
+          "authorId": "1742389678",
+          "name": "A. V. Gavrilova"
+        },
+        {
+          "authorId": "8664873",
+          "name": "E. Calciolari"
+        }
+      ],
+      "abstract": "Systematic reviews require labor-intensive screening processes—an approach prone to bottlenecks, delays, and scalability constraints in large-scale reviews. Large Language Models (LLMs) have recently emerged as a powerful alternative, capable of operating in zero-shot or few-shot modes to classify abstracts according to predefined criteria without requiring continuous human intervention like semi-automated platforms. This review focuses on the central challenges that users in the biomedical field encounter when integrating LLMs—such as GPT-4—into evidence-based research. It examines critical requirements for software and data preprocessing, discusses various prompt strategies, and underscores the continued need for human oversight to maintain rigorous quality control. By drawing on current practices for cost management, reproducibility, and prompt refinement, this article highlights how review teams can substantially reduce screening workloads without compromising the comprehensiveness of evidence-based inquiry. The findings presented aim to balance the strengths of LLM-driven automation with structured human checks, ensuring that systematic reviews retain their methodological integrity while leveraging the efficiency gains made possible by recent advances in artificial intelligence."
+    },
+    {
+      "paperId": "4be46ae53206440cfa6cab48f7523df5a701a65f",
+      "externalIds": {
+        "DBLP": "journals/corr/abs-2401-06320",
+        "ArXiv": "2401.06320",
+        "DOI": "10.1007/978-3-031-56027-9_25",
+        "CorpusId": 266977226
+      },
+      "url": "https://www.semanticscholar.org/paper/4be46ae53206440cfa6cab48f7523df5a701a65f",
+      "title": "Zero-shot Generative Large Language Models for Systematic Review Screening Automation",
+      "year": 2024,
+      "openAccessPdf": {
+        "url": "",
+        "status": "CLOSED",
+        "license": null,
+        "disclaimer": "Notice: Paper or abstract available at https://arxiv.org/abs/2401.06320, which is subject to the license by the author or copyright owner provided with this content. Please go to the source to verify the license and copyright information for your use."
+      },
+      "authors": [
+        {
+          "authorId": "2146514461",
+          "name": "Shuai Wang"
+        },
+        {
+          "authorId": "8842143",
+          "name": "Harrisen Scells"
+        },
+        {
+          "authorId": "1630489015",
+          "name": "Shengyao Zhuang"
+        },
+        {
+          "authorId": "2277904570",
+          "name": "M. Potthast"
+        },
+        {
+          "authorId": "1783566",
+          "name": "B. Koopman"
+        },
+        {
+          "authorId": "1692855",
+          "name": "G. Zuccon"
+        }
+      ],
+      "abstract": "Systematic reviews are crucial for evidence-based medicine as they comprehensively analyse published research findings on specific questions. Conducting such reviews is often resource- and time-intensive."
+    },
+    {
+      "paperId": "11e09ae8c862a8c50fbd489543e86f6ab526542e",
+      "externalIds": {
+        "DBLP": "journals/corr/abs-2510-16091",
+        "ArXiv": "2510.16091",
+        "CorpusId": 282210562
+      },
+      "url": "https://www.semanticscholar.org/paper/11e09ae8c862a8c50fbd489543e86f6ab526542e",
+      "title": "Evaluating Prompting Strategies and Large Language Models in Systematic Literature Review Screening: Relevance and Task-Stage Classification",
+      "year": 2025,
+      "openAccessPdf": {
+        "url": "",
+        "status": null,
+        "license": null,
+        "disclaimer": "Notice: Paper or abstract available at https://arxiv.org/abs/2510.16091, which is subject to the license by the author or copyright owner provided with this content. Please go to the source to verify the license and copyright information for your use."
+      },
+      "authors": [
+        {
+          "authorId": "2326437859",
+          "name": "Binglan Han"
+        },
+        {
+          "authorId": "2330052",
+          "name": "A. Mathrani"
+        },
+        {
+          "authorId": "2656889",
+          "name": "Teo Sušnjak"
+        }
+      ],
+      "abstract": "This study quantifies how prompting strategies interact with large language models (LLMs) to automate the screening stage of systematic literature reviews (SLRs)."
+    }
+  ]
+}

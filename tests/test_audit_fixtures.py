@@ -11,6 +11,8 @@ tocar lo que esta rama aún no produce (``llm_calls.jsonl``, diarios,
 from __future__ import annotations
 
 import json
+import re
+import sys
 from pathlib import Path
 
 import audit_fixtures
@@ -274,3 +276,30 @@ def test_fila_devuelve_la_fila_pedida_y_falla_si_no_esta(corrida) -> None:
     assert fila(report, "manifest").check_id == "manifest"
     with pytest.raises(AssertionError, match="sin fila 'no-existe'"):
         fila(report, "no-existe")
+
+
+def test_cota_de_tiempo_dobla_solo_en_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert audit_fixtures.cota_de_tiempo(10) == 20
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert audit_fixtures.cota_de_tiempo(10) == 10
+
+
+def test_el_script_medido_precalienta_los_imports_antes_de_tracemalloc() -> None:
+    from test_audit_hitl_registro import _SCRIPT_MEDIDO
+
+    antes = _SCRIPT_MEDIDO.index("tracemalloc.start()")
+    for modulo in ("revisia.meta_analysis", "scipy.stats", "yaml", "revisia.audit"):
+        assert modulo in _SCRIPT_MEDIDO[:antes], modulo
+
+
+def test_ningun_test_depende_de_una_corrida_real_en_runs() -> None:
+    # M21: la corrida real no se versiona (D11 de la Ola 1); un test que la busque por ruta
+    # relativa al cwd se salta en CI y no verifica nada.
+    patron = re.compile(r"""Path\(\s*["']runs/""")
+    culpables = [
+        p.name
+        for p in Path(__file__).parent.glob("test_*.py")
+        if patron.search(p.read_text(encoding="utf-8"))
+    ]
+    assert culpables == []

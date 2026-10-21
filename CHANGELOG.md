@@ -19,6 +19,14 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   `ingest.doi.normalize_doi` (sin cablear) y la sonda `scripts/sonda_claude_cli.py`.
   `ARTIFACT_SCHEMA_VERSION` pasa a 2. Sin cambio funcional del pipeline: los modelos v2 validan
   los artefactos de la 0.8 y nadie emite todavía los campos ni las acciones nuevas.
+- **CI multiplataforma** (D25): matriz `ubuntu-latest`/`windows-latest` × Python 3.11/3.12/3.13 con
+  `uv lock --check`, cobertura con `pytest-cov` (≥ 90 % en Ubuntu/3.13), `permissions: contents: read`,
+  extra `pdf` solo en Ubuntu, humo de `uv build` y job `sdk-smoke` con los SDK reales (sin red).
+  Tests nuevos: entrypoints (`run_review`, `resume_review`, `agent_driver`, CLI `run` en subproceso y
+  `gold-template`; A13), parsers de Crossref y Semantic Scholar con respuestas reales recortadas
+  (M18), ruta Unpaywall → PDF/HTML con `httpx.MockTransport` (M19) y proveedores API con clientes
+  falsos (M20). El test de pico de memoria precalienta los imports perezosos y los `cronometrado`
+  toleran ×2 en Windows.
 
 ### Changed
 
@@ -31,6 +39,9 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   etapa (`extraccion`, `rob`, `screening_ft`), antes del `approve` de su decisión y nunca junto a
   un `reject`. `decision_sha256` y el recálculo del meta-análisis siguen dando lo mismo sobre
   corridas 0.8.
+- `requires-python` baja a `>= 3.11` (amplía, no rompe); `ruff`/`black` apuntan a `py311`;
+  `CONTRIBUTING.md` describe la matriz y los comandos nuevos. El CI corre también en las PR
+  apiladas (`pull_request` sin filtro de rama).
 
 ## [0.8.0] · 2026-10-18
 

@@ -19,6 +19,7 @@ from audit_fixtures import (
     auditar_en_subproceso,
     auditar_varias_en_subproceso,
     bomba_de_alias,
+    cota_de_tiempo,
     edit_yaml,
     fila,
 )
@@ -446,7 +447,8 @@ _VECTORES_CUADRATICOS = [
 @pytest.mark.parametrize(("texto", "motivo"), _VECTORES_CUADRATICOS)
 def test_yaml_con_costes_cuadraticos_no_cuelga_la_carga(corrida, texto, motivo: str) -> None:
     (corrida / "manifest.yml").write_text(texto(), encoding="utf-8")
-    filas = auditar_en_subproceso(corrida, timeout=10)  # el `timeout` es la cota de tiempo
+    # el `timeout` es la cota de tiempo
+    filas = auditar_en_subproceso(corrida, timeout=cota_de_tiempo(10))
     assert filas["manifest"][0] == "FAIL"
     assert motivo in filas["manifest"][1]
     assert len(filas["manifest"][1]) < 500  # un motivo, no el valor hostil

@@ -1,0 +1,542 @@
+{
+  "status": "ok",
+  "message-type": "work-list",
+  "message": {
+    "total-results": 3202373,
+    "items": [
+      {
+        "indexed": {
+          "date-parts": [
+            [
+              2025,
+              5,
+              9
+            ]
+          ],
+          "date-time": "2025-05-09T04:01:17Z",
+          "timestamp": 1746763277870,
+          "version": "3.40.5"
+        },
+        "posted": {
+          "date-parts": [
+            [
+              2025,
+              3,
+              14
+            ]
+          ]
+        },
+        "group-title": "Public Health and Healthcare",
+        "reference-count": 0,
+        "publisher": "MDPI AG",
+        "license": [
+          {
+            "start": {
+              "date-parts": [
+                [
+                  2025,
+                  3,
+                  14
+                ]
+              ],
+              "date-time": "2025-03-14T00:00:00Z",
+              "timestamp": 1741910400000
+            },
+            "content-version": "unspecified",
+            "delay-in-days": 0,
+            "URL": "http://creativecommons.org/licenses/by/4.0"
+          }
+        ],
+        "content-domain": {
+          "domain": [],
+          "crossmark-restriction": false
+        },
+        "accepted": {
+          "date-parts": [
+            [
+              2025,
+              3,
+              12
+            ]
+          ]
+        },
+        "abstract": "<jats:p>Large Language Models (LLMs) have recently emerged as a powerful option for partially automating the labor-intensive process of screening articles in systematic reviews. Unlike traditional semi-automated platforms that rely on iterative human feedback, LLM-based pipelines can operate in a zero-shot or few-shot manner, classifying abstracts according to predefined criteria. This paper offers a step-by-step methodology for researchers, librarians, and students seeking to incorporate LLMs—such as GPT-4—into systematic reviews. It discusses required software and data preprocessing, presents various prompt strategies, and emphasizes the importance of human oversight to maintain rigorous quality control. The proposed framework aims to provide best practices and offer guidance on managing costs, reproducibility, and prompt refinement. By following these guidelines, review teams can substantially reduce screening workloads without compromising the comprehensive nature of evidence-based research.</jats:p>",
+        "DOI": "10.20944/preprints202503.0981.v1",
+        "type": "posted-content",
+        "created": {
+          "date-parts": [
+            [
+              2025,
+              3,
+              17
+            ]
+          ],
+          "date-time": "2025-03-17T03:30:24Z",
+          "timestamp": 1742182224000
+        },
+        "source": "Crossref",
+        "is-referenced-by-count": 0,
+        "title": [
+          "Integrating Large Language Models into Systematic Review Screening"
+        ],
+        "prefix": "10.20944",
+        "author": [
+          {
+            "ORCID": "https://orcid.org/0000-0001-7476-7181",
+            "authenticated-orcid": false,
+            "given": "Carlo",
+            "family": "Galli",
+            "sequence": "first",
+            "affiliation": [],
+            "role": [
+              {
+                "role": "author",
+                "vocabulary": "crossref"
+              }
+            ]
+          },
+          {
+            "given": "Anna Viktorovna",
+            "family": "Gavrilova",
+            "sequence": "additional",
+            "affiliation": [],
+            "role": [
+              {
+                "role": "author",
+                "vocabulary": "crossref"
+              }
+            ]
+          },
+          {
+            "ORCID": "https://orcid.org/0000-0001-8781-1997",
+            "authenticated-orcid": false,
+            "given": "Elena",
+            "family": "Calciolari",
+            "sequence": "additional",
+            "affiliation": [],
+            "role": [
+              {
+                "role": "author",
+                "vocabulary": "crossref"
+              }
+            ]
+          }
+        ],
+        "member": "1968",
+        "deposited": {
+          "date-parts": [
+            [
+              2025,
+              5,
+              8
+            ]
+          ],
+          "date-time": "2025-05-08T03:29:44Z",
+          "timestamp": 1746674984000
+        },
+        "score": 36.384384,
+        "resource": {
+          "primary": {
+            "URL": "https://www.preprints.org/manuscript/202503.0981/v1"
+          }
+        },
+        "issued": {
+          "date-parts": [
+            [
+              2025,
+              3,
+              14
+            ]
+          ]
+        },
+        "references-count": 0,
+        "URL": "https://doi.org/10.20944/preprints202503.0981.v1",
+        "relation": {
+          "is-preprint-of": [
+            {
+              "id-type": "doi",
+              "id": "10.3390/info16050378",
+              "asserted-by": "subject"
+            }
+          ]
+        },
+        "published": {
+          "date-parts": [
+            [
+              2025,
+              3,
+              14
+            ]
+          ]
+        },
+        "subtype": "preprint"
+      },
+      {
+        "institution": [
+          {
+            "name": "medRxiv"
+          }
+        ],
+        "indexed": {
+          "date-parts": [
+            [
+              2026,
+              3,
+              18
+            ]
+          ],
+          "date-time": "2026-03-18T22:41:30Z",
+          "timestamp": 1773873690630,
+          "version": "3.50.1"
+        },
+        "posted": {
+          "date-parts": [
+            [
+              2024,
+              6,
+              4
+            ]
+          ]
+        },
+        "group-title": "Health Informatics",
+        "reference-count": 51,
+        "publisher": "openRxiv",
+        "content-domain": {
+          "domain": [],
+          "crossmark-restriction": false
+        },
+        "accepted": {
+          "date-parts": [
+            [
+              2024,
+              6,
+              4
+            ]
+          ]
+        },
+        "abstract": "<jats:title>ABSTRACT</jats:title>\n<jats:p>Systematic reviews and meta-analyses are essential for informed research and policymaking, yet they are typically resource-intensive and time-consuming.</jats:p>",
+        "DOI": "10.1101/2024.06.03.24308405",
+        "type": "posted-content",
+        "created": {
+          "date-parts": [
+            [
+              2024,
+              6,
+              4
+            ]
+          ],
+          "date-time": "2024-06-04T16:20:41Z",
+          "timestamp": 1717518041000
+        },
+        "source": "Crossref",
+        "is-referenced-by-count": 7,
+        "title": [
+          "Evaluating the Efficacy of Large Language Models for Systematic Review and Meta-Analysis Screening"
+        ],
+        "prefix": "10.64898",
+        "author": [
+          {
+            "ORCID": "https://orcid.org/0009-0007-4320-9444",
+            "authenticated-orcid": false,
+            "given": "Ronald",
+            "family": "Luo",
+            "sequence": "first",
+            "affiliation": [],
+            "role": [
+              {
+                "role": "author",
+                "vocabulary": "crossref"
+              }
+            ]
+          },
+          {
+            "given": "Ziya",
+            "family": "Sastimoglu",
+            "sequence": "additional",
+            "affiliation": [],
+            "role": [
+              {
+                "role": "author",
+                "vocabulary": "crossref"
+              }
+            ]
+          },
+          {
+            "given": "Abu Ilius",
+            "family": "Faisal",
+            "sequence": "additional",
+            "affiliation": [],
+            "role": [
+              {
+                "role": "author",
+                "vocabulary": "crossref"
+              }
+            ]
+          },
+          {
+            "given": "M. Jamal",
+            "family": "Deen",
+            "sequence": "additional",
+            "affiliation": [],
+            "role": [
+              {
+                "role": "author",
+                "vocabulary": "crossref"
+              }
+            ]
+          }
+        ],
+        "member": "54368",
+        "link": [
+          {
+            "URL": "https://syndication.highwire.org/content/doi/10.1101/2024.06.03.24308405",
+            "content-type": "unspecified",
+            "content-version": "vor",
+            "intended-application": "similarity-checking"
+          }
+        ],
+        "deposited": {
+          "date-parts": [
+            [
+              2026,
+              1,
+              15
+            ]
+          ],
+          "date-time": "2026-01-15T20:02:28Z",
+          "timestamp": 1768507348000
+        },
+        "score": 33.242558,
+        "resource": {
+          "primary": {
+            "URL": "http://medrxiv.org/lookup/doi/10.1101/2024.06.03.24308405"
+          }
+        },
+        "issued": {
+          "date-parts": [
+            [
+              2024,
+              6,
+              4
+            ]
+          ]
+        },
+        "references-count": 51,
+        "URL": "https://doi.org/10.1101/2024.06.03.24308405",
+        "published": {
+          "date-parts": [
+            [
+              2024,
+              6,
+              4
+            ]
+          ]
+        },
+        "subtype": "preprint"
+      },
+      {
+        "indexed": {
+          "date-parts": [
+            [
+              2026,
+              10,
+              17
+            ]
+          ],
+          "date-time": "2026-10-17T03:03:50Z",
+          "timestamp": 1792206230383,
+          "version": "4.4.0"
+        },
+        "reference-count": 125,
+        "publisher": "MDPI AG",
+        "issue": "5",
+        "license": [
+          {
+            "start": {
+              "date-parts": [
+                [
+                  2025,
+                  5,
+                  1
+                ]
+              ],
+              "date-time": "2025-05-01T00:00:00Z",
+              "timestamp": 1746057600000
+            },
+            "content-version": "vor",
+            "delay-in-days": 0,
+            "URL": "https://creativecommons.org/licenses/by/4.0/"
+          }
+        ],
+        "content-domain": {
+          "domain": [],
+          "crossmark-restriction": false
+        },
+        "short-container-title": [
+          "Information"
+        ],
+        "abstract": "<jats:p>Systematic reviews require labor-intensive screening processes—an approach prone to bottlenecks, delays, and scalability constraints in large-scale reviews. Large Language Models (LLMs) have recently emerged as a powerful alternative, capable of operating in zero-shot or few-shot modes to classify abstracts according to predefined criteria without requiring continuous human intervention like semi-automated platforms. This review focuses on the central challenges that users in the biomedical field encounter when integrating LLMs—such as GPT-4—into evidence-based research. It examines critical requirements for software and data preprocessing, discusses various prompt strategies, and underscores the continued need for human oversight to maintain rigorous quality control. By drawing on current practices for cost management, reproducibility, and prompt refinement, this article highlights how review teams can substantially reduce screening workloads without compromising the comprehensiveness of evidence-based inquiry. The findings presented aim to balance the strengths of LLM-driven automation with structured human checks, ensuring that systematic reviews retain their methodological integrity while leveraging the efficiency gains made possible by recent advances in artificial intelligence.</jats:p>",
+        "type": "journal-article",
+        "created": {
+          "date-parts": [
+            [
+              2025,
+              5,
+              1
+            ]
+          ],
+          "date-time": "2025-05-01T09:16:12Z",
+          "timestamp": 1746090972000
+        },
+        "page": "378",
+        "update-policy": "https://doi.org/10.3390/mdpi_crossmark_policy",
+        "source": "Crossref",
+        "is-referenced-by-count": 40,
+        "title": [
+          "Large Language Models in Systematic Review Screening: Opportunities, Challenges, and Methodological Considerations"
+        ],
+        "prefix": "10.3390",
+        "volume": "16",
+        "author": [
+          {
+            "ORCID": "https://orcid.org/0000-0001-7476-7181",
+            "authenticated-orcid": false,
+            "given": "Carlo",
+            "family": "Galli",
+            "sequence": "first",
+            "affiliation": [
+              {
+                "name": "Histology and Embryology Laboratory, Department of Medicine and Surgery, University of Parma, 43126 Parma, Italy"
+              }
+            ],
+            "role": [
+              {
+                "vocabulary": "crossref",
+                "role": "author"
+              }
+            ]
+          },
+          {
+            "given": "Anna V.",
+            "family": "Gavrilova",
+            "sequence": "additional",
+            "affiliation": [
+              {
+                "name": "Department of Biosciences, University of Milan, 20122 Milan, Italy"
+              }
+            ],
+            "role": [
+              {
+                "vocabulary": "crossref",
+                "role": "author"
+              }
+            ]
+          },
+          {
+            "ORCID": "https://orcid.org/0000-0001-8781-1997",
+            "authenticated-orcid": false,
+            "given": "Elena",
+            "family": "Calciolari",
+            "sequence": "additional",
+            "affiliation": [
+              {
+                "name": "Department of Medicine and Surgery, Dental School, University of Parma, 43126 Parma, Italy"
+              },
+              {
+                "name": "Centre for Oral Clinical Research, Institute of Dentistry, Faculty of Medicine and Dentistry, Queen Mary University of London, London E1 2AD, UK"
+              }
+            ],
+            "role": [
+              {
+                "vocabulary": "crossref",
+                "role": "author"
+              }
+            ]
+          }
+        ],
+        "member": "1968",
+        "published-online": {
+          "date-parts": [
+            [
+              2025,
+              5,
+              1
+            ]
+          ]
+        },
+        "container-title": [
+          "Information"
+        ],
+        "language": "en",
+        "link": [
+          {
+            "URL": "https://www.mdpi.com/2078-2489/16/5/378/pdf",
+            "content-type": "unspecified",
+            "content-version": "vor",
+            "intended-application": "similarity-checking"
+          }
+        ],
+        "deposited": {
+          "date-parts": [
+            [
+              2025,
+              10,
+              9
+            ]
+          ],
+          "date-time": "2025-10-09T17:25:58Z",
+          "timestamp": 1760030758000
+        },
+        "score": 32.77875,
+        "resource": {
+          "primary": {
+            "URL": "https://www.mdpi.com/2078-2489/16/5/378"
+          }
+        },
+        "issued": {
+          "date-parts": [
+            [
+              2025,
+              5,
+              1
+            ]
+          ]
+        },
+        "references-count": 125,
+        "journal-issue": {
+          "issue": "5",
+          "published-online": {
+            "date-parts": [
+              [
+                2025,
+                5
+              ]
+            ]
+          }
+        },
+        "alternative-id": [
+          "info16050378"
+        ],
+        "URL": "https://doi.org/10.3390/info16050378",
+        "ISSN": [
+          "2078-2489"
+        ],
+        "issn-type": [
+          {
+            "value": "2078-2489",
+            "type": "electronic"
+          }
+        ],
+        "published": {
+          "date-parts": [
+            [
+              2025,
+              5,
+              1
+            ]
+          ]
+        }
+      }
+    ]
+  }
+}
