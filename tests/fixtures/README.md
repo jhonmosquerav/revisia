@@ -15,4 +15,9 @@ son reutilizables. No contienen correos ni claves.
 
 ## `s2_paper_search.json`
 
-- Pendiente: Semantic Scholar devolvió 429 el 2026-10-20; se añade en un commit posterior.
+- Capturada el 2026-10-20 (HTTP 200, sin clave) con
+  `https://api.semanticscholar.org/graph/v1/paper/search?query=large+language+models+systematic+review+screening&limit=3&fields=title,abstract,year,externalIds,authors,url,openAccessPdf`.
+  La API respondió 429 (cuota compartida sin clave) durante unos 40 minutos antes de esta captura.
+- Recorte: se conservan `total`, `offset` y `data` (3 papers); se borró `next`.
+- Edición: en el tercer paper se borró `externalIds.DOI`, para ejercitar el `record_id` de respaldo.
+  El primer paper trae `openAccessPdf.url`.
