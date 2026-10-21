@@ -27,12 +27,25 @@ from revisia.llm.providers.fake import _fabricate_model
 from revisia.orchestration.flow import resume_review, run_review
 from revisia.provenance.ledger import DecisionLedger
 
-_CLI = "import sys; from revisia.cli import main; sys.exit(main(sys.argv[1:]))"
+_CLI = (
+    "import sys; import revisia.cli as c; c._load_dotenv = lambda: None; "
+    "sys.exit(c.main(sys.argv[1:]))"
+)
+
+
+# Espejo de `scripts/sonda_claude_cli.py::SECRET_ENV` (no se importa: `scripts/` no es paquete).
+_SECRETOS = {"claude_code_oauth_token", "anthropic_api_key", "anthropic_auth_token"}
 
 
 def _entorno_limpio() -> dict[str, str]:
-    """Entorno de subproceso sin ``MAILTO`` ni claves de API."""
-    env = {k: v for k, v in os.environ.items() if k != "MAILTO" and not k.endswith("_API_KEY")}
+    """Entorno de subproceso sin ``MAILTO``, claves de API ni tokens (sin distinguir mayúsculas)."""
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k.lower() != "mailto"
+        and k.lower() not in _SECRETOS
+        and not k.lower().endswith(("_api_key", "_token"))
+    }
     env["PYTHONIOENCODING"] = "utf-8"
     return env
 
