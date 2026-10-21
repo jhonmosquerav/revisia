@@ -30,7 +30,7 @@ Requiere **Python 3.11+** y [`uv`](https://docs.astral.sh/uv/).
 ```bash
 git clone <tu-fork> revisia && cd revisia
 uv sync --extra dev          # instala el motor + herramientas de desarrollo
-uv run pytest -q             # ~2 100 tests, offline, sin API key (en paralelo: abajo)
+uv run pytest -q             # ~2 300 tests, offline, sin API key (en paralelo: abajo)
 ```
 
 Los tests corren **sin credenciales** gracias al proveedor `fake` determinista.

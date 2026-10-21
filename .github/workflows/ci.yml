@@ -22,6 +22,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081  # v5
@@ -58,6 +60,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081  # v5
@@ -114,6 +118,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081  # v5
@@ -129,12 +135,17 @@ jobs:
       # Los datos viajan en el wheel; las corridas (`runs/`) no viajan en el sdist.
       - name: Humo del wheel
         run: |
-          n=$(uv run --no-project python -m zipfile -l dist/*.whl | grep -cE "revisia/(rob/tools/RoB2\.yml|prompts/screening/v1\.md)[[:space:]]" || true)
+          listado=$(uv run --no-project python -m zipfile -l dist/*.whl)
+          n=$(printf '%s\n' "$listado" | grep -cE "revisia/(rob/tools/RoB2\.yml|prompts/screening/v1\.md)[[:space:]]" || true)
           test "$n" = "2"
 
+      # El sdist tiene un directorio raíz `revisia-X.Y.Z/`: `runs/` se busca bajo él.
+      # Control positivo: el listado debe contener `/pyproject.toml` (si no, 0 no prueba nada).
       - name: Humo del sdist
         run: |
-          n=$(uv run --no-project python -m tarfile -l dist/*.tar.gz | grep -c "^runs/" || true)
+          listado=$(uv run --no-project python -m tarfile -l dist/*.tar.gz)
+          printf '%s\n' "$listado" | grep -q "/pyproject.toml"
+          n=$(printf '%s\n' "$listado" | grep -cE '^[^/]+/runs/' || true)
           test "$n" = "0"
 
   sdk-smoke:
@@ -142,6 +153,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081  # v5

@@ -18,7 +18,7 @@ def _pasos(job: str) -> list[dict]:
     return _workflow()["jobs"][job]["steps"]
 
 
-def test_permisos_minimos_y_tres_jobs() -> None:
+def test_permisos_minimos_y_cuatro_jobs() -> None:
     wf = _workflow()
     assert wf["permissions"] == {"contents": "read"}
     # PyYAML lee la clave `on` como True.
@@ -80,3 +80,22 @@ def test_sdk_smoke_instala_los_tres_sdk_y_no_admite_saltos() -> None:
         assert extra in runs
     paso = next(p for p in job["steps"] if "test_sdk_superficie" in p.get("run", ""))
     assert paso["env"]["REVISIA_SDK_SMOKE"] == "1"
+
+
+def test_superficie_de_seguridad_del_workflow() -> None:
+    texto = CI.read_text(encoding="utf-8")
+    assert "pull_request_target" not in texto
+    assert "secrets." not in texto
+    for paso in [p for job in _workflow()["jobs"].values() for p in job["steps"]]:
+        assert "${{ github.event" not in paso.get("run", "")
+        if "checkout" in paso.get("uses", ""):
+            assert paso["with"]["persist-credentials"] is False
+    assert set(re.findall(r"uses:\s*(\S+)", texto)) == {
+        "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+        "astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081",
+    }
+
+
+def test_sdist_busca_runs_bajo_el_directorio_raiz_con_control_positivo() -> None:
+    runs = " ".join(p.get("run", "") for p in _pasos("build"))
+    assert "[^/]+/runs/" in runs and "/pyproject.toml" in runs
