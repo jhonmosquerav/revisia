@@ -601,6 +601,11 @@ _SCRIPT_AUDITAR = (
 )
 
 
+def cota_de_tiempo(segundos: int) -> int:
+    """Cota de ``cronometrado``: ×2 en Windows (§12); mide al auditor, no a la plataforma."""
+    return segundos * 2 if sys.platform == "win32" else segundos
+
+
 def auditar_en_subproceso(corrida: Path, *, timeout: int) -> dict[str, tuple[str, str]]:
     """``run_audit`` en un proceso aparte: ``{check_id: (estado, detalle)}``.
 

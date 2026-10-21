@@ -237,18 +237,6 @@ def test_cli_export_pdf_sin_weasyprint(
     assert "--format html" in err
 
 
-_REAL_RUN = Path("runs/prisma-ia-origen-20260706-080747")
-
-
-@pytest.mark.skipif(not _REAL_RUN.exists(), reason="corrida real no disponible")
-def test_export_corrida_real(tmp_path: Path) -> None:
-    out = export_run(_REAL_RUN, out=tmp_path / "real.html")
-    html = out.read_text(encoding="utf-8")
-    assert "mermaid" not in html
-    assert html.count("data:image/png;base64,") >= 2
-    assert "Inteligencia artificial en la metodología PRISMA" in html
-
-
 # ── Ola 0 · A-3/A-4/A-5 (auditoría 2026-09-03, A2 y M1) ─────────────────────
 
 

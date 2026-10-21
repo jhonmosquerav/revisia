@@ -29,6 +29,7 @@ from audit_fixtures import (
     auditar,
     auditar_en_subproceso,
     bomba_de_alias,
+    cota_de_tiempo,
     edit_json,
     edit_ledger,
     edit_yaml,
@@ -527,11 +528,22 @@ def test_request_hash_bomba_de_alias_no_cuelga_el_auditor(corrida, fichero: str)
 # Una bomba de *cadenas*: pocos nodos (el tope por nodos no la ve) y muchos bytes, porque el
 # volcado a JSON expande la cadena anclada una vez por cada alias. 24 KB × 2 500 alias = 60 MB.
 _RAIZ_DEL_REPO = Path(__file__).resolve().parent.parent
+# Memoria del auditor, no de los imports: los perezosos (scipy, libyaml) se precalientan antes de
+# medir, así la cota no depende de qué extras hay instalados (Ola 2, PR-H, Tarea 3).
 _PICO_MAXIMO = 50 * 2**20  # bytes de memoria que puede asignar una auditoría de una corrida chica
 _ALIAS_QUE_SE_EXPANDEN = "estructura YAML con alias que se expanden más allá del tamaño del fichero"
 _SCRIPT_MEDIDO = (
     "import json, sys, tracemalloc\n"
     "from revisia.audit import run_audit\n"
+    "import revisia.meta_analysis\n"
+    "try:\n"
+    "    import scipy.stats\n"
+    "except ImportError:\n"
+    "    pass\n"
+    "try:\n"
+    "    from yaml import CSafeLoader\n"
+    "except ImportError:\n"
+    "    pass\n"
     "tracemalloc.start()\n"
     "informe = run_audit(sys.argv[1])\n"
     "pico = tracemalloc.get_traced_memory()[1]\n"
@@ -611,7 +623,7 @@ def test_request_hash_bomba_de_tuplas_de_pairs_no_agota_la_memoria(corrida, fich
         niveles.append(f"zz_{i}: &b{i} !!pairs [{pares}]\n")
     path.write_text(path.read_text(encoding="utf-8") + "".join(niveles), encoding="utf-8")
     try:
-        pico, filas = _auditar_midiendo(corrida, timeout=10)
+        pico, filas = _auditar_midiendo(corrida, timeout=cota_de_tiempo(10))
     except subprocess.TimeoutExpired:
         pytest.fail("el auditor no terminó en 10 s: hashear la bomba de !!pairs la expande")
     estado, detalle = filas["request_hash"]
