@@ -76,7 +76,11 @@ def test_gemini_complete_y_structured_con_cliente_falso(gemini) -> None:
     assert (meta.seed, meta.temperature) == (42, 0.3)  # lo pedido, como la v1
 
 
-@pytest.mark.xfail(strict=True, reason="PR-A (spec §5.2): lo aplicado y model_source=backend")
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="PR-A (spec §5.2): lo aplicado y model_source=backend",
+)
 def test_gemini_runmeta_v2_aplicado(gemini) -> None:
     # `backend_version` no se afirma aquí: sin el SDK instalado (matriz del CI) PR-A lo deja
     # en None; PR-A lo prueba con `importlib.metadata.version` sustituido.
@@ -153,7 +157,9 @@ def test_local_openai_inyecta_el_schema_en_el_prompt(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.xfail(
-    strict=True, reason="PR-A (spec §5.2, A7): prompt_sha256 del texto enviado con el schema"
+    strict=True,
+    raises=AssertionError,
+    reason="PR-A (spec §5.2, A7): prompt_sha256 del texto enviado con el schema",
 )
 def test_local_openai_prompt_sha256_es_del_texto_enviado(
     monkeypatch: pytest.MonkeyPatch,
@@ -175,6 +181,8 @@ def test_gateways_exigen_su_key_y_usan_su_base_url(
     monkeypatch: pytest.MonkeyPatch, clase, variable: str
 ) -> None:
     monkeypatch.delenv(variable, raising=False)
+    monkeypatch.delenv("ZAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENROUTER_BASE_URL", raising=False)
     with pytest.raises(RuntimeError, match=variable):
         clase("m").complete(REQ)
     monkeypatch.setenv(variable, "k")
@@ -229,6 +237,7 @@ def test_anthropic_sin_tool_use_es_error_accionable(monkeypatch: pytest.MonkeyPa
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason="PR-A (spec §5.2, A6): seed_applied None, temperature aplicada, model_source=backend",
 )
 def test_anthropic_runmeta_v2_aplicado(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -240,5 +249,15 @@ def test_anthropic_runmeta_v2_aplicado(monkeypatch: pytest.MonkeyPatch) -> None:
         0.3,
         "backend",
     )
-    _, meta_structured = proveedor.structured(REQ, Salida)
-    assert meta_structured.schema_sha256  # el schema viaja como tool: su hash aparte (A7)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="PR-A (spec §5.2, A7): el schema viaja como tool y su hash va aparte",
+)
+def test_anthropic_structured_hashea_el_schema_aparte(monkeypatch: pytest.MonkeyPatch) -> None:
+    proveedor = AnthropicProvider("claude-sonnet-5-5")
+    monkeypatch.setattr(proveedor, "_client", lambda: _Anthropic())
+    _, meta = proveedor.structured(REQ, Salida)
+    assert meta.schema_sha256
