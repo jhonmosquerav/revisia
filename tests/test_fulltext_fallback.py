@@ -48,10 +48,10 @@ def cliente_simulado(
             vistas.append(request)
             try:
                 return manejador(request)
-            except AssertionError:
-                # `fetch_fulltext` absorbe cualquier excepción como `error_http`: se anota la URL
-                # y el assert final de la fixture hace fallar el test (no puede quedar en falso).
-                inesperadas.append(str(request.url))
+            except AssertionError as exc:
+                # `fetch_fulltext` absorbe cualquier excepción como `error_http`: se anota el
+                # motivo y el assert final de la fixture hace fallar el test (no queda en falso).
+                inesperadas.append(f"{request.url}: {exc}")
                 raise
 
         monkeypatch.setattr(
@@ -63,7 +63,7 @@ def cliente_simulado(
         return vistas
 
     yield instalar
-    assert not inesperadas, f"peticiones no previstas: {inesperadas}"
+    assert not inesperadas, f"peticiones que incumplen lo esperado: {inesperadas}"
 
 
 def _manejador(unpaywall: httpx.Response, descarga: httpx.Response | None = None) -> Manejador:
@@ -72,7 +72,8 @@ def _manejador(unpaywall: httpx.Response, descarga: httpx.Response | None = None
         if url.startswith(ncbi.IDCONV_URL):
             return httpx.Response(200, json=SIN_PMCID)
         if url.startswith(UNPAYWALL):
-            assert request.url.params.get("email") == "revisora@example.org"
+            email = request.url.params.get("email")
+            assert email == "revisora@example.org", f"email de Unpaywall inesperado: {email!r}"
             return unpaywall
         if descarga is not None and url in (PDF_URL, HTML_URL):
             return descarga
@@ -184,7 +185,7 @@ def test_descarga_404_tras_unpaywall_es_error_http(cliente_simulado) -> None:
 )
 def test_pdf_sin_texto_extraible_es_texto_vacio(cliente_simulado, pdf: bytes) -> None:
     pytest.importorskip("pypdf")
-    cliente_simulado(
+    vistas = cliente_simulado(
         _manejador(
             httpx.Response(200, json={"best_oa_location": {"url_for_pdf": PDF_URL}}),
             httpx.Response(200, content=pdf, headers={"content-type": "application/pdf"}),
@@ -192,6 +193,8 @@ def test_pdf_sin_texto_extraible_es_texto_vacio(cliente_simulado, pdf: bytes) ->
     )
     ft = fetch_fulltext(_registro(), mailto="revisora@example.org")
     assert (ft.available, ft.reason) == (False, "texto_vacio")
+    assert _urls(vistas) == [ncbi.IDCONV_URL, f"{UNPAYWALL}10.1000/xyz", PDF_URL]
+    assert vistas[1].url.params["email"] == "revisora@example.org"
 
 
 def test_pmcid_resuelto_por_idconv_usa_bioc_sin_unpaywall(cliente_simulado) -> None:
