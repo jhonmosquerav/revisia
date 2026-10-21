@@ -59,7 +59,7 @@ def test_pdf_solo_en_ubuntu_y_cobertura_solo_en_ubuntu_313() -> None:
         if "--extra pdf" in run or "apt-get" in run or "weasyprint" in run:
             assert "Linux" in cond, run
         if "--cov" in run:
-            assert "ubuntu-latest" in cond and "3.13" in cond, run
+            assert cond == "matrix.os == 'ubuntu-latest' && matrix.python == '3.13'", run
         if "cronometrado" in run and "not cronometrado" not in run and "--cov" in run:
             assert "--cov-fail-under=90" in run and "--cov-append" in run
     runs = " ".join(p.get("run", "") for p in _pasos("test"))
@@ -99,3 +99,15 @@ def test_superficie_de_seguridad_del_workflow() -> None:
 def test_sdist_busca_runs_bajo_el_directorio_raiz_con_control_positivo() -> None:
     runs = " ".join(p.get("run", "") for p in _pasos("build"))
     assert "[^/]+/runs/" in runs and "/pyproject.toml" in runs
+
+
+def test_apt_get_update_cancelacion_solo_en_pr_y_lock_congelado() -> None:
+    wf = _workflow()
+    # Un push a main no cancela el CI en curso; solo se cancelan las PR superadas.
+    assert wf["concurrency"]["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
+    apt = next(p["run"] for p in _pasos("test") if "apt-get install" in p.get("run", ""))
+    assert apt.startswith("sudo apt-get update && sudo apt-get install")
+    for job, paso in [(j, p) for j in wf["jobs"] for p in wf["jobs"][j]["steps"]]:
+        run = paso.get("run", "")
+        if "uv sync" in run:
+            assert "uv sync --locked" in run, (job, run)

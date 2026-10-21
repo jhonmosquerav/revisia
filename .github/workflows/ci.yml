@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # uv fijado en 0.11.26: es la versión local con la que se regeneró `uv.lock`, y
 # `uv lock --check` compara resoluciones; otra versión podría dar un lock distinto.
@@ -36,7 +36,7 @@ jobs:
         run: uv lock --check
 
       - name: Sync (dev)
-        run: uv sync --extra dev
+        run: uv sync --locked --extra dev
 
       - name: Lint (ruff)
         run: uv run ruff check .
@@ -74,11 +74,11 @@ jobs:
       # necesita GTK y el único chequeo real de WeasyPrint se hace en Linux.
       - name: System libs for WeasyPrint
         if: runner.os == 'Linux'
-        run: sudo apt-get install -y --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0
 
       - name: Sync (dev + search + meta + pdf)
         if: runner.os == 'Linux'
-        run: uv sync --extra dev --extra search --extra meta --extra pdf
+        run: uv sync --locked --extra dev --extra search --extra meta --extra pdf
 
       # Falla aquí si WeasyPrint no carga: sin este paso, `importorskip` saltaría
       # la prueba en silencio y el CI seguiría en verde sin verificar nada.
@@ -88,7 +88,7 @@ jobs:
 
       - name: Sync (dev + search + meta)
         if: runner.os == 'Windows'
-        run: uv sync --extra dev --extra search --extra meta
+        run: uv sync --locked --extra dev --extra search --extra meta
 
       # Sin esto, `importorskip` saltaría tests en silencio si falta un extra.
       - name: Extras importables
@@ -164,7 +164,7 @@ jobs:
           version: "0.11.26"
 
       - name: Sync (dev + SDK)
-        run: uv sync --extra dev --extra gemini --extra openai --extra anthropic
+        run: uv sync --locked --extra dev --extra gemini --extra openai --extra anthropic
 
       # Claves ficticias y sin llamadas a la API: solo la superficie de los SDK.
       - name: Superficie de los SDK
