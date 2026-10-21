@@ -1,0 +1,1803 @@
+{
+  "status": "ok",
+  "message-type": "work-list",
+  "message": {
+    "total-results": 3202373,
+    "items": [
+      {
+        "indexed": {
+          "date-parts": [
+            [
+              2025,
+              5,
+              9
+            ]
+          ],
+          "date-time": "2025-05-09T04:01:17Z",
+          "timestamp": 1746763277870,
+          "version": "3.40.5"
+        },
+        "posted": {
+          "date-parts": [
+            [
+              2025,
+              3,
+              14
+            ]
+          ]
+        },
+        "group-title": "Public Health and Healthcare",
+        "reference-count": 0,
+        "publisher": "MDPI AG",
+        "license": [
+          {
+            "start": {
+              "date-parts": [
+                [
+                  2025,
+                  3,
+                  14
+                ]
+              ],
+              "date-time": "2025-03-14T00:00:00Z",
+              "timestamp": 1741910400000
+            },
+            "content-version": "unspecified",
+            "delay-in-days": 0,
+            "URL": "http://creativecommons.org/licenses/by/4.0"
+          }
+        ],
+        "content-domain": {
+          "domain": [],
+          "crossmark-restriction": false
+        },
+        "accepted": {
+          "date-parts": [
+            [
+              2025,
+              3,
+              12
+            ]
+          ]
+        },
+        "abstract": "<jats:p>Large Language Models (LLMs) have recently emerged as a powerful option for partially automating the labor-intensive process of screening articles in systematic reviews. Unlike traditional semi-automated platforms that rely on iterative human feedback, LLM-based pipelines can operate in a zero-shot or few-shot manner, classifying abstracts according to predefined criteria. This paper offers a step-by-step methodology for researchers, librarians, and students seeking to incorporate LLMs—such as GPT-4—into systematic reviews. It discusses required software and data preprocessing, presents various prompt strategies, and emphasizes the importance of human oversight to maintain rigorous quality control. The proposed framework aims to provide best practices and offer guidance on managing costs, reproducibility, and prompt refinement. By following these guidelines, review teams can substantially reduce screening workloads without compromising the comprehensive nature of evidence-based research.</jats:p>",
+        "DOI": "10.20944/preprints202503.0981.v1",
+        "type": "posted-content",
+        "created": {
+          "date-parts": [
+            [
+              2025,
+              3,
+              17
+            ]
+          ],
+          "date-time": "2025-03-17T03:30:24Z",
+          "timestamp": 1742182224000
+        },
+        "source": "Crossref",
+        "is-referenced-by-count": 0,
+        "title": [
+          "Integrating Large Language Models into Systematic Review Screening"
+        ],
+        "prefix": "10.20944",
+        "author": [
+          {
+            "ORCID": "https://orcid.org/0000-0001-7476-7181",
+            "authenticated-orcid": false,
+            "given": "Carlo",
+            "family": "Galli",
+            "sequence": "first",
+            "affiliation": [],
+            "role": [
+              {
+                "role": "author",
+                "vocabulary": "crossref"
+              }
+            ]
+          },
+          {
+            "given": "Anna Viktorovna",
+            "family": "Gavrilova",
+            "sequence": "additional",
+            "affiliation": [],
+            "role": [
+              {
+                "role": "author",
+                "vocabulary": "crossref"
+              }
+            ]
+          },
+          {
+            "ORCID": "https://orcid.org/0000-0001-8781-1997",
+            "authenticated-orcid": false,
+            "given": "Elena",
+            "family": "Calciolari",
+            "sequence": "additional",
+            "affiliation": [],
+            "role": [
+              {
+                "role": "author",
+                "vocabulary": "crossref"
+              }
+            ]
+          }
+        ],
+        "member": "1968",
+        "deposited": {
+          "date-parts": [
+            [
+              2025,
+              5,
+              8
+            ]
+          ],
+          "date-time": "2025-05-08T03:29:44Z",
+          "timestamp": 1746674984000
+        },
+        "score": 36.384384,
+        "resource": {
+          "primary": {
+            "URL": "https://www.preprints.org/manuscript/202503.0981/v1"
+          }
+        },
+        "issued": {
+          "date-parts": [
+            [
+              2025,
+              3,
+              14
+            ]
+          ]
+        },
+        "references-count": 0,
+        "URL": "https://doi.org/10.20944/preprints202503.0981.v1",
+        "relation": {
+          "is-preprint-of": [
+            {
+              "id-type": "doi",
+              "id": "10.3390/info16050378",
+              "asserted-by": "subject"
+            }
+          ]
+        },
+        "published": {
+          "date-parts": [
+            [
+              2025,
+              3,
+              14
+            ]
+          ]
+        },
+        "subtype": "preprint"
+      },
+      {
+        "institution": [
+          {
+            "name": "medRxiv"
+          }
+        ],
+        "indexed": {
+          "date-parts": [
+            [
+              2026,
+              3,
+              18
+            ]
+          ],
+          "date-time": "2026-03-18T22:41:30Z",
+          "timestamp": 1773873690630,
+          "version": "3.50.1"
+        },
+        "posted": {
+          "date-parts": [
+            [
+              2024,
+              6,
+              4
+            ]
+          ]
+        },
+        "group-title": "Health Informatics",
+        "reference-count": 51,
+        "publisher": "openRxiv",
+        "content-domain": {
+          "domain": [],
+          "crossmark-restriction": false
+        },
+        "accepted": {
+          "date-parts": [
+            [
+              2024,
+              6,
+              4
+            ]
+          ]
+        },
+        "abstract": "<jats:title>ABSTRACT</jats:title>\n                <jats:sec>\n                  <jats:title>Background</jats:title>\n                  <jats:p>Systematic reviews and meta-analyses are essential for informed research and policymaking, yet they are typically resource-intensive and time-consuming. Recent advances in artificial intelligence and machine learning offer promising opportunities to streamline these processes.</jats:p>\n                </jats:sec>\n                <jats:sec>\n                  <jats:title>Objective</jats:title>\n                  <jats:p>To enhance the efficiency of systematic reviews, we explored the automation of various stages using GPT-3.5 Turbo. We assessed the model’s efficacy and performance by comparing it against three expert-conducted reviews across a comprehensive dataset of 24,534 studies.</jats:p>\n                </jats:sec>\n                <jats:sec>\n                  <jats:title>Methods</jats:title>\n                  <jats:p>The model’s performance was evaluated through a comparison with three expert reviews, utilizing a pseudo-K-folds permutation and a one-tailed ANOVA with an alpha level of 0.05 to ensure statistical validity. Key performance metrics such as accuracy, sensitivity, specificity, predictive values, F1-score, and the Matthews correlation coefficient were analyzed using two sets of prompts.</jats:p>\n                </jats:sec>\n                <jats:sec>\n                  <jats:title>Results</jats:title>\n                  <jats:p>Our approach significantly streamlined the systematic review process, which typically takes a year, reducing it to a few hours without sacrificing quality. In the initial screening phase, accuracy, specificity, and negative predictive values ranged between 80% and 95%. Sensitivity improved markedly during the second screening phase, demonstrating the model’s robustness when provided with more extensive data.</jats:p>\n                </jats:sec>\n                <jats:sec>\n                  <jats:title>Conclusion</jats:title>\n                  <jats:p>While ongoing refinements are needed, this tool represents a significant advancement in research methodologies, potentially making systematic reviews more accessible to a wider range of researchers.</jats:p>\n                </jats:sec>\n                <jats:sec>\n                  <jats:title>Impact Statement</jats:title>\n                  <jats:p>Our manuscript presents a novel review screening protocol built using open-source frameworks, which significantly enhances the systematic review process in terms of efficiency and cost-effectiveness. Leveraging the capabilities of GPT and embedding models, our protocol demonstrates the potential to transform a traditionally time-consuming and expensive task into an accelerated and economical operation, all while maintaining high standards of accuracy and reliability.</jats:p>\n                </jats:sec>\n                <jats:sec>\n                  <jats:title>Key Points</jats:title>\n                  <jats:list list-type=\"bullet\">\n                    <jats:list-item>\n                      <jats:p>GPT screening can streamline systematic reviews from a year-long, expensive process to just hours at minimal cost.</jats:p>\n                    </jats:list-item>\n                    <jats:list-item>\n                      <jats:p>Validated across different topics, the protocol exhibits high reliability and consistency in study inclusion.</jats:p>\n                    </jats:list-item>\n                    <jats:list-item>\n                      <jats:p>The AI-driven process reduces human bias, with prompt optimization considerably improving sensitivity.</jats:p>\n                    </jats:list-item>\n                  </jats:list>\n                </jats:sec>",
+        "DOI": "10.1101/2024.06.03.24308405",
+        "type": "posted-content",
+        "created": {
+          "date-parts": [
+            [
+              2024,
+              6,
+              4
+            ]
+          ],
+          "date-time": "2024-06-04T16:20:41Z",
+          "timestamp": 1717518041000
+        },
+        "source": "Crossref",
+        "is-referenced-by-count": 7,
+        "title": [
+          "Evaluating the Efficacy of Large Language Models for Systematic Review and Meta-Analysis Screening"
+        ],
+        "prefix": "10.64898",
+        "author": [
+          {
+            "ORCID": "https://orcid.org/0009-0007-4320-9444",
+            "authenticated-orcid": false,
+            "given": "Ronald",
+            "family": "Luo",
+            "sequence": "first",
+            "affiliation": [],
+            "role": [
+              {
+                "role": "author",
+                "vocabulary": "crossref"
+              }
+            ]
+          },
+          {
+            "given": "Ziya",
+            "family": "Sastimoglu",
+            "sequence": "additional",
+            "affiliation": [],
+            "role": [
+              {
+                "role": "author",
+                "vocabulary": "crossref"
+              }
+            ]
+          },
+          {
+            "given": "Abu Ilius",
+            "family": "Faisal",
+            "sequence": "additional",
+            "affiliation": [],
+            "role": [
+              {
+                "role": "author",
+                "vocabulary": "crossref"
+              }
+            ]
+          },
+          {
+            "given": "M. Jamal",
+            "family": "Deen",
+            "sequence": "additional",
+            "affiliation": [],
+            "role": [
+              {
+                "role": "author",
+                "vocabulary": "crossref"
+              }
+            ]
+          }
+        ],
+        "member": "54368",
+        "reference": [
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.1",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1017/s147474640200307x"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.2",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1016/j.conctc.2019.100443"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.3",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1136/bmjopen-2016"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.4",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.5195/jmla.2018.323"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.5",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1186/s13643-023-02243-z"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.6",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.12688/f1000research.22781.1"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.7",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1038/bjc.2014.448"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.8",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1258/jrsm.2011.110180"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.9",
+            "unstructured": "Norman GA Van . TRANSLATIONAL TOOLBOX Drugs, Devices, and the FDA: Part 2 An Overview of Approval Processes: FDA Approval of Medical Devices. Basic Trans Science. 2016."
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.10",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1002/9781119536604.ch4"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.11",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Wallace BC , Trikalinos TA , Lau J , Brodley C , Schmid CH. Semi-automated screening of biomedical citations for systematic reviews. 2010. Available: http://www.biomedcentral.com/1471-2105/11/55",
+            "DOI": "10.1186/1471-2105-11-55"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.12",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1186/2046-4053-4-5"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.13",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1186/2046-4053-4-1"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.14",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1186/s13643-021-01671-z"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.15",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.17226/13059"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.16",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1109/ICDMW.2009.49"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.17",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1145/1882992.1882999"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.18",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1136/bmjopen-2023-076865"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.19",
+            "unstructured": "Brown TB , Mann B , Ryder N , Subbiah M , Kaplan J , Dhariwal P , et al. Language Models are Few-Shot Learners. 2020. Available: https://commoncrawl.org/the-data/"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.20",
+            "unstructured": "Devlin J , Chang M-W , Lee K , Google KT , Language AI. BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding. 2019. Available: https://github.com/tensorflow/tensor2tensor"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.21",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1038/s42254-023-00581-4"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.22",
+            "unstructured": "Vaswani A , Brain G , Shazeer N , Parmar N , Uszkoreit J , Jones L , et al. Attention Is All You Need. 2017."
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.23",
+            "unstructured": "OpenAI, :, Achiam J , Adler S , Agarwal S , Ahmad L , et al. GPT-4 Technical Report. 2023. Available: http://arxiv.org/abs/2303.08774"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.24",
+            "unstructured": "Anil R , Dai AM , Firat O , Johnson M , Lepikhin D , Passos A , et al. PaLM 2 Technical Report. 2023. Available: http://arxiv.org/abs/2305.10403"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.25",
+            "unstructured": "Shoeybi M , Patwary M , Puri R , Legresley P , Casper J , Catanzaro B. Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism. 2020. Available: https://github.com/"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.26",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Hearst MA. Untangling Text Data Mining. 1999. Available: www.aaai.org/",
+            "DOI": "10.3115/1034678.1034679"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.27",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Aydin Ö , Karaarslan E. OpenAI ChatGPT Generated Literature Review: Digital Twin in Healthcare. 2022. Available: https://ssrn.com/abstract=4308687",
+            "DOI": "10.2139/ssrn.4308687"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.28",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1007/s10916-023-01925-4"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.29",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1016/j.dsx.2023.102744"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.30",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.30935/cedtech/13036"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.31",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1371/journal.pdig.0000198"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.32",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1109/MCE.2022.Doi"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.33",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.37074/jalt.2023.6.1.9"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.34",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.3390/buildings13040857"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.35",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1109/ACCESS.2022.Doi"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.36",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.7759/cureus.35179"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.37",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1186/s13054-023-04380-2"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.38",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1016/j.amjmed.2023.02.011"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.39",
+            "unstructured": "Lasserson T , Churchill R , Chandler J , Tovey D , Thomas J , Flemyng E , et al. Standards for the reporting of protocols of new Cochrane Intervention reviews. 2022 Feb."
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.40",
+            "unstructured": "Luo R , Subramaniam S , Ilius Faisal A , Mbuagbaw L , Jamal Deen M. Gait spatiotemporal parameters in dementia subtypes: systematic review and meta-analysis."
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.41",
+            "unstructured": "Sastimoglu Z , Subramaniam S , Faisal AI , Jiang W , Ye A , Deen MJ. Wearable PPG Based BP Estimation Methods: A Systematic Review and Meta-Analysis."
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.42",
+            "unstructured": "Ilius A , Jiang W , Subramaniam S , Mbuagbaw L , Deen MJ. Impact of Age and Comorbidities on Long COVID: A Systematic Review and Meta-Analysis."
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.43",
+            "unstructured": "Open Source. LangChain: Build context-aware reasoning applications. GitHub; 2022."
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.44",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.29173/JCHLA29590"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.45",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1016/j.jval.2018.09.2299"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.46",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.5195/JMLA.2018.513"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.47",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.18653/v1/P17-4002"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.48",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1093/jamia/ocaa163"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.49",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.1186/s13643-018-0707-8"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.50",
+            "doi-asserted-by": "publisher",
+            "DOI": "10.2196/48996"
+          },
+          {
+            "key": "2024060701451157000_2024.06.03.24308405v1.51",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Salinas A , Morstatter F. The Butterfly Effect of Altering Prompts: How Small Changes and Jailbreaks Affect Large Language Model Performance. 2024. Available: http://arxiv.org/abs/2401.03729",
+            "DOI": "10.18653/v1/2024.findings-acl.275"
+          }
+        ],
+        "link": [
+          {
+            "URL": "https://syndication.highwire.org/content/doi/10.1101/2024.06.03.24308405",
+            "content-type": "unspecified",
+            "content-version": "vor",
+            "intended-application": "similarity-checking"
+          }
+        ],
+        "deposited": {
+          "date-parts": [
+            [
+              2026,
+              1,
+              15
+            ]
+          ],
+          "date-time": "2026-01-15T20:02:28Z",
+          "timestamp": 1768507348000
+        },
+        "score": 33.242558,
+        "resource": {
+          "primary": {
+            "URL": "http://medrxiv.org/lookup/doi/10.1101/2024.06.03.24308405"
+          }
+        },
+        "issued": {
+          "date-parts": [
+            [
+              2024,
+              6,
+              4
+            ]
+          ]
+        },
+        "references-count": 51,
+        "URL": "https://doi.org/10.1101/2024.06.03.24308405",
+        "published": {
+          "date-parts": [
+            [
+              2024,
+              6,
+              4
+            ]
+          ]
+        },
+        "subtype": "preprint"
+      },
+      {
+        "indexed": {
+          "date-parts": [
+            [
+              2026,
+              10,
+              17
+            ]
+          ],
+          "date-time": "2026-10-17T03:03:50Z",
+          "timestamp": 1792206230383,
+          "version": "4.4.0"
+        },
+        "reference-count": 125,
+        "publisher": "MDPI AG",
+        "issue": "5",
+        "license": [
+          {
+            "start": {
+              "date-parts": [
+                [
+                  2025,
+                  5,
+                  1
+                ]
+              ],
+              "date-time": "2025-05-01T00:00:00Z",
+              "timestamp": 1746057600000
+            },
+            "content-version": "vor",
+            "delay-in-days": 0,
+            "URL": "https://creativecommons.org/licenses/by/4.0/"
+          }
+        ],
+        "content-domain": {
+          "domain": [],
+          "crossmark-restriction": false
+        },
+        "short-container-title": [
+          "Information"
+        ],
+        "abstract": "<jats:p>Systematic reviews require labor-intensive screening processes—an approach prone to bottlenecks, delays, and scalability constraints in large-scale reviews. Large Language Models (LLMs) have recently emerged as a powerful alternative, capable of operating in zero-shot or few-shot modes to classify abstracts according to predefined criteria without requiring continuous human intervention like semi-automated platforms. This review focuses on the central challenges that users in the biomedical field encounter when integrating LLMs—such as GPT-4—into evidence-based research. It examines critical requirements for software and data preprocessing, discusses various prompt strategies, and underscores the continued need for human oversight to maintain rigorous quality control. By drawing on current practices for cost management, reproducibility, and prompt refinement, this article highlights how review teams can substantially reduce screening workloads without compromising the comprehensiveness of evidence-based inquiry. The findings presented aim to balance the strengths of LLM-driven automation with structured human checks, ensuring that systematic reviews retain their methodological integrity while leveraging the efficiency gains made possible by recent advances in artificial intelligence.</jats:p>",
+        "type": "journal-article",
+        "created": {
+          "date-parts": [
+            [
+              2025,
+              5,
+              1
+            ]
+          ],
+          "date-time": "2025-05-01T09:16:12Z",
+          "timestamp": 1746090972000
+        },
+        "page": "378",
+        "update-policy": "https://doi.org/10.3390/mdpi_crossmark_policy",
+        "source": "Crossref",
+        "is-referenced-by-count": 40,
+        "title": [
+          "Large Language Models in Systematic Review Screening: Opportunities, Challenges, and Methodological Considerations"
+        ],
+        "prefix": "10.3390",
+        "volume": "16",
+        "author": [
+          {
+            "ORCID": "https://orcid.org/0000-0001-7476-7181",
+            "authenticated-orcid": false,
+            "given": "Carlo",
+            "family": "Galli",
+            "sequence": "first",
+            "affiliation": [
+              {
+                "name": "Histology and Embryology Laboratory, Department of Medicine and Surgery, University of Parma, 43126 Parma, Italy"
+              }
+            ],
+            "role": [
+              {
+                "vocabulary": "crossref",
+                "role": "author"
+              }
+            ]
+          },
+          {
+            "given": "Anna V.",
+            "family": "Gavrilova",
+            "sequence": "additional",
+            "affiliation": [
+              {
+                "name": "Department of Biosciences, University of Milan, 20122 Milan, Italy"
+              }
+            ],
+            "role": [
+              {
+                "vocabulary": "crossref",
+                "role": "author"
+              }
+            ]
+          },
+          {
+            "ORCID": "https://orcid.org/0000-0001-8781-1997",
+            "authenticated-orcid": false,
+            "given": "Elena",
+            "family": "Calciolari",
+            "sequence": "additional",
+            "affiliation": [
+              {
+                "name": "Department of Medicine and Surgery, Dental School, University of Parma, 43126 Parma, Italy"
+              },
+              {
+                "name": "Centre for Oral Clinical Research, Institute of Dentistry, Faculty of Medicine and Dentistry, Queen Mary University of London, London E1 2AD, UK"
+              }
+            ],
+            "role": [
+              {
+                "vocabulary": "crossref",
+                "role": "author"
+              }
+            ]
+          }
+        ],
+        "member": "1968",
+        "published-online": {
+          "date-parts": [
+            [
+              2025,
+              5,
+              1
+            ]
+          ]
+        },
+        "reference": [
+          {
+            "key": "ref_1",
+            "doi-asserted-by": "crossref",
+            "first-page": "597",
+            "DOI": "10.1136/bmj.309.6954.597",
+            "article-title": "Systematic Reviews: Rationale for systematic reviews",
+            "volume": "309",
+            "author": "Mulrow",
+            "year": "1994",
+            "journal-title": "BMJ"
+          },
+          {
+            "key": "ref_2",
+            "doi-asserted-by": "crossref",
+            "first-page": "e934475",
+            "DOI": "10.12659/MSM.934475",
+            "article-title": "Review articles, systematic reviews, meta-analysis, and the updated preferred reporting items for systematic reviews and meta-analyses (PRISMA) 2020 guidelines",
+            "volume": "27",
+            "author": "Parums",
+            "year": "2021",
+            "journal-title": "Med. Sci. Monit."
+          },
+          {
+            "key": "ref_3",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Methley, A.M., Campbell, S., Chew-Graham, C., McNally, R., and Cheraghi-Sohi, S. (2014). PICO, PICOS and SPIDER: A comparison study of specificity and sensitivity in three search tools for qualitative systematic reviews. BMC Health Serv. Res., 14.",
+            "DOI": "10.1186/s12913-014-0579-0"
+          },
+          {
+            "key": "ref_4",
+            "first-page": "499",
+            "article-title": "Methodology of a systematic review",
+            "volume": "42",
+            "author": "Hevia",
+            "year": "2018",
+            "journal-title": "Actas Urol. Esp."
+          },
+          {
+            "key": "ref_5",
+            "doi-asserted-by": "crossref",
+            "first-page": "1286",
+            "DOI": "10.1136/bmj.309.6964.1286",
+            "article-title": "Systematic reviews: Identifying relevant studies for systematic reviews",
+            "volume": "309",
+            "author": "Dickersin",
+            "year": "1994",
+            "journal-title": "BMJ"
+          },
+          {
+            "key": "ref_6",
+            "doi-asserted-by": "crossref",
+            "first-page": "e12931",
+            "DOI": "10.1111/eci.12931",
+            "article-title": "Time to challenge the spurious hierarchy of systematic over narrative reviews?",
+            "volume": "48",
+            "author": "Greenhalgh",
+            "year": "2018",
+            "journal-title": "Eur. J. Clin. Investig."
+          },
+          {
+            "key": "ref_7",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Waffenschmidt, S., Knelangen, M., Sieben, W., Bühn, S., and Pieper, D. (2019). Single screening versus conventional double screening for study selection in systematic reviews: A methodological systematic review. BMC Med. Res. Methodol., 19.",
+            "DOI": "10.1186/s12874-019-0782-0"
+          },
+          {
+            "key": "ref_8",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Cooper, C., Booth, A., Varley-Campbell, J., Britten, N., and Garside, R. (2018). Defining the process to literature searching in systematic reviews: A literature review of guidance and supporting studies. BMC Med. Res. Methodol., 18.",
+            "DOI": "10.1186/s12874-018-0545-3"
+          },
+          {
+            "key": "ref_9",
+            "doi-asserted-by": "crossref",
+            "first-page": "1335",
+            "DOI": "10.1089/neu.2009.1146",
+            "article-title": "Methodology of Systematic Reviews and Recommendations",
+            "volume": "28",
+            "author": "Furlan",
+            "year": "2011",
+            "journal-title": "J. Neurotrauma"
+          },
+          {
+            "key": "ref_10",
+            "first-page": "ED000142",
+            "article-title": "Updated guidance for trusted systematic reviews: A new edition of the Cochrane Handbook for Systematic Reviews of Interventions",
+            "volume": "2019",
+            "author": "Cumpston",
+            "year": "2019",
+            "journal-title": "Cochrane Database Syst. Rev."
+          },
+          {
+            "key": "ref_11",
+            "doi-asserted-by": "crossref",
+            "first-page": "404",
+            "DOI": "10.1136/emj.2004.014944",
+            "article-title": "The NICE guidelines in the real world: A practical perspective",
+            "volume": "21",
+            "author": "Dunning",
+            "year": "2004",
+            "journal-title": "Emerg. Med. J."
+          },
+          {
+            "key": "ref_12",
+            "doi-asserted-by": "crossref",
+            "first-page": "106589",
+            "DOI": "10.1016/j.infsof.2021.106589",
+            "article-title": "Automation of systematic literature reviews: A systematic literature review",
+            "volume": "136",
+            "author": "Tekinerdogan",
+            "year": "2021",
+            "journal-title": "Inf. Softw. Technol."
+          },
+          {
+            "key": "ref_13",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Wang, Z., Nayfeh, T., Tetzlaff, J., O’Blenis, P., and Murad, M.H. (2020). Error rates of human reviewers during abstract screening in systematic reviews. PLoS ONE, 15.",
+            "DOI": "10.1371/journal.pone.0227742"
+          },
+          {
+            "key": "ref_14",
+            "doi-asserted-by": "crossref",
+            "first-page": "210",
+            "DOI": "10.1186/s13643-016-0384-4",
+            "article-title": "Rayyan—A web and mobile app for systematic reviews",
+            "volume": "5",
+            "author": "Ouzzani",
+            "year": "2016",
+            "journal-title": "Syst. Rev."
+          },
+          {
+            "key": "ref_15",
+            "doi-asserted-by": "crossref",
+            "first-page": "93",
+            "DOI": "10.1186/s13643-021-01635-3",
+            "article-title": "Research Screener: A machine learning tool to semi-automate abstract screening for systematic reviews",
+            "volume": "10",
+            "author": "Chai",
+            "year": "2021",
+            "journal-title": "Syst. Rev."
+          },
+          {
+            "key": "ref_16",
+            "doi-asserted-by": "crossref",
+            "first-page": "22",
+            "DOI": "10.1016/j.jclinepi.2021.12.005",
+            "article-title": "Tools to support the automation of systematic reviews: A scoping review",
+            "volume": "144",
+            "author": "Khalil",
+            "year": "2022",
+            "journal-title": "J. Clin. Epidemiol."
+          },
+          {
+            "key": "ref_17",
+            "doi-asserted-by": "crossref",
+            "first-page": "W352",
+            "DOI": "10.1093/nar/gkab326",
+            "article-title": "LitSuggest: A web-based system for literature recommendation and curation using machine learning",
+            "volume": "49",
+            "author": "Allot",
+            "year": "2021",
+            "journal-title": "Nucleic Acids Res."
+          },
+          {
+            "key": "ref_18",
+            "doi-asserted-by": "crossref",
+            "first-page": "193",
+            "DOI": "10.1093/jamia/ocv044",
+            "article-title": "RobotReviewer: Evaluation of a system for automatically assessing bias in clinical trials",
+            "volume": "23",
+            "author": "Marshall",
+            "year": "2016",
+            "journal-title": "J. Am. Med. Inform. Assoc."
+          },
+          {
+            "key": "ref_19",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Kiritchenko, S., De Bruijn, B., Carini, S., Martin, J., and Sim, I. (2010). ExaCT: Automatic extraction of clinical trial characteristics from journal publications. BMC Med. Inf. Decis. Mak., 10.",
+            "DOI": "10.1186/1472-6947-10-56"
+          },
+          {
+            "key": "ref_20",
+            "unstructured": "Sindhu, B., Prathamesh, R.P., Sameera, M.B., and KumaraSwamy, S. (2024, January 8–9). The evolution of large language model: Models, applications and challenges. Proceedings of the 2024 International Conference on Current Trends in Advanced Computing (ICCTAC), Bengaluru, India."
+          },
+          {
+            "key": "ref_21",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Cao, C., Sang, J., Arora, R., Kloosterman, R., Cecere, M., Gorla, J., Saleh, R., Chen, D., Drennan, I., and Teja, B. (2024). Prompting is all you need: LLMs for systematic review screening. medRxiv, 2024–2106.",
+            "DOI": "10.1101/2024.06.01.24308323"
+          },
+          {
+            "key": "ref_22",
+            "unstructured": "Scherbakov, D., Hubig, N., Jansari, V., Bakumenko, A., and Lenert, L.A. (2024). The emergence of Large Language Models (LLM) as a tool in literature reviews: An LLM automated systematic review. arXiv."
+          },
+          {
+            "key": "ref_23",
+            "doi-asserted-by": "crossref",
+            "first-page": "e2411962122",
+            "DOI": "10.1073/pnas.2411962122",
+            "article-title": "Transforming literature screening: The emerging role of large language models in systematic reviews",
+            "volume": "122",
+            "author": "Jennings",
+            "year": "2025",
+            "journal-title": "Proc. Natl. Acad. Sci. USA"
+          },
+          {
+            "key": "ref_24",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Dai, Z.Y., Shen, C., Ji, Y.L., Li, Z.Y., Wang, Y., and Wang, F.Q. (2025, March 11). Accuracy of Large Language Models for Literature Screening in Systematic Reviews and Meta-Analyses. Available online: https://ssrn.com/abstract=4943759.",
+            "DOI": "10.2139/ssrn.4943759"
+          },
+          {
+            "key": "ref_25",
+            "doi-asserted-by": "crossref",
+            "first-page": "158",
+            "DOI": "10.1186/s13643-024-02575-4",
+            "article-title": "Title and abstract screening for literature reviews using large language models: An exploratory study in the biomedical domain",
+            "volume": "13",
+            "author": "Zink",
+            "year": "2024",
+            "journal-title": "Syst. Rev."
+          },
+          {
+            "key": "ref_26",
+            "doi-asserted-by": "crossref",
+            "first-page": "616",
+            "DOI": "10.1002/jrsm.1715",
+            "article-title": "Can large language models replace humans in systematic reviews? Evaluating GPT -4’s efficacy in screening and extracting data from peer-reviewed and grey literature in multiple languages",
+            "volume": "15",
+            "author": "Khraisha",
+            "year": "2024",
+            "journal-title": "Res. Synth. Methods"
+          },
+          {
+            "key": "ref_27",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Blevins, T., Gonen, H., and Zettlemoyer, L. (2022). Prompting Language Models for Linguistic Structure. arXiv.",
+            "DOI": "10.18653/v1/2023.acl-long.367"
+          },
+          {
+            "key": "ref_28",
+            "doi-asserted-by": "crossref",
+            "first-page": "111746",
+            "DOI": "10.1016/j.jclinepi.2025.111746",
+            "article-title": "Large language models for conducting systematic reviews: On the rise, but not yet ready for use—A scoping review",
+            "volume": "181",
+            "author": "Lieberum",
+            "year": "2025",
+            "journal-title": "J. Clin. Epidemiol."
+          },
+          {
+            "key": "ref_29",
+            "unstructured": "Zhao, W.X., Zhou, K., Li, J., Tang, T., Wang, X., Hou, Y., Min, Y., Zhang, B., Zhang, J., and Dong, Z. (2023). A survey of large language models. arXiv."
+          },
+          {
+            "key": "ref_30",
+            "unstructured": "Gao, A. (2025, March 11). Prompt Engineering for Large Language Models. Available online: https://ssrn.com/abstract=4504303."
+          },
+          {
+            "key": "ref_31",
+            "unstructured": "Dang, H., Mecke, L., Lehmann, F., Goller, S., and Buschek, D. (2022). How to prompt? Opportunities and challenges of zero-and few-shot learning for human-AI interaction in creative applications of generative models. arXiv."
+          },
+          {
+            "key": "ref_32",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Cottam, J.A., Heller, N.C., Ebsch, C.L., Deshmukh, R., Mackey, P., and Chin, G. (2020, January 10–13). Evaluation of Alignment: Precision, Recall, Weighting and Limitations. Proceedings of the 2020 IEEE International Conference on Big Data (Big Data), Atlanta, GA, USA.",
+            "DOI": "10.1109/BigData50022.2020.9378064"
+          },
+          {
+            "key": "ref_33",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Wang, Y., Yu, J., Yao, Z., Zhang, J., Xie, Y., Tu, S., Fu, Y., Feng, Y., Zhang, J., and Zhang, J. (2024). A solution-based LLM API-using methodology for academic information seeking. arXiv.",
+            "DOI": "10.1145/3690624.3709412"
+          },
+          {
+            "key": "ref_34",
+            "doi-asserted-by": "crossref",
+            "first-page": "49",
+            "DOI": "10.1007/s44206-024-00141-y",
+            "article-title": "Beyond Clouds: Locally Runnable LLMs as a Secure Solution for AI Applications",
+            "volume": "3",
+            "author": "Kumar",
+            "year": "2024",
+            "journal-title": "Digit. Soc."
+          },
+          {
+            "key": "ref_35",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Bisong, E. (2019). Google Colaboratory. Building Machine Learning and Deep Learning Models on Google Cloud Platform: A Comprehensive Guide for Beginners, Apress.",
+            "DOI": "10.1007/978-1-4842-4470-8"
+          },
+          {
+            "key": "ref_36",
+            "unstructured": "Mckinney, W. (July, January 28). Data Structures for Statistical Computing in Python. Proceedings of the 9th Python in Science Conference, Austin, TX, USA."
+          },
+          {
+            "key": "ref_37",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Grigorov, D. (2024). Harnessing Python 3.11 and Python Libraries for LLM Development. Introduction to Python and Large Language Models: A Guide to Language Models, Springer.",
+            "DOI": "10.1007/979-8-8688-0540-0_7"
+          },
+          {
+            "key": "ref_38",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Maji, A.K., Gorenstein, L., and Lentner, G. (2020, January 18). Demystifying Python Package Installation with conda-env-mod. Proceedings of the 2020 IEEE/ACM International Workshop on HPC User Support Tools (HUST) and Workshop on Programming and Performance Visualization Tools (ProTools), Atlanta, GA, USA.",
+            "DOI": "10.1109/HUSTProtools51951.2020.00011"
+          },
+          {
+            "key": "ref_39",
+            "unstructured": "Shekhar, S., Dubey, T., Mukherjee, K., Saxena, A., Tyagi, A., and Kotla, N. (2024). Towards optimizing the costs of llm usage. arXiv."
+          },
+          {
+            "key": "ref_40",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Chen, X., Gao, C., Chen, C., Zhang, G., and Liu, Y. (2024). An empirical study on challenges for llm developers. arXiv.",
+            "DOI": "10.1145/3715007"
+          },
+          {
+            "key": "ref_41",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Irugalbandara, C., Mahendra, A., Daynauth, R., Arachchige, T.K., Dantanarayana, J., Flautner, K., Tang, L., Kang, Y., and Mars, J. (2024, January 5–7). Scaling down to scale up: A cost-benefit analysis of replacing OpenAI’s LLM with open source SLMs in production. Proceedings of the 2024 IEEE International Symposium on Performance Analysis of Systems and Software (ISPASS), Indianapolis, IN, USA.",
+            "DOI": "10.1109/ISPASS61541.2024.00034"
+          },
+          {
+            "key": "ref_42",
+            "unstructured": "Ding, D., Mallick, A., Wang, C., Sim, R., Mukherjee, S., Ruhle, V., Lakshmanan, L.V., and Awadallah, A.H. (2024). Hybrid llm: Cost-efficient and quality-aware query routing. arXiv."
+          },
+          {
+            "key": "ref_43",
+            "unstructured": "Chen, L., Zaharia, M., and Zou, J. (2023). Frugalgpt: How to use large language models while reducing cost and improving performance. arXiv."
+          },
+          {
+            "key": "ref_44",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Yan, B., Li, K., Xu, M., Dong, Y., Zhang, Y., Ren, Z., and Cheng, X. (2024). On protecting the data privacy of large language models (llms): A survey. arXiv.",
+            "DOI": "10.1016/j.hcc.2025.100300"
+          },
+          {
+            "key": "ref_45",
+            "doi-asserted-by": "crossref",
+            "first-page": "100211",
+            "DOI": "10.1016/j.hcc.2024.100211",
+            "article-title": "A survey on large language model (llm) security and privacy: The good, the bad, and the ugly",
+            "volume": "4",
+            "author": "Yao",
+            "year": "2024",
+            "journal-title": "High-Confid. Comput."
+          },
+          {
+            "key": "ref_46",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Huang, B., Yu, S., Li, J., Chen, Y., Huang, S., Zeng, S., and Wang, S. (2023). Firewallm: A portable data protection and recovery framework for llm services. International Conference on Data Mining and Big Data, Springer.",
+            "DOI": "10.1007/978-981-97-0844-4_2"
+          },
+          {
+            "key": "ref_47",
+            "doi-asserted-by": "crossref",
+            "first-page": "2773",
+            "DOI": "10.3390/ai5040134",
+            "article-title": "Trustworthy AI: Securing sensitive data in large language models",
+            "volume": "5",
+            "author": "Feretzakis",
+            "year": "2024",
+            "journal-title": "AI"
+          },
+          {
+            "key": "ref_48",
+            "doi-asserted-by": "crossref",
+            "first-page": "21",
+            "DOI": "10.1044/cicsd_33_S_21",
+            "article-title": "Selecting studies for systemic review: Inclusion and exclusion criteria",
+            "volume": "33",
+            "author": "Meline",
+            "year": "2006",
+            "journal-title": "Contemp. Issues Commun. Sci. Disord."
+          },
+          {
+            "key": "ref_49",
+            "doi-asserted-by": "crossref",
+            "first-page": "1435",
+            "DOI": "10.1177/1049732312452938",
+            "article-title": "Beyond PICO",
+            "volume": "22",
+            "author": "Cooke",
+            "year": "2012",
+            "journal-title": "Qual. Health Res."
+          },
+          {
+            "key": "ref_50",
+            "doi-asserted-by": "crossref",
+            "first-page": "69",
+            "DOI": "10.1016/j.jclinepi.2020.07.005",
+            "article-title": "Using the full PICO model as a search tool for systematic reviews resulted in lower recall for some PICO elements",
+            "volume": "127",
+            "author": "Frandsen",
+            "year": "2020",
+            "journal-title": "J. Clin. Epidemiol."
+          },
+          {
+            "key": "ref_51",
+            "doi-asserted-by": "crossref",
+            "first-page": "496",
+            "DOI": "10.1177/1524839919893361",
+            "article-title": "A Review of the PubMed PICO Tool: Using Evidence-Based Practice in Health Education",
+            "volume": "21",
+            "author": "Brown",
+            "year": "2020",
+            "journal-title": "Health Promot. Pract."
+          },
+          {
+            "key": "ref_52",
+            "doi-asserted-by": "crossref",
+            "first-page": "5",
+            "DOI": "10.1111/jnu.13036",
+            "article-title": "PICOT questions and search strategies formulation: A novel approach using artificial intelligence automation",
+            "volume": "57",
+            "author": "Gosak",
+            "year": "2025",
+            "journal-title": "J. Nurs. Scholarsh."
+          },
+          {
+            "key": "ref_53",
+            "doi-asserted-by": "crossref",
+            "unstructured": "De Cassai, A., Dost, B., Karapinar, Y.E., Beldagli, M., Yalin, M.S.O., Turunc, E., Turan, E.I., and Sella, N. (2025). Evaluating the utility of large language models in generating search strings for systematic reviews in anesthesiology: A comparative analysis of top-ranked journals. Reg Anesth Pain Med., 2024–10623.",
+            "DOI": "10.1136/rapm-2024-106231"
+          },
+          {
+            "key": "ref_54",
+            "doi-asserted-by": "crossref",
+            "first-page": "S481",
+            "DOI": "10.1016/j.jval.2024.10.2450",
+            "article-title": "MSR217 Evaluating a Large Language Model Approach for Full-Text Screening Task in Systematic Literature Reviews with Domain Expert Input",
+            "volume": "27",
+            "author": "Huang",
+            "year": "2024",
+            "journal-title": "Value Health"
+          },
+          {
+            "key": "ref_55",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Jin, Q., Leaman, R., and Lu, Z. (2024). PubMed and beyond: Biomedical literature search in the age of artificial intelligence. eBioMedicine, 100.",
+            "DOI": "10.1016/j.ebiom.2024.104988"
+          },
+          {
+            "key": "ref_56",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Scells, H., Zuccon, G., Koopman, B., Deacon, A., Azzopardi, L., and Geva, S. (2017, January 6–10). Integrating the Framing of Clinical Questions via PICO into the Retrieval of Medical Literature for Systematic Reviews. Proceedings of the 2017 ACM on Conference on Information and Knowledge Management, Singapore.",
+            "DOI": "10.1145/3132847.3133080"
+          },
+          {
+            "key": "ref_57",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Chigbu, U.E., Atiku, S.O., and Du Plessis, C.C. (2023). The Science of Literature Reviews: Searching, Identifying, Selecting, and Synthesising. Publications, 11.",
+            "DOI": "10.3390/publications11010002"
+          },
+          {
+            "key": "ref_58",
+            "doi-asserted-by": "crossref",
+            "first-page": "30",
+            "DOI": "10.1177/014572170403000106",
+            "article-title": "The literature review: Demystifying the literature search",
+            "volume": "30",
+            "author": "Patrick",
+            "year": "2004",
+            "journal-title": "Diabetes Educ."
+          },
+          {
+            "key": "ref_59",
+            "doi-asserted-by": "crossref",
+            "first-page": "181",
+            "DOI": "10.1002/jrsm.1378",
+            "article-title": "Which academic search systems are suitable for systematic reviews or meta-analyses? Evaluating retrieval qualities of Google Scholar, PubMed, and 26 other resources",
+            "volume": "11",
+            "author": "Gusenbauer",
+            "year": "2020",
+            "journal-title": "Res. Synth. Methods"
+          },
+          {
+            "key": "ref_60",
+            "doi-asserted-by": "crossref",
+            "first-page": "599",
+            "DOI": "10.5195/jmla.2023.1482",
+            "article-title": "Optimizing the literature search: Coverage of included references in systematic reviews in Medline and Embase",
+            "volume": "111",
+            "author": "Heintz",
+            "year": "2023",
+            "journal-title": "J. Med. Libr. Assoc."
+          },
+          {
+            "key": "ref_61",
+            "doi-asserted-by": "crossref",
+            "first-page": "baq036",
+            "DOI": "10.1093/database/baq036",
+            "article-title": "PubMed and beyond: A survey of web tools for searching biomedical literature",
+            "volume": "2011",
+            "author": "Lu",
+            "year": "2011",
+            "journal-title": "Database"
+          },
+          {
+            "key": "ref_62",
+            "doi-asserted-by": "crossref",
+            "first-page": "39",
+            "DOI": "10.1186/s13643-016-0215-7",
+            "article-title": "Comparing the coverage, recall, and precision of searches for 120 systematic reviews in Embase, MEDLINE, and Google Scholar: A prospective study",
+            "volume": "5",
+            "author": "Bramer",
+            "year": "2016",
+            "journal-title": "Syst. Rev."
+          },
+          {
+            "key": "ref_63",
+            "first-page": "199",
+            "article-title": "Systematic Literature Searching and the Bibliographic Database Haystack",
+            "volume": "6",
+            "author": "Page",
+            "year": "2008",
+            "journal-title": "Electron. J. Bus. Res. Methods"
+          },
+          {
+            "key": "ref_64",
+            "doi-asserted-by": "crossref",
+            "first-page": "382",
+            "DOI": "10.1080/02763869.2020.1826228",
+            "article-title": "PubMed 2.0",
+            "volume": "39",
+            "author": "White",
+            "year": "2020",
+            "journal-title": "Med. Ref. Serv. Q."
+          },
+          {
+            "key": "ref_65",
+            "doi-asserted-by": "crossref",
+            "first-page": "1422",
+            "DOI": "10.1093/bioinformatics/btp163",
+            "article-title": "Biopython: Freely available Python tools for computational molecular biology and bioinformatics",
+            "volume": "25",
+            "author": "Cock",
+            "year": "2009",
+            "journal-title": "Bioinformatics"
+          },
+          {
+            "key": "ref_66",
+            "doi-asserted-by": "crossref",
+            "first-page": "69",
+            "DOI": "10.1007/s10791-008-9074-8",
+            "article-title": "Evaluation of query expansion using MeSH in PubMed",
+            "volume": "12",
+            "author": "Lu",
+            "year": "2009",
+            "journal-title": "Inf. Retr. Boston"
+          },
+          {
+            "key": "ref_67",
+            "first-page": "152",
+            "article-title": "Database search translation tools: MEDLINE transpose, ovid search translator, and SR-accelerator polyglot search translator",
+            "volume": "20",
+            "author": "Stuart",
+            "year": "2023",
+            "journal-title": "J. Electron. Resour. Med. Libr."
+          },
+          {
+            "key": "ref_68",
+            "doi-asserted-by": "crossref",
+            "first-page": "193",
+            "DOI": "10.1016/j.procs.2023.12.074",
+            "article-title": "Web scraping using natural language processing: Exploiting unstructured text for data extraction and analysis",
+            "volume": "230",
+            "author": "Pichiyan",
+            "year": "2023",
+            "journal-title": "Procedia Comput. Sci."
+          },
+          {
+            "key": "ref_69",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Mavrogiorgos, K., Mavrogiorgou, A., Kiourtis, A., Zafeiropoulos, N., Kleftakis, S., and Kyriazis, D. (2022, January 9–11). Automated rule-based data cleaning using NLP. Proceedings of the2022 32nd Conference of Open Innovations Association (FRUCT), Tampere, Finland.",
+            "DOI": "10.23919/FRUCT56874.2022.9953810"
+          },
+          {
+            "key": "ref_70",
+            "doi-asserted-by": "crossref",
+            "first-page": "e25440",
+            "DOI": "10.2196/25440",
+            "article-title": "Understanding the nature of metadata: Systematic review",
+            "volume": "24",
+            "author": "Ulrich",
+            "year": "2022",
+            "journal-title": "J. Med. Internet Res."
+          },
+          {
+            "key": "ref_71",
+            "doi-asserted-by": "crossref",
+            "first-page": "4",
+            "DOI": "10.1287/isre.2017.0727",
+            "article-title": "Mind the gap: Accounting for measurement error and misclassification in variables generated via data mining",
+            "volume": "29",
+            "author": "Yang",
+            "year": "2018",
+            "journal-title": "Inf. Syst. Res."
+          },
+          {
+            "key": "ref_72",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Chernyavskiy, A., Ilvovsky, D., and Nakov, P. (2021). Transformers:“the end of history” for natural language processing. Machine Learning and Knowledge Discovery in Databases. Research Track, Proceedings of the European Conference, ECML PKDD 2021, Bilbao, Spain, 13–17 September 2021, Springer. Proceedings, Part III 21.",
+            "DOI": "10.1007/978-3-030-86523-8_41"
+          },
+          {
+            "key": "ref_73",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Wolf, T., Debut, L., Sanh, V., Chaumond, J., Delangue, C., Moi, A., Cistac, P., Rault, T., Louf, R., and Funtowicz, M. (2020, January 16–20). Transformers: State-of-the-art natural language processing. Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing: System Demonstrations, Online.",
+            "DOI": "10.18653/v1/2020.emnlp-demos.6"
+          },
+          {
+            "key": "ref_74",
+            "unstructured": "Smys, S., Balas, V.E., and Palanisamy, R. (2022). A Literature Review on Bidirectional Encoder Representations from Transformers. Inventive Computation and Information Technologies, Springer Nature."
+          },
+          {
+            "key": "ref_75",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Zarrieß, S., Voigt, H., and Schüz, S. (2021). Decoding Methods in Neural Language Generation: A Survey. Information, 12.",
+            "DOI": "10.3390/info12090355"
+          },
+          {
+            "key": "ref_76",
+            "first-page": "38",
+            "article-title": "The Progression of ChatGPT: An Evolutionary Study from GPT-1 to GPT-4",
+            "volume": "3",
+            "author": "Ashwathy",
+            "year": "2024",
+            "journal-title": "J. Innov. Data Sci. Big Data Manag."
+          },
+          {
+            "key": "ref_77",
+            "doi-asserted-by": "crossref",
+            "first-page": "100048",
+            "DOI": "10.1016/j.nlp.2023.100048",
+            "article-title": "A survey of GPT-3 family large language models including ChatGPT and GPT-4",
+            "volume": "6",
+            "author": "Kalyan",
+            "year": "2024",
+            "journal-title": "Nat. Lang. Process. J."
+          },
+          {
+            "key": "ref_78",
+            "unstructured": "Gao, T., Jin, J., Ke, Z.T., and Moryoussef, G. (2025). A Comparison of DeepSeek and Other LLMs. arXiv."
+          },
+          {
+            "key": "ref_79",
+            "first-page": "1",
+            "article-title": "Recent Advances in LoRa: A Comprehensive Survey",
+            "volume": "18",
+            "author": "Sun",
+            "year": "2022",
+            "journal-title": "ACM Trans. Sens. Netw."
+          },
+          {
+            "key": "ref_80",
+            "doi-asserted-by": "crossref",
+            "first-page": "e330",
+            "DOI": "10.1542/hpeds.2023-007462",
+            "article-title": "Receiver Operating Characteristic (ROC) Curves: The Basics and Beyond",
+            "volume": "14",
+            "author": "Chang",
+            "year": "2024",
+            "journal-title": "Hosp. Pediatr."
+          },
+          {
+            "key": "ref_81",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Wu, Y., Gu, Y., Feng, X., Zhong, W., Xu, D., Yang, Q., Liu, H., and Qin, B. (2024). Extending context window of large language models from a distributional perspective. arXiv.",
+            "DOI": "10.18653/v1/2024.emnlp-main.414"
+          },
+          {
+            "key": "ref_82",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Huotala, A., Kuutila, M., Ralph, P., and Mäntylä, M. (2024, January 18–21). The promise and challenges of using LLMs to accelerate the screening process of systematic reviews. Proceedings of the 28th International Conference on Evaluation and Assessment in Software Engineering, Salerno, Italy.",
+            "DOI": "10.1145/3661167.3661172"
+          },
+          {
+            "key": "ref_83",
+            "doi-asserted-by": "crossref",
+            "first-page": "AIdbp2300092",
+            "DOI": "10.1056/AIdbp2300092",
+            "article-title": "Benchmarking open-source large language models, GPT-4 and Claude 2 on multiple-choice questions in nephrology",
+            "volume": "1",
+            "author": "Wu",
+            "year": "2024",
+            "journal-title": "NEJM AI"
+          },
+          {
+            "key": "ref_84",
+            "doi-asserted-by": "crossref",
+            "first-page": "AIoa2300151",
+            "DOI": "10.1056/AIoa2300151",
+            "article-title": "Comparative evaluation of LLMs in clinical oncology",
+            "volume": "1",
+            "author": "Rydzewski",
+            "year": "2024",
+            "journal-title": "NEJM AI"
+          },
+          {
+            "key": "ref_85",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Wu, S., Koo, M., Blum, L., Black, A., Kao, L., Scalzo, F., and Kurtz, I. (2023). A comparative study of open-source large language models, gpt-4 and claude 2: Multiple-choice test taking in nephrology. arXiv.",
+            "DOI": "10.1056/AIdbp2300092"
+          },
+          {
+            "key": "ref_86",
+            "unstructured": "Safavi-Naini, S.A.A., Ali, S., Shahab, O., Shahhoseini, Z., Savage, T., Rafiee, S., Samaan, J.S., Shabeeb, R.A., Ladak, F., and Yang, J.O. (2024). Vision-Language and Large Language Model Performance in Gastroenterology: GPT, Claude, Llama, Phi, Mistral, Gemma, and Quantized Models. arXiv."
+          },
+          {
+            "key": "ref_87",
+            "unstructured": "Berglund, L., Stickland, A.C., Balesni, M., Kaufmann, M., Tong, M., Korbak, T., Kokotajlo, D., and Evans, O. (2023). Taken out of context: On measuring situational awareness in LLMs. arXiv."
+          },
+          {
+            "key": "ref_88",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Agarwal, L., and Nasim, A. (2025, March 11). Comparison and Analysis of Large Language Models (LLMs). Available online: https://ssrn.com/abstract=4939534.",
+            "DOI": "10.2139/ssrn.4939534"
+          },
+          {
+            "key": "ref_89",
+            "doi-asserted-by": "crossref",
+            "first-page": "330",
+            "DOI": "10.1002/jrsm.1354",
+            "article-title": "Best practice guidelines for abstract screening large-evidence systematic reviews and meta-analyses",
+            "volume": "10",
+            "author": "Polanin",
+            "year": "2019",
+            "journal-title": "Res. Synth. Methods"
+          },
+          {
+            "key": "ref_90",
+            "doi-asserted-by": "crossref",
+            "first-page": "1946",
+            "DOI": "10.1145/3591300",
+            "article-title": "Prompting is programming: A query language for large language models",
+            "volume": "7",
+            "author": "Fischer",
+            "year": "2023",
+            "journal-title": "Proc. ACM Program. Lang."
+          },
+          {
+            "key": "ref_91",
+            "unstructured": "He, J., Rungta, M., Koleczek, D., Sekhon, A., Wang, F.X., and Hasan, S. (2024). Does Prompt Formatting Have Any Impact on LLM Performance? arXiv 2024, arXiv:241110541. arXiv."
+          },
+          {
+            "key": "ref_92",
+            "doi-asserted-by": "crossref",
+            "first-page": "e60501",
+            "DOI": "10.2196/60501",
+            "article-title": "Prompt Engineering Paradigms for Medical Applications: Scoping Review",
+            "volume": "26",
+            "author": "Zaghir",
+            "year": "2024",
+            "journal-title": "J. Med. Internet Res."
+          },
+          {
+            "key": "ref_93",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Colangelo, M.T., Guizzardi, S., Meleti, M., Calciolari, E., and Galli, C. (2025). How to Write Effective Prompts for Screening Biomedical Literature Using Large Language Models. BioMedInformatics, 5.",
+            "DOI": "10.20944/preprints202502.0396.v1"
+          },
+          {
+            "key": "ref_94",
+            "doi-asserted-by": "crossref",
+            "first-page": "389",
+            "DOI": "10.7326/ANNALS-24-02189",
+            "article-title": "Development of Prompt Templates for Large Language Model–Driven Screening in Systematic Reviews",
+            "volume": "178",
+            "author": "Cao",
+            "year": "2025",
+            "journal-title": "Ann. Intern Med."
+          },
+          {
+            "key": "ref_95",
+            "unstructured": "Wang, W., Shi, J., Wang, C., Lee, C., Yuan, Y., Huang, J.T., and Lyu, M.R. (2024). Learning to ask: When llms meet unclear instruction. arXiv."
+          },
+          {
+            "key": "ref_96",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Galli, C., Colangelo, M.T., Guizzardi, S., Meleti, M., and Calciolari, E. (2025). A Zero-Shot Comparison of Large Language Models for Efficient Screening in Periodontal Regeneration Research. Preprints.",
+            "DOI": "10.20944/preprints202501.2029.v1"
+          },
+          {
+            "key": "ref_97",
+            "doi-asserted-by": "crossref",
+            "first-page": "1",
+            "DOI": "10.1145/3703155",
+            "article-title": "A Survey on Hallucination in Large Language Models: Principles, Taxonomy, Challenges, and Open Questions",
+            "volume": "43",
+            "author": "Huang",
+            "year": "2025",
+            "journal-title": "ACM Trans. Inf. Syst."
+          },
+          {
+            "key": "ref_98",
+            "first-page": "62",
+            "article-title": "Strategies to mitigate hallucinations in large language models",
+            "volume": "10",
+            "author": "Bhattacharya",
+            "year": "2024",
+            "journal-title": "Appl. Mark. Anal."
+          },
+          {
+            "key": "ref_99",
+            "unstructured": "Gosmar, D., and Dahl, D.A. (2025). Hallucination Mitigation using Agentic AI Natural Language-Based Frameworks. arXiv."
+          },
+          {
+            "key": "ref_100",
+            "first-page": "10",
+            "article-title": "Measuring the Impact of Hallucinations on Human Reliance in LLM Applications",
+            "volume": "10",
+            "author": "Hassan",
+            "year": "2025",
+            "journal-title": "J. Robot. Process Autom. AI Integr. Work. Optim."
+          },
+          {
+            "key": "ref_101",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Rawte, V., Chakraborty, S., Pathak, A., Sarkar, A., Tonmoy, S.I., Chadha, A., Sheth, A., and Das, A. (2023, January 6–10). The troubling emergence of hallucination in large language models-an extensive definition, quantification, and prescriptive remediations. Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing, Singapore.",
+            "DOI": "10.18653/v1/2023.emnlp-main.155"
+          },
+          {
+            "key": "ref_102",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Fagbohun, O., Harrison, R.M., and Dereventsov, A. (2024). An empirical categorization of prompting techniques for large language models: A practitioner’s guide. arXiv.",
+            "DOI": "10.51219/JAIMLD/Oluwole-Fagbohun/15"
+          },
+          {
+            "key": "ref_103",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Mai, H.T., Chu, C.X., and Paulheim, H. (2024). Do LLMs really adapt to domains? An ontology learning perspective. The Semantic Web–ISWC 2024, Proceedings of the 23rd International Semantic Web Conference, Baltimore, MD, USA, 11–15 November 2024, Springer. Proceedings, Part I.",
+            "DOI": "10.1007/978-3-031-77844-5_7"
+          },
+          {
+            "key": "ref_104",
+            "unstructured": "Sumanathilaka, T., Micallef, N., and Hough, J. (2024). Can LLMs assist with Ambiguity? A Quantitative Evaluation of various Large Language Models on Word Sense Disambiguation. arXiv."
+          },
+          {
+            "key": "ref_105",
+            "unstructured": "Duenas, T., and Ruiz, D. (2025, March 11). The Risks of Human Overreliance on Large Language Models for Critical Thinking. Research Gate. Available online: https://www.researchgate.net/publication/385743952_The_Risks_Of_Human_Overreliance_On_Large_Language_Models_For_Critical_Thinking."
+          },
+          {
+            "key": "ref_106",
+            "unstructured": "Schiller, C.A. (2024). The human factor in detecting errors of large language models: A systematic literature review and future research directions. arXiv."
+          },
+          {
+            "key": "ref_107",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Page, M.J., Higgins, J.P.T., and Sterne, J.A.C. (2019). Assessing risk of bias due to missing results in a synthesis. Cochrane Handbook for Systematic Reviews of Interventions, Wiley.",
+            "DOI": "10.1002/9781119536604.ch13"
+          },
+          {
+            "key": "ref_108",
+            "doi-asserted-by": "crossref",
+            "first-page": "119",
+            "DOI": "10.1007/s00423-017-1646-x",
+            "article-title": "Optimal literature search for systematic reviews in surgery",
+            "volume": "403",
+            "author": "Goossen",
+            "year": "2018",
+            "journal-title": "Langenbecks Arch. Surg."
+          },
+          {
+            "key": "ref_109",
+            "doi-asserted-by": "crossref",
+            "first-page": "154",
+            "DOI": "10.1016/j.jclinepi.2022.05.022",
+            "article-title": "Searching two or more databases decreased the risk of missing relevant studies: A metaresearch study",
+            "volume": "149",
+            "author": "Ewald",
+            "year": "2022",
+            "journal-title": "J. Clin. Epidemiol."
+          },
+          {
+            "key": "ref_110",
+            "doi-asserted-by": "crossref",
+            "first-page": "12",
+            "DOI": "10.1016/j.jclinepi.2019.04.002",
+            "article-title": "Established search filters may miss studies when identifying randomized controlled trials",
+            "volume": "112",
+            "author": "Cooper",
+            "year": "2019",
+            "journal-title": "J. Clin. Epidemiol."
+          },
+          {
+            "key": "ref_111",
+            "doi-asserted-by": "crossref",
+            "first-page": "2629",
+            "DOI": "10.1007/s10439-023-03272-4",
+            "article-title": "Prompt Engineering with ChatGPT: A Guide for Academic Writers",
+            "volume": "51",
+            "author": "Giray",
+            "year": "2023",
+            "journal-title": "Ann. Biomed. Eng."
+          },
+          {
+            "key": "ref_112",
+            "doi-asserted-by": "crossref",
+            "first-page": "e50638",
+            "DOI": "10.2196/50638",
+            "article-title": "Prompt Engineering as an Important Emerging Skill for Medical Professionals: Tutorial",
+            "volume": "25",
+            "year": "2023",
+            "journal-title": "J. Med. Internet Res."
+          },
+          {
+            "key": "ref_113",
+            "first-page": "1",
+            "article-title": "Comparative Analysis of Open Source and Proprietary Large Language Models: Performance and Accessibility",
+            "volume": "7",
+            "author": "Wong",
+            "year": "2024",
+            "journal-title": "Adv. Comput. Sci."
+          },
+          {
+            "key": "ref_114",
+            "unstructured": "Shah, C. (2024). From prompt engineering to prompt science with human in the loop. arXiv."
+          },
+          {
+            "key": "ref_115",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Ray, S. (2019, January 14–16). A Quick Review of Machine Learning Algorithms. Proceedings of the 2019 International Conference on Machine Learning, Big Data, Cloud and Parallel Computing (COMITCon), Faridabad, India.",
+            "DOI": "10.1109/COMITCon.2019.8862451"
+          },
+          {
+            "key": "ref_116",
+            "unstructured": "Tang, X., Jin, Q., Zhu, K., Yuan, T., Zhang, Y., Zhou, W., Qu, M., Zhao, Y., Tang, J., and Zhang, Z. (2024). Prioritizing safeguarding over autonomy: Risks of llm agents for science. arXiv."
+          },
+          {
+            "key": "ref_117",
+            "doi-asserted-by": "crossref",
+            "first-page": "1364",
+            "DOI": "10.1038/s41591-020-1034-x",
+            "article-title": "Reporting guidelines for clinical trial reports for interventions involving artificial intelligence: The CONSORT-AI extension",
+            "volume": "26",
+            "author": "Liu",
+            "year": "2020",
+            "journal-title": "Nat. Med."
+          },
+          {
+            "key": "ref_118",
+            "doi-asserted-by": "crossref",
+            "first-page": "14",
+            "DOI": "10.1038/s41591-022-02139-w",
+            "article-title": "PRISMA AI reporting guidelines for systematic reviews and meta-analyses on AI in healthcare",
+            "volume": "29",
+            "author": "Cacciamani",
+            "year": "2023",
+            "journal-title": "Nat. Med."
+          },
+          {
+            "key": "ref_119",
+            "doi-asserted-by": "crossref",
+            "first-page": "598",
+            "DOI": "10.1016/j.jpurol.2023.05.018",
+            "article-title": "ChatGPT and large language model (LLM) chatbots: The current state of acceptability and a proposal for guidelines on utilization in academic medicine",
+            "volume": "19",
+            "author": "Kim",
+            "year": "2023",
+            "journal-title": "J. Pediatr. Urol."
+          },
+          {
+            "key": "ref_120",
+            "unstructured": "Ranjan, R., Gupta, S., and Singh, S.N. (2024). A comprehensive survey of bias in llms: Current landscape and future directions. arXiv."
+          },
+          {
+            "key": "ref_121",
+            "doi-asserted-by": "crossref",
+            "first-page": "43",
+            "DOI": "10.1186/s13000-024-01464-7",
+            "article-title": "Challenges and barriers of using large language models (LLM) such as ChatGPT for diagnostic medicine with a focus on digital pathology—A recent scoping review",
+            "volume": "19",
+            "author": "Ullah",
+            "year": "2024",
+            "journal-title": "Diagn. Pathol."
+          },
+          {
+            "key": "ref_122",
+            "doi-asserted-by": "crossref",
+            "first-page": "47",
+            "DOI": "10.1007/s10676-024-09778-2",
+            "article-title": "Beyond transparency and explainability: On the need for adequate and contextualized user guidelines for LLM use",
+            "volume": "26",
+            "author": "Barman",
+            "year": "2024",
+            "journal-title": "Ethics Inf. Technol."
+          },
+          {
+            "key": "ref_123",
+            "doi-asserted-by": "crossref",
+            "first-page": "6",
+            "DOI": "10.1007/s11023-024-09657-1",
+            "article-title": "Towards a benchmark for scientific understanding in humans and machines",
+            "volume": "34",
+            "author": "Barman",
+            "year": "2024",
+            "journal-title": "Minds Mach."
+          },
+          {
+            "key": "ref_124",
+            "unstructured": "Jiao, J., Afroogh, S., Xu, Y., and Phillips, C. (2024). Navigating llm ethics: Advancements, challenges, and future directions. arXiv."
+          },
+          {
+            "key": "ref_125",
+            "doi-asserted-by": "crossref",
+            "unstructured": "Patil, R., and Gudivada, V. (2024). A review of current trends, techniques, and challenges in large language models (llms). Appl. Sci., 14.",
+            "DOI": "10.20944/preprints202402.0357.v1"
+          }
+        ],
+        "container-title": [
+          "Information"
+        ],
+        "language": "en",
+        "link": [
+          {
+            "URL": "https://www.mdpi.com/2078-2489/16/5/378/pdf",
+            "content-type": "unspecified",
+            "content-version": "vor",
+            "intended-application": "similarity-checking"
+          }
+        ],
+        "deposited": {
+          "date-parts": [
+            [
+              2025,
+              10,
+              9
+            ]
+          ],
+          "date-time": "2025-10-09T17:25:58Z",
+          "timestamp": 1760030758000
+        },
+        "score": 32.77875,
+        "resource": {
+          "primary": {
+            "URL": "https://www.mdpi.com/2078-2489/16/5/378"
+          }
+        },
+        "issued": {
+          "date-parts": [
+            [
+              2025,
+              5,
+              1
+            ]
+          ]
+        },
+        "references-count": 125,
+        "journal-issue": {
+          "issue": "5",
+          "published-online": {
+            "date-parts": [
+              [
+                2025,
+                5
+              ]
+            ]
+          }
+        },
+        "alternative-id": [
+          "info16050378"
+        ],
+        "URL": "https://doi.org/10.3390/info16050378",
+        "ISSN": [
+          "2078-2489"
+        ],
+        "issn-type": [
+          {
+            "value": "2078-2489",
+            "type": "electronic"
+          }
+        ],
+        "published": {
+          "date-parts": [
+            [
+              2025,
+              5,
+              1
+            ]
+          ]
+        }
+      }
+    ]
+  }
+}

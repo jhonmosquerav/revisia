@@ -323,3 +323,40 @@ def protocolo_offline(dest: Path, *, provider: str = "fake", model: str = "fake-
         entrada["model"] = model
     ruta.write_text(yaml.safe_dump(raw, allow_unicode=True, sort_keys=False), encoding="utf-8")
     return dest
+
+
+class _RespuestaJSON:
+    """Respuesta mínima de ``httpx``: ``raise_for_status()`` y ``json()``."""
+
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class ClienteJSON:
+    """Sustituto de ``httpx.Client`` (context manager) que sirve un payload fijo.
+
+    Es el ``_FakeClient`` de ``test_search_multibase.py`` hecho compartible
+    (auditoría 2026-09-03, M18). Guarda ``last_url`` y ``last_params``.
+    """
+
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+        self.last_url: str | None = None
+        self.last_params: dict | None = None
+
+    def __enter__(self) -> ClienteJSON:
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+    def get(self, url: str, params: dict | None = None) -> _RespuestaJSON:
+        self.last_url = url
+        self.last_params = params
+        return _RespuestaJSON(self._payload)
