@@ -625,7 +625,9 @@ def test_request_hash_bomba_de_tuplas_de_pairs_no_agota_la_memoria(corrida, fich
     try:
         pico, filas = _auditar_midiendo(corrida, timeout=cota_de_tiempo(10))
     except subprocess.TimeoutExpired:
-        pytest.fail("el auditor no terminó en 10 s: hashear la bomba de !!pairs la expande")
+        pytest.fail(
+            f"el auditor no terminó en {cota_de_tiempo(10)} s: hashear la bomba de !!pairs la expande"
+        )
     estado, detalle = filas["request_hash"]
     assert estado == "FAIL"
     assert "`rob`: " in detalle and "no se puede hashear" in detalle
